@@ -396,7 +396,7 @@ const Index = () => {
       {/* Footer */}
       <footer className="mt-8 pt-6 border-t border-border text-center">
         <p className="text-sm text-muted-foreground">
-          Dashboard de Desempeño – Agente Funnel Implanta · Powered by{" "}
+          Dashboard de Desempeño – Agente Funnel Testings · Powered by{" "}
           <span className="font-semibold text-primary">Simplia IA</span>
         </p>
       </footer>
