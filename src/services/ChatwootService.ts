@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { config } from '../config';
 
-// RECONECTADO - Chatwoot del nuevo proyecto
+// RECONNECTED - Chatwoot for the new project
 
 const CHATWOOT_API_URL = config.chatwoot.baseUrl;
 const API_TOKEN = config.chatwoot.apiToken;

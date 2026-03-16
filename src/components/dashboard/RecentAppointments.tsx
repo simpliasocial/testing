@@ -11,11 +11,11 @@ import { Calendar, Clock, MapPin, Phone, User } from "lucide-react";
 
 export interface Appointment {
     id: number;
-    nombre: string;
-    celular: string;
-    agencia: string;
-    fecha: string;
-    hora: string;
+    name: string;
+    cellphone: string;
+    agency: string;
+    date: string;
+    time: string;
     status: string;
 }
 
@@ -33,10 +33,10 @@ export function RecentAppointments({ appointments = [] }: RecentAppointmentsProp
             <Table>
                 <TableHeader>
                     <TableRow>
-                        <TableHead className="w-[200px]">Cliente</TableHead>
-                        <TableHead>Contacto</TableHead>
-                        <TableHead>Agencia</TableHead>
-                        <TableHead>Fecha y Hora</TableHead>
+                        <TableHead className="w-[200px]">Client</TableHead>
+                        <TableHead>Contact</TableHead>
+                        <TableHead>Agency</TableHead>
+                        <TableHead>Date & Time</TableHead>
 
                     </TableRow>
                 </TableHeader>
@@ -46,30 +46,30 @@ export function RecentAppointments({ appointments = [] }: RecentAppointmentsProp
                             <TableCell className="font-medium">
                                 <div className="flex items-center gap-2">
                                     <User className="h-4 w-4 text-muted-foreground" />
-                                    {appointment.nombre}
+                                    {appointment.name}
                                 </div>
                             </TableCell>
                             <TableCell>
                                 <div className="flex items-center gap-2">
                                     <Phone className="h-4 w-4 text-muted-foreground" />
-                                    {appointment.celular}
+                                    {appointment.cellphone}
                                 </div>
                             </TableCell>
                             <TableCell>
                                 <div className="flex items-center gap-2">
                                     <MapPin className="h-4 w-4 text-muted-foreground" />
-                                    {appointment.agencia}
+                                    {appointment.agency}
                                 </div>
                             </TableCell>
                             <TableCell>
                                 <div className="flex flex-col gap-1">
                                     <div className="flex items-center gap-2 text-sm">
                                         <Calendar className="h-3 w-3 text-muted-foreground" />
-                                        {appointment.fecha}
+                                        {appointment.date}
                                     </div>
                                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                         <Clock className="h-3 w-3" />
-                                        {appointment.hora}
+                                        {appointment.time}
                                     </div>
                                 </div>
                             </TableCell>

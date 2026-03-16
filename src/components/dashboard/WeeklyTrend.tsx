@@ -2,7 +2,7 @@ import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "rec
 import { cn } from "@/lib/utils";
 
 interface WeeklyTrendProps {
-  data: Array<{ week: string; leads: number; citas: number }>;
+  data: Array<{ week: string; leads: number; appointments: number }>;
   className?: string;
 }
 
@@ -37,11 +37,11 @@ export function WeeklyTrend({ data, className }: WeeklyTrendProps) {
           />
           <Line 
             type="monotone" 
-            dataKey="citas" 
+            dataKey="appointments" 
             stroke="hsl(45, 93%, 58%)" 
             strokeWidth={2}
             dot={{ fill: 'hsl(45, 93%, 58%)', strokeWidth: 0, r: 4 }}
-            name="Citas"
+            name="Appointments"
           />
         </LineChart>
       </ResponsiveContainer>

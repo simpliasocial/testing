@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MessageSquare, ExternalLink, User, Clock, Tag, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { es } from 'date-fns/locale';
+import { enUS } from 'date-fns/locale';
 import { toast } from 'sonner';
 import { config } from '@/config';
 
@@ -16,14 +16,14 @@ const ChatwootPage = () => {
     const [loading, setLoading] = useState(true);
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
-    // NUEVO ESQUEMA DE ETIQUETAS - 6 etiquetas fijas
+    // New label scheme - 6 fixed labels
     const [labels] = useState<string[]>([
         'a_',
         'b1',
         'b2',
         'c1',
-        'cita_agendada',
-        'leads_entrantes'
+        'scheduled_appointment',
+        'incoming_leads'
     ]);
     const [selectedLabel, setSelectedLabel] = useState<string>('all');
     const [meta, setMeta] = useState<any>({});
@@ -40,7 +40,7 @@ const ChatwootPage = () => {
             setMeta(data.meta);
         } catch (error) {
             console.error(error);
-            toast.error('Error al cargar las conversaciones de Chatwoot');
+            toast.error('Error loading Chatwoot conversations');
         } finally {
             setLoading(false);
         }
@@ -77,16 +77,16 @@ const ChatwootPage = () => {
                 <CardHeader>
                     <div className="flex flex-col md:flex-row gap-4 justify-between md:items-center">
                         <div>
-                            <CardTitle>Listado de Conversaciones</CardTitle>
+                            <CardTitle>Conversations List</CardTitle>
                             <CardDescription>
-                                Total encontrado: {meta.all_count || conversations.length}
+                                Total found: {meta.all_count || conversations.length}
                             </CardDescription>
                         </div>
                         <div className="flex flex-col sm:flex-row gap-3 items-center">
                             <div className="relative w-full sm:w-auto">
                                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                                 <Input
-                                    placeholder="Buscar por nombre o celular..."
+                                    placeholder="Search by name or cellphone..."
                                     className="pl-9 w-full sm:w-[300px]"
                                     value={search}
                                     onChange={(e) => {
@@ -104,10 +104,10 @@ const ChatwootPage = () => {
                                 }}
                             >
                                 <SelectTrigger className="w-full sm:w-[200px]">
-                                    <SelectValue placeholder="Filtrar por etiqueta" />
+                                    <SelectValue placeholder="Filter by tag" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="all">Todas las etiquetas</SelectItem>
+                                    <SelectItem value="all">All tags</SelectItem>
                                     {Array.from(new Set(labels)).map((label) => (
                                         <SelectItem key={label} value={label}>
                                             {label}
@@ -130,19 +130,19 @@ const ChatwootPage = () => {
                                     <table className="w-full text-sm text-left">
                                         <thead className="bg-muted/50 text-muted-foreground uppercase text-xs font-medium">
                                             <tr>
-                                                <th className="px-6 py-4">Contacto</th>
-                                                <th className="px-6 py-4">Último Mensaje</th>
-                                                <th className="px-6 py-4">Estado</th>
-                                                <th className="px-6 py-4 hidden md:table-cell">Etiquetas</th>
-                                                <th className="px-6 py-4 hidden lg:table-cell">Tiempo</th>
-                                                <th className="px-6 py-4 text-right">Acción</th>
+                                                <th className="px-6 py-4">Contact</th>
+                                                <th className="px-6 py-4">Last Message</th>
+                                                <th className="px-6 py-4">Status</th>
+                                                <th className="px-6 py-4 hidden md:table-cell">Tags</th>
+                                                <th className="px-6 py-4 hidden lg:table-cell">Time</th>
+                                                <th className="px-6 py-4 text-right">Action</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-border bg-card">
                                             {conversations.length === 0 ? (
                                                 <tr>
                                                     <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
-                                                        No se encontraron conversaciones
+                                                        No conversations found
                                                     </td>
                                                 </tr>
                                             ) : (
@@ -163,7 +163,7 @@ const ChatwootPage = () => {
                                                                 )}
                                                                 <div>
                                                                     <div className="font-medium text-foreground">
-                                                                        {conv.meta.sender.name || 'Sin Nombre'}
+                                                                        {conv.meta.sender.name || 'No Name'}
                                                                     </div>
                                                                     <div className="text-xs text-muted-foreground">
                                                                         {conv.meta.sender.email || conv.meta.sender.phone_number}
@@ -173,7 +173,7 @@ const ChatwootPage = () => {
                                                         </td>
                                                         <td className="px-6 py-4 max-w-md">
                                                             <p className="truncate text-muted-foreground">
-                                                                {conv.last_non_activity_message?.content || 'Sin mensajes'}
+                                                                {conv.last_non_activity_message?.content || 'No messages'}
                                                             </p>
                                                         </td>
                                                         <td className="px-6 py-4">
@@ -182,7 +182,7 @@ const ChatwootPage = () => {
                                                                     conv.status
                                                                 )}`}
                                                             >
-                                                                {conv.status === 'open' ? 'Abierto' : conv.status === 'resolved' ? 'Resuelto' : conv.status}
+                                                                {conv.status === 'open' ? 'Open' : conv.status === 'resolved' ? 'Resolved' : conv.status}
                                                             </span>
                                                         </td>
                                                         <td className="px-6 py-4 hidden md:table-cell">
@@ -200,7 +200,7 @@ const ChatwootPage = () => {
                                                                 <Clock className="w-3.5 h-3.5" />
                                                                 {formatDistanceToNow(new Date(conv.timestamp * 1000), {
                                                                     addSuffix: true,
-                                                                    locale: es,
+                                                                    locale: enUS,
                                                                 })}
                                                             </div>
                                                         </td>
@@ -211,7 +211,7 @@ const ChatwootPage = () => {
                                                                 className="gap-2"
                                                                 onClick={() => openInChatwoot(conv.id)}
                                                             >
-                                                                Ver Chat
+                                                                View Chat
                                                                 <ExternalLink className="w-3 h-3" />
                                                             </Button>
                                                         </td>
@@ -226,7 +226,7 @@ const ChatwootPage = () => {
                             {/* Pagination */}
                             <div className="flex items-center justify-between">
                                 <div className="text-sm text-muted-foreground">
-                                    Página {page}
+                                    Page {page}
                                 </div>
                                 <div className="flex gap-2">
                                     <Button
@@ -236,7 +236,7 @@ const ChatwootPage = () => {
                                         disabled={page === 1 || loading}
                                     >
                                         <ChevronLeft className="h-4 w-4" />
-                                        Anterior
+                                        Previous
                                     </Button>
                                     <Button
                                         variant="outline"
@@ -244,7 +244,7 @@ const ChatwootPage = () => {
                                         onClick={() => setPage((p) => p + 1)}
                                         disabled={conversations.length < 15 || loading} // Assuming default page size is 15-25
                                     >
-                                        Siguiente
+                                        Next
                                         <ChevronRight className="h-4 w-4" />
                                     </Button>
                                 </div>

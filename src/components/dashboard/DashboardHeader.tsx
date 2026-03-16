@@ -18,7 +18,7 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
             </div>
             <div>
               <h1 className="text-2xl font-display font-bold text-foreground">
-                Dashboard de Desempeño
+                Performance Dashboard
               </h1>
               <p className="text-sm text-muted-foreground">
                 Agente Funnel Testings
@@ -29,16 +29,16 @@ export function DashboardHeader({ className }: DashboardHeaderProps) {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 px-4 py-2 bg-secondary rounded-lg">
             <Calendar className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium text-foreground">Noviembre 2025</span>
+            <span className="text-sm font-medium text-foreground">November 2025</span>
           </div>
           <Button variant="outline" size="sm" className="gap-2">
             <Download className="h-4 w-4" />
-            Exportar
+            Export
           </Button>
         </div>
       </div>
       <p className="mt-2 text-sm text-muted-foreground">
-        Resultados del Funnel Conversacional IA – Análisis completo de rendimiento
+        AI Conversational Funnel results - complete performance analysis
       </p>
     </header>
   );

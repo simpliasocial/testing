@@ -8,11 +8,11 @@ import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 
 /**
- * Componente de ejemplo para demostrar el uso de Supabase
- * Este componente muestra cómo:
- * - Autenticar usuarios
- * - Usar el hook useSupabaseAuth
- * - Realizar queries básicas
+ * Example component showing how to use Supabase.
+ * This component demonstrates how to:
+ * - Authenticate users
+ * - Use the useSupabaseAuth hook
+ * - Run basic queries
  */
 export function SupabaseExample() {
     const { user, loading, signOut } = useSupabaseAuth();
@@ -32,9 +32,9 @@ export function SupabaseExample() {
 
             if (error) throw error;
 
-            toast.success('¡Inicio de sesión exitoso!');
+            toast.success('Sign-in successful!');
         } catch (error: any) {
-            toast.error(error.message || 'Error al iniciar sesión');
+            toast.error(error.message || 'Error signing in');
         } finally {
             setIsLoading(false);
         }
@@ -51,9 +51,9 @@ export function SupabaseExample() {
 
             if (error) throw error;
 
-            toast.success('¡Cuenta creada! Revisa tu email para confirmar.');
+            toast.success('Account created! Check your email to confirm.');
         } catch (error: any) {
-            toast.error(error.message || 'Error al crear cuenta');
+            toast.error(error.message || 'Error creating account');
         } finally {
             setIsLoading(false);
         }
@@ -67,12 +67,12 @@ export function SupabaseExample() {
                 .limit(1);
 
             if (error) {
-                toast.error('Conexión fallida: ' + error.message);
+                toast.error('Connection failed: ' + error.message);
             } else {
-                toast.success('✅ Conexión exitosa a Supabase!');
+                toast.success('✅ Successfully connected to Supabase!');
             }
         } catch (error: any) {
-            toast.info('Base de datos conectada (tabla de prueba no existe aún)');
+            toast.info('Database connected (test table does not exist yet)');
         }
     };
 
@@ -92,8 +92,8 @@ export function SupabaseExample() {
         return (
             <Card className="w-full max-w-md mx-auto mt-8">
                 <CardHeader>
-                    <CardTitle>¡Autenticado! ✅</CardTitle>
-                    <CardDescription>Estás conectado a Supabase</CardDescription>
+                    <CardTitle>Authenticated! ✅</CardTitle>
+                    <CardDescription>You are connected to Supabase</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="space-y-2">
@@ -101,17 +101,17 @@ export function SupabaseExample() {
                         <p className="text-sm text-muted-foreground">{user.email}</p>
                     </div>
                     <div className="space-y-2">
-                        <p className="text-sm font-medium">ID de Usuario:</p>
+                        <p className="text-sm font-medium">User ID:</p>
                         <p className="text-sm text-muted-foreground font-mono text-xs">
                             {user.id}
                         </p>
                     </div>
                     <div className="flex gap-2">
                         <Button onClick={() => signOut()} variant="outline" className="flex-1">
-                            Cerrar Sesión
+                            Sign Out
                         </Button>
                         <Button onClick={testConnection} className="flex-1">
-                            Test Conexión
+                            Test Connection
                         </Button>
                     </div>
                 </CardContent>
@@ -124,7 +124,7 @@ export function SupabaseExample() {
             <CardHeader>
                 <CardTitle>Supabase Auth Demo</CardTitle>
                 <CardDescription>
-                    Prueba la conexión con Supabase
+                    Test the Supabase connection
                 </CardDescription>
             </CardHeader>
             <CardContent>
@@ -134,14 +134,14 @@ export function SupabaseExample() {
                         <Input
                             id="email"
                             type="email"
-                            placeholder="tu@email.com"
+                            placeholder="you@email.com"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             required
                         />
                     </div>
                     <div className="space-y-2">
-                        <Label htmlFor="password">Contraseña</Label>
+                        <Label htmlFor="password">Password</Label>
                         <Input
                             id="password"
                             type="password"
@@ -157,7 +157,7 @@ export function SupabaseExample() {
                             className="flex-1"
                             disabled={isLoading}
                         >
-                            {isLoading ? 'Cargando...' : 'Iniciar Sesión'}
+                            {isLoading ? 'Loading...' : 'Sign In'}
                         </Button>
                         <Button
                             type="button"
@@ -166,7 +166,7 @@ export function SupabaseExample() {
                             onClick={handleSignUp}
                             disabled={isLoading}
                         >
-                            Crear Cuenta
+                            Create Account
                         </Button>
                     </div>
                     <Button
@@ -175,7 +175,7 @@ export function SupabaseExample() {
                         className="w-full"
                         onClick={testConnection}
                     >
-                        🔌 Probar Conexión
+                        🔌 Test Connection
                     </Button>
                 </form>
             </CardContent>

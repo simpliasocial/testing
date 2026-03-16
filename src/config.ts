@@ -1,5 +1,5 @@
-// CONFIGURACIÓN DEL NUEVO PROYECTO
-// Actualizado con las credenciales del nuevo proyecto
+// NEW PROJECT CONFIGURATION
+// Updated with the new project credentials
 
 export const config = {
     supabase: {

@@ -14,7 +14,7 @@ const DashboardLayout = () => {
                 <div className="flex justify-between items-center mb-8">
                     <div>
                         <h1 className="text-3xl font-bold tracking-tight text-foreground">Testings Dashboard</h1>
-                        <p className="text-muted-foreground mt-1">Vista general del rendimiento y métricas clave</p>
+                        <p className="text-muted-foreground mt-1">Overview of performance and key metrics</p>
                     </div>
                     <Button
                         variant="outline"
@@ -25,7 +25,7 @@ const DashboardLayout = () => {
                         className="flex items-center gap-2 hover:bg-destructive hover:text-destructive-foreground transition-colors"
                     >
                         <LogOut className="h-4 w-4" />
-                        Cerrar Sesión
+                        Log out
                     </Button>
                 </div>
 
@@ -37,7 +37,7 @@ const DashboardLayout = () => {
                         </TabsTrigger>
                         <TabsTrigger value="chats" className="flex items-center gap-2">
                             <MessageSquare className="h-4 w-4" />
-                            Chats Chatwoot
+                            Chatwoot Chats
                         </TabsTrigger>
                     </TabsList>
 

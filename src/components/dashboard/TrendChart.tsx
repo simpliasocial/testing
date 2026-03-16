@@ -6,7 +6,7 @@ interface TrendChartProps {
     date: string;
     leads: number;
     sqls: number;
-    citas: number;
+    appointments: number;
   }>;
   className?: string;
 }
@@ -26,7 +26,7 @@ export function TrendChart({ data, className }: TrendChartProps) {
                 <stop offset="5%" stopColor="hsl(45, 93%, 58%)" stopOpacity={0.3} />
                 <stop offset="95%" stopColor="hsl(45, 93%, 58%)" stopOpacity={0} />
               </linearGradient>
-              <linearGradient id="colorCitas" x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id="colorAppointments" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="hsl(142, 71%, 45%)" stopOpacity={0.3} />
                 <stop offset="95%" stopColor="hsl(142, 71%, 45%)" stopOpacity={0} />
               </linearGradient>
@@ -70,12 +70,12 @@ export function TrendChart({ data, className }: TrendChartProps) {
             />
             <Area
               type="monotone"
-              dataKey="citas"
+              dataKey="appointments"
               stroke="hsl(142, 71%, 45%)"
               strokeWidth={2}
               fillOpacity={1}
-              fill="url(#colorCitas)"
-              name="Citas"
+              fill="url(#colorAppointments)"
+              name="Appointments"
             />
           </AreaChart>
         </ResponsiveContainer>

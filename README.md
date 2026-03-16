@@ -57,7 +57,7 @@ This project is built with:
 - React
 - shadcn-ui
 - Tailwind CSS
-- **Supabase** - Backend as a Service (autenticación, base de datos, storage)
+- **Supabase** - Backend as a Service (authentication, database, storage)
 
 ## 🔌 Supabase Configuration
 

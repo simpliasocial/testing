@@ -21,7 +21,7 @@ const Login = () => {
         setError('');
 
         try {
-            // Autenticación con Supabase - RECONECTADO
+            // Supabase authentication - reconnected
             const { data, error: rpcError } = await supabase.rpc('verify_custom_credentials', {
                 p_username: username,
                 p_password: password
@@ -33,11 +33,11 @@ const Login = () => {
                 localStorage.setItem('isAuthenticated', 'true');
                 navigate('/');
             } else {
-                setError('Credenciales incorrectas');
+                setError('Incorrect credentials');
             }
         } catch (err: any) {
             console.error('Login error:', err);
-            setError(err.message || 'Error al iniciar sesión');
+            setError(err.message || 'Error signing in');
         } finally {
             setLoading(false);
         }
@@ -54,18 +54,18 @@ const Login = () => {
                     </div>
                     <CardTitle className="text-3xl font-bold tracking-tight text-primary">Testings</CardTitle>
                     <CardDescription className="text-slate-400 text-lg">
-                        Dashboard de Control
+                        Control Dashboard
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handleLogin} className="space-y-4">
                         <div className="space-y-2">
-                            <Label htmlFor="username">Usuario</Label>
+                            <Label htmlFor="username">Username</Label>
                             <div className="relative">
                                 <User className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
                                 <Input
                                     id="username"
-                                    placeholder="Usuario"
+                                    placeholder="Username"
                                     type="text"
                                     autoCapitalize="none"
                                     autoCorrect="off"
@@ -77,7 +77,7 @@ const Login = () => {
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="password">Contraseña</Label>
+                            <Label htmlFor="password">Password</Label>
                             <div className="relative">
                                 <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
                                 <Input
@@ -97,10 +97,10 @@ const Login = () => {
                             {loading ? (
                                 <div className="flex items-center gap-2">
                                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                                    Verificando...
+                                    Verifying...
                                 </div>
                             ) : (
-                                'Ingresar al Sistema'
+                                'Sign In'
                             )}
                         </Button>
                     </form>

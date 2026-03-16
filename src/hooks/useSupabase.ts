@@ -3,8 +3,8 @@ import { supabase } from '@/lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
 
 /**
- * Hook personalizado para obtener el usuario autenticado de Supabase
- * @returns {User | null} El usuario autenticado o null
+ * Custom hook to get the authenticated Supabase user.
+ * @returns {User | null} The authenticated user or null.
  */
 export function useSupabaseAuth() {
     const [user, setUser] = useState<User | null>(null);
@@ -12,14 +12,14 @@ export function useSupabaseAuth() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Obtener sesión inicial
+        // Get initial session
         supabase.auth.getSession().then(({ data: { session } }) => {
             setSession(session);
             setUser(session?.user ?? null);
             setLoading(false);
         });
 
-        // Escuchar cambios en la autenticación
+        // Listen for authentication changes
         const {
             data: { subscription },
         } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -40,9 +40,9 @@ export function useSupabaseAuth() {
 }
 
 /**
- * Hook personalizado para realizar queries de Supabase con estado
- * @param table Nombre de la tabla
- * @param query Función de query personalizada
+ * Custom hook to run Supabase queries with state handling.
+ * @param table Table name.
+ * @param query Custom query function.
  */
 export function useSupabaseQuery<T>(
     table: string,

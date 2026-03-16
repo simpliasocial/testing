@@ -7,15 +7,14 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
     const [data, setData] = useState({
         kpis: {
             totalLeads: 0,
-            leadsInteresados: 0,
-            citasAgendadas: 0,
-            deseaCreditoCount: 0,
-            noCalifican: 0,
-            tasaAgendamiento: 0,
-            tasaDescarte: 0,
-            tasaRespuesta: 0,
-            gananciaMensual: 0,
-            gananciaTotal: 0
+            interestedLeads: 0,
+            scheduledAppointments: 0,
+            unqualified: 0,
+            schedulingRate: 0,
+            discardRate: 0,
+            responseRate: 0,
+            monthlyProfit: 0,
+            totalProfit: 0
         },
         funnelData: [] as any[],
         recentAppointments: [] as any[],
@@ -91,7 +90,7 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 }
             }
 
-            // Helper to parse "monto_operacion"
+            // Helper to parse "transaction_amount"
             const parseMonto = (val: any): number => {
                 if (!val) return 0;
                 // Remove non-numeric characters except dot and comma
@@ -103,11 +102,11 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 return isNaN(num) ? 0 : num;
             };
 
-            // Calculate Total Profit (Ganancia Total) - All Time
-            const gananciaTotal = allConversationsRaw.reduce((sum, conv) => {
+            // Calculate Total Profit - All Time
+            const totalProfitAll = allConversationsRaw.reduce((sum, conv) => {
                 const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                 const convAttrs = conv.custom_attributes || {};
-                const montoVal = contactAttrs.monto_operacion || convAttrs.monto_operacion;
+                const montoVal = contactAttrs.transaction_amount || convAttrs.transaction_amount;
                 const monto = parseMonto(montoVal);
                 return sum + monto;
             }, 0);
@@ -131,39 +130,36 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 }))
             });
 
-            // Calculate Monthly/Period Profit (Ganancia Mensual) - Filtered by fecha_monto_operacion
-            // IMPORTANTE: Filtra por la fecha en que se ASIGNÓ el monto, no por la fecha de creación de la conversación
-            let gananciaMensual = 0;
+            // Calculate Monthly/Period Profit (Ganancia Mensual) - Filtered by date_amount_transaction
+            let monthlyProfit = 0;
             let conversationsWithMontoInPeriod = 0;
 
             allConversationsRaw.forEach(conv => {
                 const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                 const convAttrs = conv.custom_attributes || {};
-                const montoVal = contactAttrs.monto_operacion || convAttrs.monto_operacion;
+                const montoVal = contactAttrs.transaction_amount || convAttrs.transaction_amount;
                 const monto = parseMonto(montoVal);
 
                 if (monto > 0) {
-                    // Buscar fecha_monto_operacion (fecha en que se asignó el monto)
-                    const fechaMontoStr = contactAttrs.fecha_monto_operacion || convAttrs.fecha_monto_operacion;
+                    const fechaMontoStr = contactAttrs.date_amount_transaction || convAttrs.date_amount_transaction;
 
                     let fechaMonto: Date;
                     if (fechaMontoStr) {
-                        // Si existe fecha_monto_operacion, usarla
                         fechaMonto = new Date(fechaMontoStr);
                     } else {
-                        // Fallback: usar la fecha de la conversación
+                        // Fallback: use the conversation date
                         fechaMonto = new Date(conv.timestamp * 1000);
-                        console.warn(`Conversation ${conv.id} has monto_operacion but no fecha_monto_operacion. Using conversation date as fallback.`);
+                        console.warn(`Conversation ${conv.id} has transaction_amount but no date_amount_transaction. Using conversation date as fallback.`);
                     }
 
-                    // Verificar si la fecha del monto está dentro del período seleccionado
+                    // Check whether the transaction date falls within the selected period
                     const isInPeriod = fechaMonto >= globalStart && fechaMonto <= globalEnd;
 
                     if (isInPeriod) {
-                        gananciaMensual += monto;
+                        monthlyProfit += monto;
                         conversationsWithMontoInPeriod++;
 
-                        console.log('Monto included in period:', {
+                            console.log('Amount included in period:', {
                             conversationId: conv.id,
                             monto,
                             fechaMonto: fechaMonto.toISOString(),
@@ -178,71 +174,74 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 globalStart: globalStart.toISOString(),
                 globalEnd: globalEnd.toISOString(),
                 conversationsWithMontoInPeriod,
-                gananciaMensual,
-                gananciaTotal
+                monthlyProfit,
+                totalProfitAll
             });
 
 
             // Calculate KPIs from filtered data
             const totalLeads = kpiConversations.length;
 
-            // Helper to count by label - NUEVO ESQUEMA DE 6 ETIQUETAS
+            // Helper to count by label
             const countByLabel = (label: string) =>
                 kpiConversations.filter(c => c.labels && c.labels.includes(label)).length;
 
-            // Nuevas etiquetas:
-            const leadsEntrantesCount = countByLabel('leads_entrantes');
+            // Updated English Labels:
+            const incomingLeadsCount = countByLabel('incoming_leads');
             const a_Count = countByLabel('a_');
             const b1Count = countByLabel('b1');
             const b2Count = countByLabel('b2');
             const c1Count = countByLabel('c1');
-            const citasAgendadas = countByLabel('cita_agendada');
+            const scheduledAppointmentsCount = countByLabel('scheduled_appointment');
+            const successfulSaleCount = countByLabel('successful_sale');
 
-            // KPIs simplificados - NUEVA LÓGICA
-            const leadsInteresados = a_Count; // Solo a_ = clientes que piden/aceptan agendar
-            const tasaAgendamiento = totalLeads > 0 ? Math.round((citasAgendadas / totalLeads) * 100) : 0;
-            const tasaDescarte = totalLeads > 0 ? Math.round((c1Count / totalLeads) * 100) : 0;
+            // KPI Logic
+            const interestedLeadsCount = a_Count; // Only a_ = clients that ask/accept to schedule
+            const schedulingRateVar = totalLeads > 0 ? Math.round((scheduledAppointmentsCount / totalLeads) * 100) : 0;
+            const discardRateVar = totalLeads > 0 ? Math.round((c1Count / totalLeads) * 100) : 0;
 
-            // Calculate Response Rate (Tasa de Respuesta)
+            // Calculate Response Rate
             const interactedConversations = kpiConversations.filter(c => c.status !== 'new').length;
-            const tasaRespuesta = totalLeads > 0 ? Math.round((interactedConversations / totalLeads) * 100) : 0;
+            const responseRateVar = totalLeads > 0 ? Math.round((interactedConversations / totalLeads) * 100) : 0;
 
             // Recent Appointments (from filtered data)
             const recentAppointments = kpiConversations
-                .filter(c => c.labels && c.labels.includes('cita_agendada'))
+                .filter(c => c.labels && c.labels.includes('scheduled_appointment'))
                 .slice(0, 5)
                 .map(conv => {
-                    // Buscar datos primero en contact attributes, luego en conversation attributes
+                    // Search data first in contact attributes, then in conversation attributes
                     const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                     const convAttrs = conv.custom_attributes || {};
 
                     return {
                         id: conv.id,
-                        nombre: contactAttrs.nombre_completo || convAttrs.nombre_completo || conv.meta?.sender?.name || 'Sin Nombre',
-                        celular: contactAttrs.celular || convAttrs.celular || conv.meta?.sender?.phone_number || 'Sin Celular',
-                        agencia: contactAttrs.agencia || convAttrs.agencia || 'Sin Agencia',
-                        fecha: contactAttrs.fecha_visita || convAttrs.fecha_visita || contactAttrs.fecha || convAttrs.fecha || 'Pendiente',
-                        hora: contactAttrs.hora_visita || convAttrs.hora_visita || contactAttrs.hora || convAttrs.hora || '',
-                        status: 'Confirmada'
+                        name: contactAttrs.full_name || convAttrs.full_name || conv.meta?.sender?.name || 'No Name',
+                        cellphone: contactAttrs.cellphone || convAttrs.cellphone || conv.meta?.sender?.phone_number || 'No Cellphone',
+                        agency: contactAttrs.agency || convAttrs.agency || 'No Agency',
+                        date: contactAttrs.visit_date || convAttrs.visit_date || 'Pending',
+                        time: contactAttrs.visit_time || convAttrs.visit_time || '',
+                        status: 'Confirmed'
                     };
                 });
 
-            // Funnel Data - Nombres exactos de labels
+            // Funnel Data
             const funnelData = [
-                { label: "leads_entrantes", value: leadsEntrantesCount, percentage: totalLeads > 0 ? Math.round((leadsEntrantesCount / totalLeads) * 100) : 0, color: "hsl(200, 70%, 50%)" },
+                { label: "incoming_leads", value: incomingLeadsCount, percentage: totalLeads > 0 ? Math.round((incomingLeadsCount / totalLeads) * 100) : 0, color: "hsl(200, 70%, 50%)" },
                 { label: "a_", value: a_Count, percentage: totalLeads > 0 ? Math.round((a_Count / totalLeads) * 100) : 0, color: "hsl(224, 62%, 32%)" },
                 { label: "b1", value: b1Count, percentage: totalLeads > 0 ? Math.round((b1Count / totalLeads) * 100) : 0, color: "hsl(142, 60%, 45%)" },
                 { label: "b2", value: b2Count, percentage: totalLeads > 0 ? Math.round((b2Count / totalLeads) * 100) : 0, color: "hsl(142, 60%, 55%)" },
-                { label: "cita_agendada", value: citasAgendadas, percentage: totalLeads > 0 ? Math.round((citasAgendadas / totalLeads) * 100) : 0, color: "hsl(45, 93%, 58%)" },
+                { label: "scheduled_appointment", value: scheduledAppointmentsCount, percentage: totalLeads > 0 ? Math.round((scheduledAppointmentsCount / totalLeads) * 100) : 0, color: "hsl(45, 93%, 58%)" },
                 { label: "c1", value: c1Count, percentage: totalLeads > 0 ? Math.round((c1Count / totalLeads) * 100) : 0, color: "hsl(0, 70%, 60%)" },
+                { label: "successful_sale", value: successfulSaleCount, percentage: totalLeads > 0 ? Math.round((successfulSaleCount / totalLeads) * 100) : 0, color: "hsl(120, 70%, 40%)" },
             ];
 
             // Debugging: Log all unique labels found to help verify KPIs
             const allLabels = new Set<string>();
             kpiConversations.forEach(c => c.labels?.forEach(l => allLabels.add(l)));
             console.log('Unique Labels Found in Dashboard Data:', Array.from(allLabels));
+            console.log('Unique Labels Found in Dashboard Data:', Array.from(allLabels));
             console.log('Total Leads:', totalLeads);
-            console.log('Leads Interesados Count:', leadsInteresados);
+            console.log('Interested Leads Count:', interestedLeadsCount);
 
             // Channel Breakdown
             // Fetch inboxes to map IDs to Names/Types
@@ -252,7 +251,7 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             const channelCounts = new Map<string, number>();
             kpiConversations.forEach(conv => {
                 const inbox = inboxMap.get(conv.inbox_id);
-                let channelName = 'Otros';
+                let channelName = 'Other';
 
                 if (inbox) {
                     // Map channel type to display name
@@ -293,19 +292,19 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             // If no data, show empty state or default
             if (channelData.length === 0 && totalLeads > 0) {
                 // Fallback if something went wrong with mapping but we have leads
-                channelData.push({ name: "Desconocido", count: totalLeads, percentage: 100, icon: "HelpCircle", color: "bg-gray-400" });
+                channelData.push({ name: "Unknown", count: totalLeads, percentage: 100, icon: "HelpCircle", color: "bg-gray-400" });
             }
 
             // 5. Weekly Trend Calculation (Specific Week of Selected Month)
-            const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-            const weeklyTrendMap = new Map<string, { leads: number; citas: number }>();
-            days.forEach(day => weeklyTrendMap.set(day, { leads: 0, citas: 0 }));
+            const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            const weeklyTrendMap = new Map<string, { leads: number; appointments: number }>();
+            days.forEach(day => weeklyTrendMap.set(day, { leads: 0, appointments: 0 }));
 
             // Determine the date range for the selected week
             // Logic: trendStart is the 1st of the month (or current month).
             // We need to find the start and end dates of "Week X" within that month.
             // Week 1 starts on trendStart.
-            // But we need to align with "Sem 1" logic from getWeekNumber.
+            // But we need to align with the "Week 1" logic from getWeekNumber.
 
             const getWeekNumber = (d: Date) => {
                 const firstDayOfMonth = new Date(d.getFullYear(), d.getMonth(), 1);
@@ -341,29 +340,29 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 const current = weeklyTrendMap.get(dayName)!;
 
                 current.leads++;
-                if (conv.labels && conv.labels.includes('cita_agendada')) {
-                    current.citas++;
+                if (conv.labels && conv.labels.includes('scheduled_appointment')) {
+                    current.appointments++;
                 }
                 weeklyTrendMap.set(dayName, current);
             });
 
             const weeklyTrend = days.map(day => {
                 const dateNum = dayToDateMap.get(day);
-                // If date exists for this day in the selected week, append it (e.g., "Lun 20")
+                // If a date exists for this day in the selected week, append it (e.g., "Mon 20")
                 // Otherwise keep just the day name (e.g. for days outside the month boundary)
                 const label = dateNum ? `${day} ${dateNum}` : day;
                 return {
                     week: label,
                     leads: weeklyTrendMap.get(day)!.leads,
-                    citas: weeklyTrendMap.get(day)!.citas
+                    appointments: weeklyTrendMap.get(day)!.appointments
                 };
             });
 
             // 6. Monthly Trend Calculation
-            const monthlyTrendMap = new Map<string, { leads: number; sqls: number; citas: number }>();
+            const monthlyTrendMap = new Map<string, { leads: number; sqls: number; appointments: number }>();
             // Initialize 5 weeks
             for (let i = 1; i <= 5; i++) {
-                monthlyTrendMap.set(`Sem ${i}`, { leads: 0, sqls: 0, citas: 0 });
+                monthlyTrendMap.set(`Week ${i}`, { leads: 0, sqls: 0, appointments: 0 });
             }
 
             const trendConversations = allConversationsRaw.filter(conv => {
@@ -373,12 +372,12 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
 
             trendConversations.forEach(conv => {
                 const date = new Date(conv.timestamp * 1000);
-                const week = `Sem ${getWeekNumber(date)}`;
+                const week = `Week ${getWeekNumber(date)}`;
                 if (monthlyTrendMap.has(week)) {
                     const current = monthlyTrendMap.get(week)!;
                     current.leads++;
                     if (conv.labels && (conv.labels.includes('a_') || conv.labels.includes('b1') || conv.labels.includes('b2'))) current.sqls++;
-                    if (conv.labels && conv.labels.includes('cita_agendada')) current.citas++;
+                    if (conv.labels && conv.labels.includes('scheduled_appointment')) current.appointments++;
                     monthlyTrendMap.set(week, current);
                 }
             });
@@ -386,19 +385,19 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             const monthlyTrend = Array.from(monthlyTrendMap.entries())
                 .map(([date, counts]) => ({ date, ...counts }));
 
-            // Disqualification Reasons - Simplificado con nuevo esquema
+            // Disqualification Reasons 
             const totalDisqualified = c1Count;
             const disqualificationReasons = [
-                { reason: "Descartados (C1)", count: c1Count, percentage: 100 },
+                { reason: "Disqualified (C1)", count: c1Count, percentage: 100 },
             ];
 
-            // Data Capture Stats - Incluir a_, b1, b2, cita_agendada
+            // Data Capture Stats
             const targetConversations = kpiConversations.filter(c =>
-                c.labels && (c.labels.includes('a_') || c.labels.includes('b1') || c.labels.includes('b2') || c.labels.includes('cita_agendada'))
+                c.labels && (c.labels.includes('a_') || c.labels.includes('b1') || c.labels.includes('b2') || c.labels.includes('scheduled_appointment'))
             );
             const totalTarget = targetConversations.length;
 
-            const fields = ['nombre_completo', 'celular', 'agencia', 'fecha_visita', 'hora_visita'];
+            const fields = ['full_name', 'cellphone', 'agency', 'visit_date', 'visit_time'];
             const fieldCounts = fields.reduce((acc, field) => {
                 acc[field] = 0;
                 return acc;
@@ -408,10 +407,10 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             let incompleteConversations = 0;
 
             targetConversations.forEach(conv => {
-                // Buscar datos primero en contact attributes, luego en conversation attributes
+                // Search data first in contact attributes, then in conversation attributes
                 const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                 const convAttrs = conv.custom_attributes || {};
-                const attrs = { ...convAttrs, ...contactAttrs }; // contactAttrs tiene prioridad
+                const attrs = { ...convAttrs, ...contactAttrs }; // contactAttrs takes priority
                 let fieldsPresent = 0;
 
                 fields.forEach(field => {
@@ -472,8 +471,8 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                     }
                 }
 
-                // Sólo contar tiempos válidos y descartar outliers masivos (ej. > 60 mins) 
-                // que representan respuestas manuales tardías y no el tiempo de respuesta real del bot.
+                // Only count valid times and discard large outliers (for example, > 60 mins)
+                // that represent delayed manual replies rather than the bot's actual response time.
                 if (isValidResponse && responseTimeMinutes >= 0 && responseTimeMinutes <= 60) {
                     totalResponseTime += responseTimeMinutes;
                     conversationsWithResponse++;
@@ -493,15 +492,14 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             setData({
                 kpis: {
                     totalLeads,
-                    leadsInteresados,
-                    citasAgendadas,
-                    deseaCreditoCount: 0, // Ya no se usa en el nuevo esquema
-                    noCalifican: c1Count,
-                    tasaAgendamiento,
-                    tasaDescarte,
-                    tasaRespuesta,
-                    gananciaMensual,
-                    gananciaTotal
+                    interestedLeads: interestedLeadsCount,
+                    scheduledAppointments: scheduledAppointmentsCount,
+                    unqualified: c1Count,
+                    schedulingRate: schedulingRateVar,
+                    discardRate: discardRateVar,
+                    responseRate: responseRateVar,
+                    monthlyProfit: monthlyProfit,
+                    totalProfit: totalProfitAll
                 },
                 funnelData,
                 recentAppointments,
