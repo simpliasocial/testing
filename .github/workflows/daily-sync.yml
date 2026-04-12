@@ -1,0 +1,17 @@
+name: Daily Chatwoot Sync
+
+on:
+  schedule:
+    # 12:01 AM Ecuador (UTC-5) is 05:01 AM UTC
+    - cron: '1 5 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Sync
+        run: |
+          # Reemplaza con la URL real de tu dashboard una vez desplegado en Vercel
+          # El dashboard tiene lógica para correr el sync al cargar
+          curl -I "https://testings-dashboard.vercel.app/"

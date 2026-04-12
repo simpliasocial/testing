@@ -11,37 +11,37 @@ export function WeeklyTrend({ data, className }: WeeklyTrendProps) {
     <div className={cn("h-48", className)}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-          <XAxis 
-            dataKey="week" 
+          <XAxis
+            dataKey="week"
             tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }}
             axisLine={{ stroke: 'hsl(var(--border))' }}
           />
-          <YAxis 
+          <YAxis
             tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }}
             axisLine={{ stroke: 'hsl(var(--border))' }}
           />
-          <Tooltip 
+          <Tooltip
             contentStyle={{
               backgroundColor: 'hsl(var(--card))',
               border: '1px solid hsl(var(--border))',
               borderRadius: '8px',
             }}
           />
-          <Line 
-            type="monotone" 
-            dataKey="leads" 
-            stroke="hsl(224, 62%, 32%)" 
+          <Line
+            type="monotone"
+            dataKey="leads"
+            stroke="hsl(224, 62%, 32%)"
             strokeWidth={2}
             dot={{ fill: 'hsl(224, 62%, 32%)', strokeWidth: 0, r: 4 }}
             name="Leads"
           />
-          <Line 
-            type="monotone" 
-            dataKey="appointments" 
-            stroke="hsl(45, 93%, 58%)" 
+          <Line
+            type="monotone"
+            dataKey="appointments"
+            stroke="hsl(45, 93%, 58%)"
             strokeWidth={2}
             dot={{ fill: 'hsl(45, 93%, 58%)', strokeWidth: 0, r: 4 }}
-            name="Appointments"
+            name="Citas"
           />
         </LineChart>
       </ResponsiveContainer>

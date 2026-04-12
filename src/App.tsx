@@ -7,6 +7,7 @@ import Login from "./pages/Login";
 import DashboardLayout from "./components/DashboardLayout";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
+import { DashboardDataProvider } from "./context/DashboardDataContext";
 
 const queryClient = new QueryClient();
 
@@ -22,7 +23,9 @@ const App = () => (
             path="/"
             element={
               <ProtectedRoute>
-                <DashboardLayout />
+                <DashboardDataProvider>
+                  <DashboardLayout />
+                </DashboardDataProvider>
               </ProtectedRoute>
             }
           />

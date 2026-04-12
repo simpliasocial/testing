@@ -66,7 +66,7 @@ export function TrendChart({ data, className }: TrendChartProps) {
               strokeWidth={2}
               fillOpacity={1}
               fill="url(#colorSQLs)"
-              name="SQLs"
+              name="Interesados"
             />
             <Area
               type="monotone"
@@ -75,7 +75,7 @@ export function TrendChart({ data, className }: TrendChartProps) {
               strokeWidth={2}
               fillOpacity={1}
               fill="url(#colorAppointments)"
-              name="Appointments"
+              name="Citas"
             />
           </AreaChart>
         </ResponsiveContainer>

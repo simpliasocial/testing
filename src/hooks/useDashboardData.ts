@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
-import { chatwootService } from '../services/ChatwootService';
+import { useMemo } from 'react';
+import { useDashboardContext } from '../context/DashboardDataContext';
 
 export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek: string = "1") => {
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const [data, setData] = useState({
+    const { conversations: allConversationsRaw, inboxes, loading, error } = useDashboardContext();
+
+    const emptyData = {
         kpis: {
             totalLeads: 0,
             interestedLeads: 0,
             scheduledAppointments: 0,
+            closedSales: 0,
             unqualified: 0,
             schedulingRate: 0,
             discardRate: 0,
@@ -28,15 +29,41 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             incomplete: 0,
             funnelDropoff: 0
         },
-        responseTime: 0
-    });
-
-    const fetchData = async (isBackground = false) => {
-        if (!isBackground) {
-            setLoading(true);
+        responseTime: 0,
+        ownerPerformance: [] as any[],
+        operationalMetrics: {
+            leadsWithOwnerPercentage: 0,
+            leadsSinRespuesta: 0,
+            slaPercentage: 0,
+            agingData: [] as any[],
+            activeLeads: [] as any[]
         }
+    };
+
+    const data = useMemo(() => {
+        if (!allConversationsRaw || allConversationsRaw.length === 0) {
+            return emptyData;
+        }
+
+        // Helper to parsing Chatwoot timestamps (seconds vs ms)
+        const parseTs = (ts: any): Date => {
+            if (!ts) return new Date(0);
+            const n = Number(ts);
+            if (isNaN(n)) return new Date(ts); // ISO string
+            if (n < 10000000000) return new Date(n * 1000);
+            return new Date(n);
+        };
+
+        // Helper to parse "monto_operacion"
+        const parseMonto = (val: any): number => {
+            if (!val) return 0;
+            const clean = val.toString().replace(/[^0-9.]/g, '');
+            const num = parseFloat(clean);
+            return isNaN(num) ? 0 : num;
+        };
+
         try {
-            // 1. Determine Global Filter Range (for KPIs, Funnel, etc.)
+            // 1. Determine Global Filter Range
             let globalStart: Date;
             let globalEnd: Date;
 
@@ -44,12 +71,18 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 globalStart = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), 1);
                 globalEnd = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0, 23, 59, 59);
             } else {
-                // All Time (Default: Jan 1 2026 to Now)
-                globalStart = new Date(2026, 0, 1); // Jan 1, 2026
-                globalEnd = new Date(); // Now
+                // TRUE HISTORICAL: From 2024 to Forever
+                globalStart = new Date(2024, 0, 1);
+                globalEnd = new Date(2030, 0, 1); // Way in the future
             }
 
-            // 2. Determine Monthly Trend Range (Specific requirement: Show Current Month if "All Time" is selected)
+            console.log(`[Dashboard] Range: ${globalStart.toLocaleDateString()} -> ${globalEnd.toLocaleDateString()}`);
+            console.log(`[Dashboard] Total conversations in memory: ${allConversationsRaw.length}`);
+            allConversationsRaw.forEach((c, idx) => {
+                if (idx < 5) console.debug(`[Dashboard] Example Conv ${c.id} date: ${parseTs(c.timestamp).toLocaleString()}`);
+            });
+
+            // 2. Determine Monthly Trend Range
             let trendStart: Date;
             let trendEnd: Date;
 
@@ -57,474 +90,225 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 trendStart = globalStart;
                 trendEnd = globalEnd;
             } else {
-                // If "All Time" selected, show Current Month for trend
                 const now = new Date();
                 trendStart = new Date(now.getFullYear(), now.getMonth(), 1);
                 trendEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
             }
 
-            // 3. Fetch ALL conversations (Client-side filtering is safer for "February = 0" requirement)
-            // We fetch 'all' status to get everything.
-            // 3. Fetch ALL conversations (Iterate through pages)
-            let allConversationsRaw: any[] = [];
-            let page = 1;
-            let hasMore = true;
-
-            while (hasMore) {
-                const response = await chatwootService.getConversations({ status: 'all', page });
-                const conversations = response.payload;
-
-                if (conversations.length === 0) {
-                    hasMore = false;
-                } else {
-                    allConversationsRaw = [...allConversationsRaw, ...conversations];
-                    // Check if we reached the last page
-                    // If the number of items returned is less than typical page size (usually 25), we are done.
-                    // Or check meta if available, but checking count is robust enough for now.
-                    // Chatwoot default page size is 25.
-                    if (conversations.length < 25) {
-                        hasMore = false;
-                    } else {
-                        page++;
-                    }
-                }
-            }
-
-            // Helper to parse "transaction_amount"
-            const parseMonto = (val: any): number => {
-                if (!val) return 0;
-                // Remove non-numeric characters except dot and comma
-                // Check format. If like "1,000.00" or "$1000", remove $ and ,
-                // If "1.000,00" (European), might need heuristic, but assuming standard float-like or US currency for now based on user context.
-                // Safest: Replace everything not 0-9 or .
-                const clean = val.toString().replace(/[^0-9.]/g, '');
-                const num = parseFloat(clean);
-                return isNaN(num) ? 0 : num;
-            };
-
             // Calculate Total Profit - All Time
             const totalProfitAll = allConversationsRaw.reduce((sum, conv) => {
                 const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                 const convAttrs = conv.custom_attributes || {};
-                const montoVal = contactAttrs.transaction_amount || convAttrs.transaction_amount;
-                const monto = parseMonto(montoVal);
-                return sum + monto;
+                const montoVal = contactAttrs.monto_operacion || convAttrs.monto_operacion;
+                return sum + parseMonto(montoVal);
             }, 0);
 
-            // 4. Filter Data for KPIs
+            // Filter Data for KPIs
             const kpiConversations = allConversationsRaw.filter(conv => {
-                const convDate = new Date(conv.timestamp * 1000);
-                return convDate >= globalStart && convDate <= globalEnd;
+                const convDate = parseTs(conv.timestamp);
+                const isInRange = convDate >= globalStart && convDate <= globalEnd;
+
+                console.debug(`[Dashboard] Filtering Conv ${conv.id}:`, {
+                    date: convDate.toISOString(),
+                    start: globalStart.toISOString(),
+                    end: globalEnd.toISOString(),
+                    isInRange
+                });
+
+                return isInRange;
             });
 
-            console.log('Date Filter Debug:', {
-                selectedMonth: selectedMonth ? selectedMonth.toISOString() : 'All Time',
-                globalStart: globalStart.toISOString(),
-                globalEnd: globalEnd.toISOString(),
-                totalRawConversations: allConversationsRaw.length,
-                filteredConversations: kpiConversations.length,
-                sampleConversationDates: kpiConversations.slice(0, 3).map(c => ({
-                    id: c.id,
-                    timestamp: c.timestamp,
-                    date: new Date(c.timestamp * 1000).toISOString()
-                }))
-            });
+            console.log(`[Dashboard] kpiConversations filtered: ${kpiConversations.length}`);
 
-            // Calculate Monthly/Period Profit (Ganancia Mensual) - Filtered by date_amount_transaction
+            // Calculate Monthly/Period Profit
             let monthlyProfit = 0;
-            let conversationsWithMontoInPeriod = 0;
-
             allConversationsRaw.forEach(conv => {
                 const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                 const convAttrs = conv.custom_attributes || {};
-                const montoVal = contactAttrs.transaction_amount || convAttrs.transaction_amount;
+                const montoVal = contactAttrs.monto_operacion || convAttrs.monto_operacion;
                 const monto = parseMonto(montoVal);
 
                 if (monto > 0) {
-                    const fechaMontoStr = contactAttrs.date_amount_transaction || convAttrs.date_amount_transaction;
-
+                    const fechaMontoStr = contactAttrs.fecha_monto_operacion || convAttrs.fecha_monto_operacion;
                     let fechaMonto: Date;
                     if (fechaMontoStr) {
                         fechaMonto = new Date(fechaMontoStr);
                     } else {
-                        // Fallback: use the conversation date
-                        fechaMonto = new Date(conv.timestamp * 1000);
-                        console.warn(`Conversation ${conv.id} has transaction_amount but no date_amount_transaction. Using conversation date as fallback.`);
+                        fechaMonto = parseTs(conv.timestamp);
                     }
-
-                    // Check whether the transaction date falls within the selected period
-                    const isInPeriod = fechaMonto >= globalStart && fechaMonto <= globalEnd;
-
-                    if (isInPeriod) {
+                    if (fechaMonto >= globalStart && fechaMonto <= globalEnd) {
                         monthlyProfit += monto;
-                        conversationsWithMontoInPeriod++;
-
-                            console.log('Amount included in period:', {
-                            conversationId: conv.id,
-                            monto,
-                            fechaMonto: fechaMonto.toISOString(),
-                            period: `${globalStart.toISOString()} to ${globalEnd.toISOString()}`
-                        });
                     }
                 }
             });
 
-            console.log('Revenue Calculation Summary:', {
-                period: selectedMonth ? selectedMonth.toISOString().split('T')[0] : 'All Time',
-                globalStart: globalStart.toISOString(),
-                globalEnd: globalEnd.toISOString(),
-                conversationsWithMontoInPeriod,
-                monthlyProfit,
-                totalProfitAll
-            });
-
-
-            // Calculate KPIs from filtered data
             const totalLeads = kpiConversations.length;
-
-            // Helper to count by label
             const countByLabel = (label: string) =>
                 kpiConversations.filter(c => c.labels && c.labels.includes(label)).length;
 
-            // Updated English Labels:
-            const incomingLeadsCount = countByLabel('incoming_leads');
-            const a_Count = countByLabel('a_');
-            const b1Count = countByLabel('b1');
-            const b2Count = countByLabel('b2');
-            const c1Count = countByLabel('c1');
-            const scheduledAppointmentsCount = countByLabel('scheduled_appointment');
-            const successfulSaleCount = countByLabel('successful_sale');
+            const interestedLeadsCount = countByLabel('interesado') + countByLabel('crear_confianza') + countByLabel('crear_urgencia');
+            // == DYNAMIC DISCOVERY ==
+            const allLabelSet = new Set<string>();
+            const allAttributeKeys = new Set<string>();
 
-            // KPI Logic
-            const interestedLeadsCount = a_Count; // Only a_ = clients that ask/accept to schedule
-            const schedulingRateVar = totalLeads > 0 ? Math.round((scheduledAppointmentsCount / totalLeads) * 100) : 0;
-            const discardRateVar = totalLeads > 0 ? Math.round((c1Count / totalLeads) * 100) : 0;
+            allConversationsRaw.forEach(conv => {
+                (conv.labels || []).forEach(l => allLabelSet.add(l));
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                Object.keys(attrs).forEach(k => allAttributeKeys.add(k));
+            });
 
-            // Calculate Response Rate
+            // Count every label found
+            const labelDistribution = Array.from(allLabelSet).map(label => ({
+                label: label.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+                key: label,
+                value: countByLabel(label)
+            })).sort((a, b) => b.value - a.value);
+
+            // Core KPI Mappings (Standard with Fallbacks)
+            // If they change names, we try to find partial matches
+            const citaAgendadaCount = countByLabel('cita_agendada') + countByLabel('cita');
+            const desinteresadoCount = countByLabel('desinteresado') + countByLabel('descartado');
+            const ventaExitosaCount = countByLabel('venta_exitosa') + countByLabel('venta');
+            const interesadoCount = countByLabel('interesado');
+
+            const schedulingRateVar = totalLeads > 0 ? Math.round((citaAgendadaCount / totalLeads) * 100) : 0;
+            const discardRateVar = totalLeads > 0 ? Math.round((desinteresadoCount / totalLeads) * 100) : 0;
             const interactedConversations = kpiConversations.filter(c => c.status !== 'new').length;
             const responseRateVar = totalLeads > 0 ? Math.round((interactedConversations / totalLeads) * 100) : 0;
 
-            // Recent Appointments (from filtered data)
             const recentAppointments = kpiConversations
-                .filter(c => c.labels && c.labels.includes('scheduled_appointment'))
+                .filter(c => c.labels && (c.labels.includes('cita_agendada') || c.labels.includes('venta_exitosa') || c.labels.includes('cita')))
                 .slice(0, 5)
                 .map(conv => {
-                    // Search data first in contact attributes, then in conversation attributes
-                    const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                    const convAttrs = conv.custom_attributes || {};
-
+                    const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
                     return {
                         id: conv.id,
-                        name: contactAttrs.full_name || convAttrs.full_name || conv.meta?.sender?.name || 'No Name',
-                        cellphone: contactAttrs.cellphone || convAttrs.cellphone || conv.meta?.sender?.phone_number || 'No Cellphone',
-                        agency: contactAttrs.agency || convAttrs.agency || 'No Agency',
-                        date: contactAttrs.visit_date || convAttrs.visit_date || 'Pending',
-                        time: contactAttrs.visit_time || convAttrs.visit_time || '',
-                        status: 'Confirmed'
+                        name: conv.meta?.sender?.name || attrs.nombre_completo || 'Sin Nombre',
+                        cellphone: conv.meta?.sender?.phone_number || attrs.celular || 'Sin Teléfono',
+                        agency: attrs.agencia || 'Sin Agencia',
+                        date: attrs.fecha_visita || 'Pendiente',
+                        time: attrs.hora_visita || '',
+                        status: (conv.labels.includes('venta_exitosa') || conv.labels.includes('venta')) ? 'Finalizado' : 'Confirmado'
                     };
                 });
 
-            // Funnel Data
             const funnelData = [
-                { label: "incoming_leads", value: incomingLeadsCount, percentage: totalLeads > 0 ? Math.round((incomingLeadsCount / totalLeads) * 100) : 0, color: "hsl(200, 70%, 50%)" },
-                { label: "a_", value: a_Count, percentage: totalLeads > 0 ? Math.round((a_Count / totalLeads) * 100) : 0, color: "hsl(224, 62%, 32%)" },
-                { label: "b1", value: b1Count, percentage: totalLeads > 0 ? Math.round((b1Count / totalLeads) * 100) : 0, color: "hsl(142, 60%, 45%)" },
-                { label: "b2", value: b2Count, percentage: totalLeads > 0 ? Math.round((b2Count / totalLeads) * 100) : 0, color: "hsl(142, 60%, 55%)" },
-                { label: "scheduled_appointment", value: scheduledAppointmentsCount, percentage: totalLeads > 0 ? Math.round((scheduledAppointmentsCount / totalLeads) * 100) : 0, color: "hsl(45, 93%, 58%)" },
-                { label: "c1", value: c1Count, percentage: totalLeads > 0 ? Math.round((c1Count / totalLeads) * 100) : 0, color: "hsl(0, 70%, 60%)" },
-                { label: "successful_sale", value: successfulSaleCount, percentage: totalLeads > 0 ? Math.round((successfulSaleCount / totalLeads) * 100) : 0, color: "hsl(120, 70%, 40%)" },
+                { label: "Interesado", value: interesadoCount, color: "hsl(200, 70%, 50%)" },
+                { label: "Cita Agendada", value: citaAgendadaCount, color: "hsl(45, 93%, 58%)" },
+                { label: "Venta Exitosa", value: ventaExitosaCount, color: "hsl(262, 83%, 58%)" },
             ];
 
-            // Debugging: Log all unique labels found to help verify KPIs
-            const allLabels = new Set<string>();
-            kpiConversations.forEach(c => c.labels?.forEach(l => allLabels.add(l)));
-            console.log('Unique Labels Found in Dashboard Data:', Array.from(allLabels));
-            console.log('Unique Labels Found in Dashboard Data:', Array.from(allLabels));
-            console.log('Total Leads:', totalLeads);
-            console.log('Interested Leads Count:', interestedLeadsCount);
+            // If the standard funnel is empty, we show the top labels instead
+            const displayFunnel = (interesadoCount === 0 && citaAgendadaCount === 0 && ventaExitosaCount === 0)
+                ? labelDistribution.slice(0, 5).map(l => ({ label: l.label, value: l.value, color: `hsl(${Math.random() * 360}, 60%, 50%)` }))
+                : funnelData;
 
-            // Channel Breakdown
-            // Fetch inboxes to map IDs to Names/Types
-            const inboxes = await chatwootService.getInboxes();
-            const inboxMap = new Map(inboxes.map((inbox: any) => [inbox.id, inbox]));
-
+            const inboxMap = new Map((inboxes || []).map((inbox: any) => [inbox.id, inbox]));
             const channelCounts = new Map<string, number>();
             kpiConversations.forEach(conv => {
-                const inbox = inboxMap.get(conv.inbox_id);
-                let channelName = 'Other';
-
-                if (inbox) {
-                    // Map channel type to display name
-                    const type = inbox.channel_type;
-                    if (type === 'Channel::Whatsapp') channelName = 'WhatsApp';
-                    else if (type === 'Channel::FacebookPage') channelName = 'Facebook'; // Could be Messenger or Instagram depending on config, but usually FB
-                    else if (type === 'Channel::Instagram') channelName = 'Instagram'; // If specific Instagram channel exists
-                    else channelName = inbox.name; // Fallback to inbox name
-                }
-
+                const inbox = conv.inbox_id ? inboxMap.get(conv.inbox_id) : null;
+                const channelName = inbox ? (inbox.channel_type === 'Channel::Whatsapp' ? 'WhatsApp' : inbox.name) : 'Otro';
                 channelCounts.set(channelName, (channelCounts.get(channelName) || 0) + 1);
             });
 
-            const channelData = Array.from(channelCounts.entries()).map(([name, count]) => {
-                let icon = "MessageCircle";
-                let color = "bg-gray-500";
+            const channelData = Array.from(channelCounts.entries()).map(([name, count]) => ({
+                name, count, percentage: totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0
+            }));
 
-                if (name === 'WhatsApp') {
-                    icon = "MessageCircle";
-                    color = "bg-green-500";
-                } else if (name === 'Facebook') {
-                    icon = "Facebook";
-                    color = "bg-blue-600";
-                } else if (name === 'Instagram') {
-                    icon = "Instagram";
-                    color = "bg-pink-600";
-                }
-
-                return {
-                    name,
-                    count,
-                    percentage: totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0,
-                    icon,
-                    color
-                };
-            });
-
-            // If no data, show empty state or default
-            if (channelData.length === 0 && totalLeads > 0) {
-                // Fallback if something went wrong with mapping but we have leads
-                channelData.push({ name: "Unknown", count: totalLeads, percentage: 100, icon: "HelpCircle", color: "bg-gray-400" });
-            }
-
-            // 5. Weekly Trend Calculation (Specific Week of Selected Month)
-            const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            const weeklyTrendMap = new Map<string, { leads: number; appointments: number }>();
-            days.forEach(day => weeklyTrendMap.set(day, { leads: 0, appointments: 0 }));
-
-            // Determine the date range for the selected week
-            // Logic: trendStart is the 1st of the month (or current month).
-            // We need to find the start and end dates of "Week X" within that month.
-            // Week 1 starts on trendStart.
-            // But we need to align with the "Week 1" logic from getWeekNumber.
-
-            const getWeekNumber = (d: Date) => {
-                const firstDayOfMonth = new Date(d.getFullYear(), d.getMonth(), 1);
-                const pastDaysOfMonth = (d.getTime() - firstDayOfMonth.getTime()) / 86400000;
-                return Math.ceil((pastDaysOfMonth + firstDayOfMonth.getDay() + 1) / 7);
-            };
-
-            // Filter conversations for the selected week
-            const targetWeek = parseInt(selectedWeek);
-            const weeklyConversations = allConversationsRaw.filter(conv => {
-                const d = new Date(conv.timestamp * 1000);
-                // Must be within the trend month AND match the week number
-                if (d >= trendStart && d <= trendEnd) {
-                    return getWeekNumber(d) === targetWeek;
-                }
-                return false;
-            });
-
-            // Map days to specific dates for the selected week
-            const dayToDateMap = new Map<string, number>();
-            let tempDate = new Date(trendStart);
-            while (tempDate <= trendEnd) {
-                if (getWeekNumber(tempDate) === targetWeek) {
-                    const dayName = days[tempDate.getDay()];
-                    dayToDateMap.set(dayName, tempDate.getDate());
-                }
-                tempDate.setDate(tempDate.getDate() + 1);
-            }
-
-            weeklyConversations.forEach(conv => {
-                const date = new Date(conv.timestamp * 1000);
-                const dayName = days[date.getDay()];
-                const current = weeklyTrendMap.get(dayName)!;
-
-                current.leads++;
-                if (conv.labels && conv.labels.includes('scheduled_appointment')) {
-                    current.appointments++;
-                }
-                weeklyTrendMap.set(dayName, current);
-            });
-
-            const weeklyTrend = days.map(day => {
-                const dateNum = dayToDateMap.get(day);
-                // If a date exists for this day in the selected week, append it (e.g., "Mon 20")
-                // Otherwise keep just the day name (e.g. for days outside the month boundary)
-                const label = dateNum ? `${day} ${dateNum}` : day;
-                return {
-                    week: label,
-                    leads: weeklyTrendMap.get(day)!.leads,
-                    appointments: weeklyTrendMap.get(day)!.appointments
-                };
-            });
-
-            // 6. Monthly Trend Calculation
-            const monthlyTrendMap = new Map<string, { leads: number; sqls: number; appointments: number }>();
-            // Initialize 5 weeks
-            for (let i = 1; i <= 5; i++) {
-                monthlyTrendMap.set(`Week ${i}`, { leads: 0, sqls: 0, appointments: 0 });
-            }
-
-            const trendConversations = allConversationsRaw.filter(conv => {
-                const d = new Date(conv.timestamp * 1000);
-                return d >= trendStart && d <= trendEnd;
-            });
-
-            trendConversations.forEach(conv => {
-                const date = new Date(conv.timestamp * 1000);
-                const week = `Week ${getWeekNumber(date)}`;
-                if (monthlyTrendMap.has(week)) {
-                    const current = monthlyTrendMap.get(week)!;
-                    current.leads++;
-                    if (conv.labels && (conv.labels.includes('a_') || conv.labels.includes('b1') || conv.labels.includes('b2'))) current.sqls++;
-                    if (conv.labels && conv.labels.includes('scheduled_appointment')) current.appointments++;
-                    monthlyTrendMap.set(week, current);
-                }
-            });
-
-            const monthlyTrend = Array.from(monthlyTrendMap.entries())
-                .map(([date, counts]) => ({ date, ...counts }));
-
-            // Disqualification Reasons 
-            const totalDisqualified = c1Count;
-            const disqualificationReasons = [
-                { reason: "Disqualified (C1)", count: c1Count, percentage: 100 },
-            ];
-
-            // Data Capture Stats
-            const targetConversations = kpiConversations.filter(c =>
-                c.labels && (c.labels.includes('a_') || c.labels.includes('b1') || c.labels.includes('b2') || c.labels.includes('scheduled_appointment'))
-            );
-            const totalTarget = targetConversations.length;
-
-            const fields = ['full_name', 'cellphone', 'agency', 'visit_date', 'visit_time'];
-            const fieldCounts = fields.reduce((acc, field) => {
-                acc[field] = 0;
-                return acc;
-            }, {} as Record<string, number>);
-
-            let completeConversations = 0;
-            let incompleteConversations = 0;
-
-            targetConversations.forEach(conv => {
-                // Search data first in contact attributes, then in conversation attributes
-                const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                const convAttrs = conv.custom_attributes || {};
-                const attrs = { ...convAttrs, ...contactAttrs }; // contactAttrs takes priority
-                let fieldsPresent = 0;
-
-                fields.forEach(field => {
-                    if (attrs[field]) {
-                        fieldCounts[field]++;
-                        fieldsPresent++;
-                    }
-                });
-
-                if (fieldsPresent === fields.length) {
-                    completeConversations++;
-                } else if (fieldsPresent > 0) {
-                    incompleteConversations++;
-                }
-            });
-
-            const completionRate = totalTarget > 0 ? Math.round((completeConversations / totalTarget) * 100) : 0;
-            const fieldRates = fields.map(field => ({
-                field,
-                rate: totalTarget > 0 ? Math.round((fieldCounts[field] / totalTarget) * 100) : 0
-            })).sort((a, b) => b.rate - a.rate);
-
-            const dataCapture = {
-                completionRate,
-                fieldRates,
-                incomplete: incompleteConversations,
-                funnelDropoff: 0
-            };
-
-            // Calculate Response Time (Average time to first response in minutes)
-            // Chatwoot may provide first_reply_created_at or we need to calculate from messages
+            // Response Time Calculation
             let totalResponseTime = 0;
             let conversationsWithResponse = 0;
-
             kpiConversations.forEach(conv => {
-                let responseTimeMinutes = 0;
-                let isValidResponse = false;
-
-                // Method 1: Use first_reply_created_at if available
                 if (conv.first_reply_created_at && conv.created_at) {
-                    const responseTimeSeconds = conv.first_reply_created_at - conv.created_at;
-                    responseTimeMinutes = responseTimeSeconds / 60;
-                    isValidResponse = true;
-                }
-                // Method 2: Calculate from messages array if available
-                else if (conv.messages && conv.messages.length > 0) {
-                    const firstAgentMessage = conv.messages.find(msg =>
-                        msg.message_type === 'outgoing' || msg.sender?.type === 'agent_bot'
-                    );
-
-                    if (firstAgentMessage && conv.created_at) {
-                        const firstAgentTime = firstAgentMessage.created_at || firstAgentMessage.timestamp;
-                        if (firstAgentTime) {
-                            const responseTimeSeconds = firstAgentTime - conv.created_at;
-                            responseTimeMinutes = responseTimeSeconds / 60;
-                            isValidResponse = true;
-                        }
+                    const diff = conv.first_reply_created_at - conv.created_at;
+                    if (diff >= 0 && diff <= 3600) {
+                        totalResponseTime += diff;
+                        conversationsWithResponse++;
                     }
                 }
+            });
+            const responseTime = conversationsWithResponse > 0 ? Math.round(totalResponseTime / (conversationsWithResponse * 60)) : 0;
 
-                // Only count valid times and discard large outliers (for example, > 60 mins)
-                // that represent delayed manual replies rather than the bot's actual response time.
-                if (isValidResponse && responseTimeMinutes >= 0 && responseTimeMinutes <= 60) {
-                    totalResponseTime += responseTimeMinutes;
-                    conversationsWithResponse++;
-                }
+            // Owner Performance
+            const ownerStats = new Map<string, { name: string, leads: number, appointments: number }>();
+            allConversationsRaw.forEach(conv => {
+                const ownerName = conv.meta?.assignee?.name || "Sin Asignar";
+                if (!ownerStats.has(ownerName)) ownerStats.set(ownerName, { name: ownerName, leads: 0, appointments: 0 });
+                const s = ownerStats.get(ownerName)!;
+                s.leads++;
+                if (conv.labels?.includes('cita_agendada')) s.appointments++;
             });
 
-            const responseTime = conversationsWithResponse > 0
-                ? totalResponseTime / conversationsWithResponse
-                : 0;
+            const ownerPerformance = Array.from(ownerStats.values()).map(s => ({
+                ...s,
+                winRate: s.leads > 0 ? Math.round((s.appointments / s.leads) * 100) : 0,
+                score: Math.min(100, 70 + (s.appointments * 2))
+            })).sort((a, b) => b.leads - a.leads);
 
-            console.log('Response Time Calculation:', {
-                totalConversations: kpiConversations.length,
-                conversationsWithResponse,
-                averageResponseTime: responseTime.toFixed(2) + ' min'
+            // Operational Metrics
+            const nowTs = Math.floor(Date.now() / 1000);
+            let leadsWithOwnerCount = 0;
+            let withinSlaCount = 0;
+            const agingBuckets = [
+                { range: "0-1 días", count: 0, color: "#10b981", maxDays: 1 },
+                { range: "2-3 días", count: 0, color: "#3b82f6", maxDays: 3 },
+                { range: "4-7 días", count: 0, color: "#f59e0b", maxDays: 7 },
+                { range: "15+ días", count: 0, color: "#7f1d1d", maxDays: 9999 }
+            ];
+
+            kpiConversations.forEach(conv => {
+                if (conv.meta?.assignee?.name) leadsWithOwnerCount++;
+                if (conv.first_reply_created_at && conv.created_at && (conv.first_reply_created_at - conv.created_at) < 600) withinSlaCount++;
+                const daysOld = (nowTs - conv.timestamp) / 86400;
+                const bucket = agingBuckets.find(b => daysOld <= b.maxDays);
+                if (bucket) bucket.count++;
             });
 
-            setData({
+            const operationalMetrics = {
+                leadsWithOwnerPercentage: totalLeads > 0 ? Math.round((leadsWithOwnerCount / totalLeads) * 100) : 0,
+                leadsSinRespuesta: kpiConversations.filter(c => !c.first_reply_created_at).length,
+                slaPercentage: interactedConversations > 0 ? Math.round((withinSlaCount / interactedConversations) * 100) : 0,
+                agingData: agingBuckets,
+                activeLeads: kpiConversations.filter(c => c.status !== 'resolved').slice(0, 10).map(c => ({
+                    id: c.id,
+                    name: c.meta?.sender?.name || "Sin Nombre",
+                    owner: c.meta?.assignee?.name || "Sin Asignar",
+                    status: c.status,
+                    time: new Date(c.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    channel: inboxMap.get(c.inbox_id!)?.name || "Chatwoot"
+                }))
+            };
+
+            return {
                 kpis: {
                     totalLeads,
                     interestedLeads: interestedLeadsCount,
-                    scheduledAppointments: scheduledAppointmentsCount,
-                    unqualified: c1Count,
+                    scheduledAppointments: citaAgendadaCount,
+                    closedSales: ventaExitosaCount,
+                    unqualified: desinteresadoCount,
                     schedulingRate: schedulingRateVar,
                     discardRate: discardRateVar,
                     responseRate: responseRateVar,
-                    monthlyProfit: monthlyProfit,
+                    monthlyProfit,
                     totalProfit: totalProfitAll
                 },
-                funnelData,
+                funnelData: displayFunnel,
+                labelDistribution,
                 recentAppointments,
                 channelData,
-                weeklyTrend,
-                monthlyTrend,
-                disqualificationReasons,
-                dataCapture,
-                responseTime
-            });
-            setLoading(false);
-        } catch (err) {
-            console.error(err);
-            setError('Failed to fetch dashboard data');
-            setLoading(false);
+                weeklyTrend: [],
+                monthlyTrend: [],
+                disqualificationReasons: [],
+                dataCapture: emptyData.dataCapture,
+                responseTime,
+                ownerPerformance,
+                operationalMetrics
+            };
+        } catch (e) {
+            console.error("Error calculating dashboard data:", e);
+            return emptyData;
         }
-    };
+    }, [allConversationsRaw, inboxes, selectedMonth, selectedWeek]);
 
-    useEffect(() => {
-        fetchData(false);
-        const interval = setInterval(() => fetchData(true), 30000); // Poll every 30s in background
-        return () => clearInterval(interval);
-    }, [selectedMonth, selectedWeek]); // Re-fetch when month or week changes
-
-    const refetch = () => fetchData(false);
-
-    return { loading, error, data, refetch };
+    return { loading, error, data, refetch: () => { } };
 };

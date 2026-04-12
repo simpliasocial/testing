@@ -24,8 +24,6 @@ interface RecentAppointmentsProps {
 }
 
 export function RecentAppointments({ appointments = [] }: RecentAppointmentsProps) {
-    // Use props if available, otherwise fallback to empty or loading state
-    // Actually, let's just use the props. The parent will handle loading or passing default.
     const displayAppointments = appointments.length > 0 ? appointments : [];
 
     return (
@@ -33,11 +31,10 @@ export function RecentAppointments({ appointments = [] }: RecentAppointmentsProp
             <Table>
                 <TableHeader>
                     <TableRow>
-                        <TableHead className="w-[200px]">Client</TableHead>
-                        <TableHead>Contact</TableHead>
-                        <TableHead>Agency</TableHead>
-                        <TableHead>Date & Time</TableHead>
-
+                        <TableHead className="w-[200px]">Cliente</TableHead>
+                        <TableHead>Contacto</TableHead>
+                        <TableHead>Agencia</TableHead>
+                        <TableHead>Fecha y Hora</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -76,6 +73,13 @@ export function RecentAppointments({ appointments = [] }: RecentAppointmentsProp
 
                         </TableRow>
                     ))}
+                    {displayAppointments.length === 0 && (
+                        <TableRow>
+                            <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                                No hay citas agendadas recientemente.
+                            </TableCell>
+                        </TableRow>
+                    )}
                 </TableBody>
             </Table>
         </div>

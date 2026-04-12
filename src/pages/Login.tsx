@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { toast } from 'sonner';
 import { Lock, User } from 'lucide-react';
 
 const Login = () => {
@@ -33,11 +32,11 @@ const Login = () => {
                 localStorage.setItem('isAuthenticated', 'true');
                 navigate('/');
             } else {
-                setError('Incorrect credentials');
+                setError('Credenciales incorrectas');
             }
         } catch (err: any) {
             console.error('Login error:', err);
-            setError(err.message || 'Error signing in');
+            setError(err.message || 'Error al iniciar sesión');
         } finally {
             setLoading(false);
         }
@@ -54,18 +53,18 @@ const Login = () => {
                     </div>
                     <CardTitle className="text-3xl font-bold tracking-tight text-primary">Testings</CardTitle>
                     <CardDescription className="text-slate-400 text-lg">
-                        Control Dashboard
+                        Panel de Control
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handleLogin} className="space-y-4">
                         <div className="space-y-2">
-                            <Label htmlFor="username">Username</Label>
+                            <Label htmlFor="username">Usuario</Label>
                             <div className="relative">
                                 <User className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
                                 <Input
                                     id="username"
-                                    placeholder="Username"
+                                    placeholder="Usuario"
                                     type="text"
                                     autoCapitalize="none"
                                     autoCorrect="off"
@@ -77,7 +76,7 @@ const Login = () => {
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="password">Password</Label>
+                            <Label htmlFor="password">Contraseña</Label>
                             <div className="relative">
                                 <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
                                 <Input
@@ -97,10 +96,10 @@ const Login = () => {
                             {loading ? (
                                 <div className="flex items-center gap-2">
                                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                                    Verifying...
+                                    Verificando...
                                 </div>
                             ) : (
-                                'Sign In'
+                                'Iniciar Sesión'
                             )}
                         </Button>
                     </form>

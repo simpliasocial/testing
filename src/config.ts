@@ -7,8 +7,9 @@ export const config = {
         anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY
     },
     chatwoot: {
-        baseUrl: "/chatwoot-api/api/v1/accounts/1",
+        baseUrl: `/chatwoot-api/api/v1/accounts/${import.meta.env.VITE_CHATWOOT_ACCOUNT_ID}`,
         apiToken: import.meta.env.VITE_CHATWOOT_API_TOKEN,
-        publicUrl: import.meta.env.VITE_CHATWOOT_BASE_URL
+        publicUrl: import.meta.env.VITE_CHATWOOT_BASE_URL,
+        accountId: import.meta.env.VITE_CHATWOOT_ACCOUNT_ID
     }
 };
