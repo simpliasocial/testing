@@ -22,6 +22,7 @@ import TrendLayer from '@/pages/layers/TrendLayer';
 import ReportingLayer from '@/pages/layers/ReportingLayer';
 import ChatwootPage from '@/pages/ChatwootPage';
 import ReportsPage from '@/pages/ReportsPage';
+import HistoricalTrendLayer from '@/pages/layers/HistoricalTrendLayer';
 import { useDashboardContext } from '@/context/DashboardDataContext';
 import { Database, Activity } from 'lucide-react';
 
@@ -88,7 +89,7 @@ const DashboardLayout = () => {
                 <Tabs defaultValue="overview" value={activeTab} onValueChange={setActiveTab} className="space-y-8">
                     {/* Modular Navigation Tabs */}
                     <div className="overflow-x-auto pb-2 -mx-1 px-1">
-                        <TabsList className="inline-flex h-auto p-1 bg-background border shadow-sm rounded-xl">
+                        <TabsList className="inline-flex h-auto p-1 bg-background border shadow-sm rounded-xl overflow-x-auto whitespace-nowrap">
                             {[
                                 { id: 'overview', label: 'Estrategia', icon: LayoutDashboard },
                                 { id: 'funnel', label: 'Embudo', icon: Filter },
@@ -96,6 +97,7 @@ const DashboardLayout = () => {
                                 { id: 'followup', label: 'Seguimiento', icon: ListTodo },
                                 { id: 'performance', label: 'Rendimiento', icon: BarChart3 },
                                 { id: 'trends', label: 'Tendencias', icon: TrendingUp },
+                                { id: 'history', label: 'Tendencia Histórica', icon: Database },
                                 { id: 'chats', label: 'Conversaciones', icon: Search },
                                 { id: 'reporting', label: 'Reportes', icon: FileText },
                             ].map((tab) => (
@@ -134,6 +136,10 @@ const DashboardLayout = () => {
 
                         <TabsContent value="trends" className="mt-0">
                             <TrendLayer />
+                        </TabsContent>
+
+                        <TabsContent value="history" className="mt-0">
+                            <HistoricalTrendLayer />
                         </TabsContent>
 
                         <TabsContent value="chats" className="mt-0">

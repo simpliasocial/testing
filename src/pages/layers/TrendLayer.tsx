@@ -34,14 +34,23 @@ const TrendLayer = () => {
         );
     }
 
-    const { monthlyTrend } = data;
+    const { monthlyTrend, kpis, responseTime } = data;
 
-    // Additional delta metrics placeholder
-    const growth = {
-        leads: 12.5,
-        conversions: -2.3,
-        responseTime: 8.4
-    };
+    let growth = { leads: 0, conversions: 0, responseTime: 0 };
+    if (monthlyTrend && monthlyTrend.length >= 2) {
+        const current = monthlyTrend[monthlyTrend.length - 1];
+        const prev = monthlyTrend[monthlyTrend.length - 2];
+        const calcGrowth = (curr: number, prior: number) => prior === 0 ? 100 : Math.round(((curr - prior) / prior) * 100);
+
+        const currConv = current.leads > 0 ? (current.appointments / current.leads) * 100 : 0;
+        const prevConv = prev.leads > 0 ? (prev.appointments / prev.leads) * 100 : 0;
+
+        growth = {
+            leads: calcGrowth(current.leads, prev.leads),
+            conversions: Math.round(currConv - prevConv),
+            responseTime: 0 // Placeholder
+        };
+    }
 
     return (
         <div className="space-y-6">
@@ -53,10 +62,10 @@ const TrendLayer = () => {
                     </CardHeader>
                     <CardContent>
                         <div className="flex items-baseline gap-2">
-                            <div className="text-2xl font-bold">1,240</div>
-                            <div className="flex items-center text-xs font-medium text-green-600">
-                                <ArrowUpRight className="h-3 w-3" />
-                                {growth.leads}%
+                            <div className="text-2xl font-bold">{kpis?.totalLeads?.toLocaleString() || 0}</div>
+                            <div className={`flex items-center text-xs font-medium ${growth.leads >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {growth.leads >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                                {Math.abs(growth.leads)}%
                             </div>
                         </div>
                     </CardContent>
@@ -68,9 +77,9 @@ const TrendLayer = () => {
                     </CardHeader>
                     <CardContent>
                         <div className="flex items-baseline gap-2">
-                            <div className="text-2xl font-bold">14.2%</div>
-                            <div className="flex items-center text-xs font-medium text-red-600">
-                                <ArrowDownRight className="h-3 w-3" />
+                            <div className="text-2xl font-bold">{kpis?.schedulingRate || 0}%</div>
+                            <div className={`flex items-center text-xs font-medium ${growth.conversions >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {growth.conversions >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                                 {Math.abs(growth.conversions)}%
                             </div>
                         </div>
@@ -83,10 +92,10 @@ const TrendLayer = () => {
                     </CardHeader>
                     <CardContent>
                         <div className="flex items-baseline gap-2">
-                            <div className="text-2xl font-bold">-4.5 min</div>
-                            <div className="flex items-center text-xs font-medium text-green-600">
-                                <ArrowUpRight className="h-3 w-3" />
-                                {growth.responseTime}%
+                            <div className="text-2xl font-bold">{Math.round(responseTime || 0)} min</div>
+                            <div className={`flex items-center text-xs font-medium ${growth.responseTime >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                {growth.responseTime >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                                {Math.abs(growth.responseTime)}%
                             </div>
                         </div>
                     </CardContent>
@@ -175,7 +184,7 @@ const TrendLayer = () => {
                                         <td className="px-6 py-4">{row.leads}</td>
                                         <td className="px-6 py-4">{row.sqls}</td>
                                         <td className="px-6 py-4">{row.appointments}</td>
-                                        <td className="px-6 py-4">--</td>
+                                        <td className="px-6 py-4">{row.closedSales || 0}</td>
                                         <td className="px-6 py-4 font-bold text-primary">
                                             {row.leads > 0 ? Math.round((row.appointments / row.leads) * 100) : 0}%
                                         </td>

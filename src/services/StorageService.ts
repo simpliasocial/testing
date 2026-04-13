@@ -26,7 +26,7 @@ export interface MinifiedConversation {
 
 const DB_NAME = 'MonteMidasDB';
 const STORE_NAME = 'conversations';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export const StorageService = {
     initDB(): Promise<IDBDatabase> {
@@ -37,9 +37,11 @@ export const StorageService = {
             request.onsuccess = (event: any) => resolve(event.target.result);
             request.onupgradeneeded = (event: any) => {
                 const db = event.target.result;
-                if (!db.objectStoreNames.contains(STORE_NAME)) {
-                    db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                // Force delete and recreate to fix broken schemas from previous versions
+                if (db.objectStoreNames.contains(STORE_NAME)) {
+                    db.deleteObjectStore(STORE_NAME);
                 }
+                db.createObjectStore(STORE_NAME, { keyPath: 'id' });
             };
         });
     },

@@ -1,6 +1,15 @@
 import { supabase } from '../lib/supabase';
 
 export const SupabaseSyncService = {
+    // Helper to safely parse any incoming custom attribute to a valid database numeric or null
+    parseNumber(val: any): number | null {
+        if (val === null || val === undefined || val === '') return null;
+        if (typeof val === 'number') return isNaN(val) ? null : val;
+        const clean = val.toString().replace(/[^0-9.-]/g, '');
+        const num = parseFloat(clean);
+        return isNaN(num) ? null : num;
+    },
+
     async upsertRawIngest(data: {
         source_type: 'api' | 'webhook' | 'manual' | 'repair';
         endpoint_name: string;
@@ -114,21 +123,7 @@ export const SupabaseSyncService = {
                 additional_attributes: contact.additional_attributes || {},
                 custom_attributes: attrs,
 
-                // Mapped Business Attributes
-                nombre_completo: attrs.nombre_completo,
-                fecha_visita: attrs.fecha_visita,
-                hora_visita: attrs.hora_visita,
-                agencia: attrs.agencia,
-                celular: attrs.celular,
-                correo: attrs.correo,
-                campana: attrs.campana,
-                ciudad: attrs.ciudad,
-                edad: attrs.edad,
-                canal: attrs.canal,
-                agente: attrs.agente === true || attrs.agente === 'true',
-                score_interes: attrs.score_interes ? Number(attrs.score_interes) : null,
-                monto_operacion: attrs.monto_operacion,
-                fecha_monto_operacion: attrs.fecha_monto_operacion,
+                // Dropped mapped business attributes from contacts_current because they only exist on conversations_current
 
                 created_at_chatwoot: contact.created_at ? new Date(contact.created_at * 1000).toISOString() : null,
                 last_activity_at_chatwoot: contact.last_activity_at ? new Date(contact.last_activity_at * 1000).toISOString() : null,
@@ -204,8 +199,8 @@ export const SupabaseSyncService = {
                 edad: attrs.edad,
                 canal: attrs.canal,
                 agente: attrs.agente === true || attrs.agente === 'true',
-                score_interes: attrs.score_interes ? Number(attrs.score_interes) : null,
-                monto_operacion: attrs.monto_operacion,
+                score_interes: SupabaseSyncService.parseNumber(attrs.score_interes),
+                monto_operacion: SupabaseSyncService.parseNumber(attrs.monto_operacion),
                 fecha_monto_operacion: attrs.fecha_monto_operacion,
 
                 applied_sla: conv.applied_sla || {},

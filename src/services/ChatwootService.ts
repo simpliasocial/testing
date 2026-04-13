@@ -166,7 +166,8 @@ export const chatwootService = {
                 },
                 signal: params?.signal
             });
-            return response.data.payload;
+            const rawBody = response.data.data || response.data;
+            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || []);
         } catch (error) {
             console.error('Error fetching Chatwoot inboxes:', error);
             return [];
@@ -180,7 +181,8 @@ export const chatwootService = {
                 params: { page: params.page || 1 },
                 signal: params.signal
             });
-            return response.data.payload;
+            const rawBody = response.data.data || response.data;
+            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || []);
         } catch (error) {
             console.error('Error fetching Chatwoot contacts:', error);
             return [];
@@ -193,7 +195,8 @@ export const chatwootService = {
                 headers: { api_access_token: API_TOKEN },
                 signal: params?.signal
             });
-            return response.data.payload;
+            const rawBody = response.data.data || response.data;
+            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || []);
         } catch (error) {
             console.error(`Error fetching messages for conversation ${conversationId}:`, error);
             return [];
@@ -206,7 +209,8 @@ export const chatwootService = {
                 headers: { api_access_token: API_TOKEN },
                 signal: params?.signal
             });
-            return response.data;
+            const rawBody = response.data.data || response.data;
+            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || rawBody);
         } catch (error) {
             console.error(`Error fetching conversation details for ${conversationId}:`, error);
             return null;
@@ -219,7 +223,8 @@ export const chatwootService = {
                 headers: { api_access_token: API_TOKEN },
                 signal: params?.signal
             });
-            return response.data;
+            const rawBody = response.data.data || response.data;
+            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || rawBody);
         } catch (error) {
             console.error('Error fetching Chatwoot attribute definitions:', error);
             return [];
@@ -237,7 +242,8 @@ export const chatwootService = {
                 },
                 signal: params.signal
             });
-            return response.data;
+            const rawBody = response.data.data || response.data;
+            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || rawBody);
         } catch (error) {
             console.error('Error fetching Chatwoot reporting events:', error);
             return [];
@@ -254,7 +260,8 @@ export const chatwootService = {
                 },
                 signal: params.signal
             });
-            return response.data;
+            const rawBody = response.data.data || response.data;
+            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || rawBody);
         } catch (error) {
             console.error('Error fetching Chatwoot account reports:', error);
             return null;

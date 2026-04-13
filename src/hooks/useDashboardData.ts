@@ -20,6 +20,7 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
         funnelData: [] as any[],
         recentAppointments: [] as any[],
         channelData: [] as any[],
+        campaignData: [] as any[],
         weeklyTrend: [] as any[],
         monthlyTrend: [] as any[],
         disqualificationReasons: [] as any[],
@@ -231,8 +232,10 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
 
             // Owner Performance
             const ownerStats = new Map<string, { name: string, leads: number, appointments: number }>();
-            allConversationsRaw.forEach(conv => {
-                const ownerName = conv.meta?.assignee?.name || "Sin Asignar";
+            kpiConversations.forEach(conv => {
+                const ownerName = conv.meta?.assignee?.name;
+                if (!ownerName) return; // Skip Sin Asignar
+
                 if (!ownerStats.has(ownerName)) ownerStats.set(ownerName, { name: ownerName, leads: 0, appointments: 0 });
                 const s = ownerStats.get(ownerName)!;
                 s.leads++;
@@ -279,6 +282,44 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 }))
             };
 
+            // Campaigns / Origins
+            const campaignStats = new Map<string, { name: string, leads: number, interacted: number }>();
+            kpiConversations.forEach(conv => {
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const campName = attrs.utm_campaign || attrs.campana || attrs.origen || "Orgánico / Directo";
+                if (!campaignStats.has(campName)) campaignStats.set(campName, { name: campName, leads: 0, interacted: 0 });
+                const s = campaignStats.get(campName)!;
+                s.leads++;
+                if (conv.status !== 'new') s.interacted++;
+            });
+            const campaignData = Array.from(campaignStats.values()).map(c => ({
+                name: c.name,
+                leads: c.leads,
+                rate: c.leads > 0 ? Math.round((c.interacted / c.leads) * 100) : 0
+            })).sort((a, b) => b.leads - a.leads);
+
+            // Trends grouping (monthly)
+            const monthlyTrendMap = new Map<string, { date: string, leads: number, sqls: number, appointments: number, timestamp: number }>();
+            kpiConversations.forEach(conv => {
+                const d = parseTs(conv.timestamp);
+                const monthKey = d.toLocaleString('es-ES', { month: 'short', year: '2-digit' });
+                // We use timestamp to sort them chronologically later
+                const monthTs = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+
+                if (!monthlyTrendMap.has(monthKey)) {
+                    monthlyTrendMap.set(monthKey, { date: monthKey, leads: 0, sqls: 0, appointments: 0, timestamp: monthTs });
+                }
+                const stat = monthlyTrendMap.get(monthKey)!;
+                stat.leads++;
+                if (conv.labels && (conv.labels.includes('interesado') || conv.labels.includes('crear_confianza') || conv.labels.includes('crear_urgencia'))) {
+                    stat.sqls++;
+                }
+                if (conv.labels && (conv.labels.includes('cita_agendada') || conv.labels.includes('cita'))) {
+                    stat.appointments++;
+                }
+            });
+            const monthlyTrend = Array.from(monthlyTrendMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+
             return {
                 kpis: {
                     totalLeads,
@@ -296,8 +337,9 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 labelDistribution,
                 recentAppointments,
                 channelData,
+                campaignData,
                 weeklyTrend: [],
-                monthlyTrend: [],
+                monthlyTrend,
                 disqualificationReasons: [],
                 dataCapture: emptyData.dataCapture,
                 responseTime,

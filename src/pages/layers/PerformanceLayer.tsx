@@ -42,9 +42,7 @@ const PerformanceLayer = () => {
         color: c.name === "WhatsApp" ? "#22c55e" : (c.name === "Facebook" ? "#2563eb" : "#ec4899")
     }));
 
-    const campaignData = [
-        { name: "Promo Marzo", leads: data.kpis.totalLeads, rate: data.kpis.responseRate },
-    ];
+    const campaignData = data.campaignData || [];
 
     const owners = data.ownerPerformance || [];
 

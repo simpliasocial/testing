@@ -45,7 +45,7 @@ const FunnelLayer = () => {
         { name: "Total Leads", value: kpis.totalLeads, color: "#94a3b8" },
         { name: "SQLs (Calificados)", value: kpis.interestedLeads, color: "#6366f1" },
         { name: "Citas Agendadas", value: kpis.scheduledAppointments, color: "#10b981" },
-        { name: "Ventas Exitosas", value: 0, color: "#f59e0b" }, // Connect when venta_exitosa is available
+        { name: "Ventas Exitosas", value: kpis.closedSales || 0, color: "#f59e0b" },
     ];
 
     // Conversion Calculations
@@ -56,7 +56,7 @@ const FunnelLayer = () => {
 
     const convTotalToSql = getConversion(funnelData[1].value, funnelData[0].value);
     const convSqlToAppointment = getConversion(funnelData[2].value, funnelData[1].value);
-    const convAppointmentToSale = 0; // Update with sales data
+    const convAppointmentToSale = getConversion(funnelData[3].value, funnelData[2].value);
 
     return (
         <div className="space-y-6">
@@ -166,7 +166,7 @@ const FunnelLayer = () => {
                 ))}
                 <div className="flex flex-col items-center p-4 bg-primary/10 border-primary/20 border rounded-xl">
                     <span className="text-xs text-primary font-medium uppercase">Win Rate Final</span>
-                    <span className="text-xl font-bold mt-1 text-primary">0%</span>
+                    <span className="text-xl font-bold mt-1 text-primary">{convAppointmentToSale}%</span>
                 </div>
             </div>
         </div>
