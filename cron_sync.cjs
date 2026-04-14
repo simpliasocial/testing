@@ -103,6 +103,8 @@ async function runDailySync() {
                     agente: attrs.agente === true || attrs.agente === 'true',
                     score_interes: parseNumber(attrs.score_interes),
                     monto_operacion: parseNumber(attrs.monto_operacion),
+                    first_reply_created_at: conv.first_reply_created_at ? new Date(conv.first_reply_created_at * 1000).toISOString() : null,
+                    waiting_since: conv.waiting_since ? new Date(conv.waiting_since * 1000).toISOString() : null,
                     created_at_chatwoot: conv.timestamp ? new Date(conv.timestamp * 1000).toISOString() : null,
                     updated_at: new Date().toISOString()
                 };

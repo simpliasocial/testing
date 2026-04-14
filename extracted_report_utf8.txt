@@ -1,0 +1,188 @@
+SimpliaLeads — Historical Trends Tab
+Developer Report
+Purpose: define the architecture, KPI scope, visual logic, and implementation separation for the new “Historical Trends” tab connected to Supabase.
+Module
+Historical Trends tab
+Data source
+Supabase (daily snapshots, monthly visualization)
+Primary time grain
+Month (default view: last 12 months)
+1. Module objective
+The Historical Trends tab is not an operational real-time view. It is a longitudinal analysis layer designed to read structural performance across months and years.
+It must be used to compare periods, identify seasonality, detect sustained deterioration or improvement, and export historical performance data using clean monthly views.
+2. Required architectural separation
+Operational tabs continue to read live or near-real-time data from Chatwoot for execution and daily management.
+The Historical Trends tab must query Supabase only. It should not recompute historical performance directly from Chatwoot on each render.
+This separation is required for performance, consistency, easier year-over-year comparison, and stable monthly KPI definitions.
+3. Recommended historical data structure
+Layer A — Daily snapshot table: one record per day with the base metrics required for historical analysis.
+Layer B — Monthly aggregation layer: query, materialized view, or summarized table built from the daily snapshot table.
+Layer C — Front-end consumption layer: pre-structured payloads for cards, monthly charts, segment views, and exports.
+4. Critical KPIs — Monthly volume
+KPI
+Functional definition
+Recommended visual
+Leads entered per month
+Total number of new leads created in each month
+Line or bar chart
+Unique leads per month
+Monthly leads after deduplication
+Line chart
+Appointments booked per month
+Total appointments created in each month
+Line chart
+Lost leads per month
+Total leads marked as lost or discarded in each month
+Line or bar chart
+5. Critical KPIs — Monthly conversion
+KPI
+Functional definition
+Recommended visual
+Monthly contact rate
+Contacted leads / leads entered in the month
+Line chart
+Monthly interest rate
+Interested leads / contacted leads in the month
+Line chart
+Monthly booking rate
+Booked leads / interested leads in the month
+Line chart
+Monthly total conversion to appointment
+Booked leads / leads entered in the month
+Line chart with benchmark
+6. Critical KPIs — Monthly operational efficiency
+KPI
+Functional definition
+Recommended visual
+Median first-response time per month
+Median time between lead creation and first valid contact
+Line chart
+Monthly SLA compliance rate
+Leads inside SLA / managed leads in the month
+Line chart with target line
+SLA-breached leads per month
+Total leads that exceeded SLA in the month
+Bar chart
+Median aging per month
+Median age of open or pending leads
+Line chart
+7. Critical KPIs — Monthly operational health
+KPI
+Functional definition
+Recommended visual
+Month-end backlog
+Open or pending leads at the end of each month
+Bar chart
+Month-end leads pending management
+Unresolved leads at month close
+Bar chart
+Month-end reactivables
+Reactivable leads accumulated at month close
+Bar chart
+8. V1 implementation priorities
+Priority
+KPI
+High
+Leads entered per month
+High
+Appointments booked per month
+High
+Monthly total conversion to appointment
+High
+Median first-response time per month
+High
+Monthly SLA compliance rate
+High
+Month-end backlog
+Medium
+Unique leads per month
+Medium
+Monthly contact rate
+Medium
+Monthly interest rate
+Medium
+Monthly booking rate
+Medium
+Lost leads per month
+Medium
+SLA-breached leads per month
+9. Recommended tab layout
+Block
+Content
+Purpose
+Historical summary cards
+Leads 12M; Appointments 12M; Total conversion 12M; Median first-response time 12M; SLA compliance 12M; Average monthly backlog
+Fast executive overview with year-over-year comparison
+Monthly business trends
+Leads entered per month; Appointments booked per month; Lost leads per month
+Read structural business movement over time
+Monthly conversion trends
+Monthly contact rate; Monthly interest rate; Monthly booking rate; Monthly total conversion to appointment
+Identify where conversion is improving or deteriorating
+Monthly operational trends
+Median first-response time; SLA compliance rate; SLA-breached leads; Month-end backlog
+Show whether execution quality is improving or worsening
+Historical segmentation
+Monthly trends by channel, campaign, or owner
+Compare structural performance by segment
+Downloadable monthly table
+Year; Month; core monthly KPIs; export action
+Support analysis outside the dashboard
+10. Visualization rules for medium-sized SMEs
+Default filter window: last 12 months.
+Extended comparison window: 24 months.
+Maximum recommended visible range in one chart: 36 months.
+Use line charts for rates and time-based performance metrics.
+Use bar charts for month-end backlog and other discrete monthly volumes.
+Avoid more than 2–3 series in one chart.
+Use reference lines for target-based KPIs such as SLA compliance or desired conversion.
+Avoid pie charts and over-colored visuals for historical analysis.
+11. Required filters
+Filter
+Requirement
+Year
+Required
+Month range
+Required
+Channel
+Required
+Campaign
+Required
+Owner / agent
+Required
+Status
+Optional but recommended
+Visualization mode
+Optional
+12. KPI definitions that must be locked before development
+KPI concept
+Definition that must be standardized
+Lead entered
+Exact event that creates the lead
+Unique lead
+Deduplication rule
+Contacted lead
+Condition that counts as a valid contact
+Interested lead
+Exact state or status mapping
+Booked lead
+Event or state that confirms appointment booking
+Lost lead
+States included as lost/discarded
+Inside SLA
+Official response-time target
+Month-end backlog
+States that compose the backlog at month close
+Reactivable
+Rule that classifies a lead as reactivable
+13. Suggested implementation sequence
+Phase
+Scope
+Phase 1
+Supabase structure, daily snapshots, monthly KPI layer, summary cards, and core monthly charts.
+Phase 2
+Historical segmentation by channel, campaign, and owner; downloadable monthly table; year-over-year comparison.
+Phase 3
+Heatmaps, advanced benchmarking, and performance optimization.
+14. Final product decision
+The Historical Trends tab should be implemented as a monthly historical analysis module, powered by Supabase, separate from the real-time Chatwoot tabs, and designed for long-range comparison, seasonality reading, and structural performance analysis.
