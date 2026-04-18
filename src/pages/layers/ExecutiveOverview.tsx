@@ -1,23 +1,35 @@
-import { Users, Target, Calendar, CheckSquare, TrendingUp, Percent, DollarSign, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { Users, Target, Calendar as CalendarIcon, CheckSquare, TrendingUp, Percent, DollarSign, RefreshCw, Layers } from "lucide-react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { useDashboardData } from "@/hooks/useDashboardData";
+import { useDashboardContext } from "@/context/DashboardDataContext";
 import { Loader2 } from "lucide-react";
 import { ExportToExcel } from "@/components/dashboard/ExportToExcel";
-
-const ALL_TIME_VALUE = "-1";
+import { DateRangePicker } from "@/components/dashboard/DateRangePicker";
+import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
+import { TagConfigDialog } from "@/components/dashboard/TagConfigDialog";
+import { DateRange } from "react-day-picker";
+import { startOfMonth, endOfMonth, format } from "date-fns";
+import { es } from "date-fns/locale";
 
 const ExecutiveOverview = () => {
-    const [selectedMonth, setSelectedMonth] = useState<Date | null>(new Date());
-    const { loading, error, data, refetch } = useDashboardData(selectedMonth);
+    const [dateRange, setDateRange] = useState<DateRange | undefined>({
+        from: startOfMonth(new Date()),
+        to: endOfMonth(new Date())
+    });
+
+    const [selectedInboxes, setSelectedInboxes] = useState<number[]>([]);
+    const { tagSettings, updateTagSettings } = useDashboardContext();
+
+    const filters = useMemo(() => ({
+        startDate: dateRange?.from,
+        endDate: dateRange?.to,
+        selectedInboxes,
+        ...tagSettings
+    }), [dateRange, selectedInboxes, tagSettings]);
+
+    const { loading, error, data, refetch } = useDashboardData(filters);
 
     if (loading) {
         return (
@@ -35,62 +47,58 @@ const ExecutiveOverview = () => {
         );
     }
 
-    const { kpis } = data;
+    const { kpis, allLabels = [] } = data;
 
-    // Additional specific KPIs for Executive Overview as per architecture
     // Formulas:
-    // Win Rate = (venta_exitosa / sqls) * 100
-    // Conversion = (cita_agendada / totalLeads) * 100
+    // Win Rate (Eficiencia de conversión principal) = Comparación de etiquetas SQL vs Citas (o configurable)
+    // El usuario pidió: SQLs vs Citas
     const winRate = kpis.interestedLeads > 0
         ? Math.round((kpis.scheduledAppointments / kpis.interestedLeads) * 100)
         : 0;
 
-    const periodLabel = selectedMonth
-        ? selectedMonth.toLocaleString('es-ES', { month: 'long', year: 'numeric' })
-        : "Histórico (2024-Presente)";
+    const periodLabel = dateRange?.from && dateRange?.to
+        ? `${format(dateRange.from, "dd/MM/yy")} - ${format(dateRange.to, "dd/MM/yy")}`
+        : "Todo el historial";
 
     return (
         <div className="space-y-6">
-            {/* Context bar */}
-            <div className="flex justify-between items-center bg-card p-4 rounded-lg border">
+            {/* dynamic context and filter bar */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-card p-4 rounded-xl border shadow-sm">
                 <div className="flex items-center gap-4">
-                    <h3 className="text-lg font-semibold">Resumen de Negocio</h3>
-                    <span className="text-sm text-muted-foreground bg-secondary px-2 py-1 rounded">
-                        {periodLabel}
-                    </span>
+                    <div className="p-2 bg-primary/10 rounded-lg">
+                        <Layers className="h-5 w-5 text-primary" />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold">Resumen de Negocio</h3>
+                        <p className="text-xs text-muted-foreground uppercase">{periodLabel}</p>
+                    </div>
                 </div>
-                <div className="flex items-center gap-3">
-                    <ExportToExcel />
-                    <Button variant="outline" size="icon" onClick={refetch}>
-                        <RefreshCw className="h-4 w-4" />
-                    </Button>
-                    <Select
-                        value={selectedMonth ? selectedMonth.getMonth().toString() : ALL_TIME_VALUE}
-                        onValueChange={(value) => {
-                            if (value === ALL_TIME_VALUE) {
-                                setSelectedMonth(null);
-                            } else {
-                                const newDate = new Date();
-                                newDate.setMonth(parseInt(value));
-                                setSelectedMonth(newDate);
-                            }
-                        }}
-                    >
-                        <SelectTrigger className="w-[180px]">
-                            <SelectValue placeholder="Periodo" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={ALL_TIME_VALUE}>Todo el Historial</SelectItem>
-                            {[
-                                "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                                "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
-                            ].map((month, idx) => (
-                                <SelectItem key={idx} value={idx.toString()}>
-                                    {month}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+
+                <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                    <ChannelSelector
+                        selectedInboxes={selectedInboxes}
+                        onChange={setSelectedInboxes}
+                    />
+
+                    <DateRangePicker
+                        value={dateRange}
+                        onChange={setDateRange}
+                    />
+
+                    <div className="h-8 w-px bg-border mx-1 hidden lg:block" />
+
+                    <TagConfigDialog
+                        availableLabels={allLabels}
+                        config={tagSettings}
+                        onSave={updateTagSettings}
+                    />
+
+                    <div className="flex items-center gap-2 ml-auto">
+                        <ExportToExcel />
+                        <Button variant="outline" size="icon" onClick={() => refetch()} title="Actualizar datos">
+                            <RefreshCw className="h-4 w-4" />
+                        </Button>
+                    </div>
                 </div>
             </div>
 
@@ -99,66 +107,58 @@ const ExecutiveOverview = () => {
                 <KPICard
                     title="Total Leads"
                     value={kpis.totalLeads.toLocaleString()}
-                    subtitle="Prospectos entrantes"
+                    subtitle="Prospectos entrantes en periodo"
                     icon={Users}
                     variant="primary"
                 />
                 <KPICard
                     title="SQLs"
                     value={kpis.interestedLeads.toLocaleString()}
-                    subtitle="Leads calificados"
+                    subtitle="Vía etiquetas seleccionadas"
                     icon={Target}
                     variant="accent"
                 />
                 <KPICard
                     title="Citas Agendadas"
                     value={kpis.scheduledAppointments.toLocaleString()}
-                    subtitle="Citas en el periodo"
-                    icon={Calendar}
+                    subtitle="Suma de etiquetas de cita"
+                    icon={CalendarIcon}
                     variant="accent"
                 />
                 <KPICard
                     title="Cierre / Ventas"
                     value={kpis.closedSales?.toLocaleString() || "0"}
-                    subtitle="Ventas registradas"
+                    subtitle="Ventas según etiquetas"
                     icon={CheckSquare}
                     variant="success"
                 />
             </div>
 
-            {/* Efficiency Grid */}
+            {/* Efficiency and Revenue Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <KPICard
                     title="Win Rate (Citas/SQL)"
                     value={`${winRate}%`}
-                    subtitle="Eficiencia de conversión"
+                    subtitle="Eficiencia de conversión seleccionada"
                     icon={Percent}
                     variant="primary"
                 />
                 <KPICard
-                    title="Costo por Lead"
-                    value="$0.00"
-                    subtitle="Pendiente inversión"
+                    title="Ganancia Mensual"
+                    value={new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(kpis.monthlyProfit)}
+                    subtitle="Basado en fecha_monto_operacion"
                     icon={DollarSign}
+                    variant="success"
                 />
                 <KPICard
-                    title="Ingresos Estimados"
-                    value={new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(kpis.monthlyProfit)}
-                    subtitle="Basado en monto_operacion"
+                    title="Ganancia Total"
+                    value={new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(kpis.totalProfit)}
+                    subtitle="Suma de todo monto_operacion"
                     icon={TrendingUp}
                     variant="success"
                 />
             </div>
 
-            {/* Note on Strategy */}
-            <div className="p-6 bg-primary/5 border border-primary/10 rounded-xl">
-                <h4 className="font-bold text-primary mb-2">Análisis Estratégico</h4>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                    Este layer permite a la dirección entender si el volumen de leads ({kpis.totalLeads}) está resultando
-                    en una tasa de calificación ({kpis.interestedLeads > 0 ? (kpis.interestedLeads / kpis.totalLeads * 100).toFixed(1) : 0}%)
-                    alineada con los objetivos. El foco principal es subir el Win Rate de SQL a Cita, actualmente en un {winRate}%.
-                </p>
-            </div>
         </div>
     );
 };

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { startOfMonth, endOfMonth } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { Loader2, ArrowRight, Filter, TrendingDown, Percent } from "lucide-react";
@@ -16,7 +17,10 @@ import {
 
 const FunnelLayer = () => {
     const [selectedMonth, setSelectedMonth] = useState<Date | null>(null);
-    const { loading, error, data } = useDashboardData(selectedMonth);
+    const { loading, error, data } = useDashboardData({
+        startDate: selectedMonth ? startOfMonth(selectedMonth) : undefined,
+        endDate: selectedMonth ? endOfMonth(selectedMonth) : undefined
+    });
 
     if (loading) {
         return (

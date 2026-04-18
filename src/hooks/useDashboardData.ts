@@ -1,8 +1,35 @@
 import { useMemo } from 'react';
 import { useDashboardContext } from '../context/DashboardDataContext';
 
-export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek: string = "1") => {
-    const { conversations: allConversationsRaw, inboxes, loading, error } = useDashboardContext();
+export interface DashboardFilters {
+    startDate?: Date;
+    endDate?: Date;
+    selectedInboxes?: number[];
+    sqlTags?: string[];
+    appointmentTags?: string[];
+    saleTags?: string[];
+    unqualifiedTags?: string[];
+}
+
+export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null = {}) => {
+    const filters: DashboardFilters = useMemo(() => {
+        if (!filtersOrMonth) return {};
+        if (filtersOrMonth instanceof Date) {
+            return {
+                startDate: new Date(filtersOrMonth.getFullYear(), filtersOrMonth.getMonth(), 1),
+                endDate: new Date(filtersOrMonth.getFullYear(), filtersOrMonth.getMonth() + 1, 0)
+            };
+        }
+        return filtersOrMonth;
+    }, [filtersOrMonth]);
+
+    const { startDate, endDate, selectedInboxes = [], ...overrideTags } = filters;
+    const { conversations: allConversationsRaw, inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error } = useDashboardContext();
+
+    const sqlTags = overrideTags.sqlTags || globalTagSettings.sqlTags;
+    const appointmentTags = overrideTags.appointmentTags || globalTagSettings.appointmentTags;
+    const saleTags = overrideTags.saleTags || globalTagSettings.saleTags;
+    const unqualifiedTags = overrideTags.unqualifiedTags || globalTagSettings.unqualifiedTags;
 
     const emptyData = {
         kpis: {
@@ -24,6 +51,7 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
         weeklyTrend: [] as any[],
         monthlyTrend: [] as any[],
         disqualificationReasons: [] as any[],
+        allLabels: [] as string[],
         dataCapture: {
             completionRate: 0,
             fieldRates: [] as any[],
@@ -68,9 +96,16 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             let globalStart: Date;
             let globalEnd: Date;
 
-            if (selectedMonth) {
-                globalStart = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), 1);
-                globalEnd = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0, 23, 59, 59);
+            if (startDate && endDate) {
+                globalStart = new Date(startDate);
+                globalStart.setHours(0, 0, 0, 0);
+                globalEnd = new Date(endDate);
+                globalEnd.setHours(23, 59, 59, 999);
+            } else if (startDate) {
+                globalStart = new Date(startDate);
+                globalStart.setHours(0, 0, 0, 0);
+                globalEnd = new Date();
+                globalEnd.setHours(23, 59, 59, 999);
             } else {
                 // TRUE HISTORICAL: From 2024 to Forever
                 globalStart = new Date(2024, 0, 1);
@@ -84,17 +119,8 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             });
 
             // 2. Determine Monthly Trend Range
-            let trendStart: Date;
-            let trendEnd: Date;
-
-            if (selectedMonth) {
-                trendStart = globalStart;
-                trendEnd = globalEnd;
-            } else {
-                const now = new Date();
-                trendStart = new Date(now.getFullYear(), now.getMonth(), 1);
-                trendEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-            }
+            let trendStart = globalStart;
+            let trendEnd = globalEnd;
 
             // Calculate Total Profit - All Time
             const totalProfitAll = allConversationsRaw.reduce((sum, conv) => {
@@ -106,30 +132,38 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
 
             // Filter Data for KPIs
             const kpiConversations = allConversationsRaw.filter(conv => {
+                // 1. Channel Filter
+                if (selectedInboxes.length > 0 && !selectedInboxes.includes(conv.inbox_id)) {
+                    return false;
+                }
+
+                // 2. Date Filter
                 const convDate = parseTs(conv.timestamp);
                 const isInRange = convDate >= globalStart && convDate <= globalEnd;
-
-                console.debug(`[Dashboard] Filtering Conv ${conv.id}:`, {
-                    date: convDate.toISOString(),
-                    start: globalStart.toISOString(),
-                    end: globalEnd.toISOString(),
-                    isInRange
-                });
 
                 return isInRange;
             });
 
             console.log(`[Dashboard] kpiConversations filtered: ${kpiConversations.length}`);
 
-            // Calculate Monthly/Period Profit
+            // Calculate Gain (Period vs Total)
             let monthlyProfit = 0;
+            let totalProfit = 0;
+
             allConversationsRaw.forEach(conv => {
+                // 1. Channel Filter for Profit too? Usually yes to be consistent
+                if (selectedInboxes.length > 0 && !selectedInboxes.includes(conv.inbox_id)) {
+                    return;
+                }
+
                 const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                 const convAttrs = conv.custom_attributes || {};
                 const montoVal = contactAttrs.monto_operacion || convAttrs.monto_operacion;
                 const monto = parseMonto(montoVal);
 
                 if (monto > 0) {
+                    totalProfit += monto;
+
                     const fechaMontoStr = contactAttrs.fecha_monto_operacion || convAttrs.fecha_monto_operacion;
                     let fechaMonto: Date;
                     if (fechaMontoStr) {
@@ -144,10 +178,10 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             });
 
             const totalLeads = kpiConversations.length;
-            const countByLabel = (label: string) =>
-                kpiConversations.filter(c => c.labels && c.labels.includes(label)).length;
+            const countByLabels = (labels: string[]) =>
+                kpiConversations.filter(c => c.labels && labels.some(l => c.labels.includes(l))).length;
 
-            const interestedLeadsCount = countByLabel('interesado') + countByLabel('crear_confianza') + countByLabel('crear_urgencia');
+            const interestedLeadsCount = countByLabels(sqlTags);
             // == DYNAMIC DISCOVERY ==
             const allLabelSet = new Set<string>();
             const allAttributeKeys = new Set<string>();
@@ -158,19 +192,18 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 Object.keys(attrs).forEach(k => allAttributeKeys.add(k));
             });
 
-            // Count every label found
+            // Count every label found for distribution
             const labelDistribution = Array.from(allLabelSet).map(label => ({
                 label: label.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
                 key: label,
-                value: countByLabel(label)
+                value: countByLabels([label])
             })).sort((a, b) => b.value - a.value);
 
             // Core KPI Mappings (Standard with Fallbacks)
-            // If they change names, we try to find partial matches
-            const citaAgendadaCount = countByLabel('cita_agendada') + countByLabel('cita');
-            const desinteresadoCount = countByLabel('desinteresado') + countByLabel('descartado');
-            const ventaExitosaCount = countByLabel('venta_exitosa') + countByLabel('venta');
-            const interesadoCount = countByLabel('interesado');
+            const citaAgendadaCount = countByLabels(appointmentTags);
+            const desinteresadoCount = countByLabels(unqualifiedTags);
+            const ventaExitosaCount = countByLabels(saleTags);
+            const interesadoCount = countByLabels(sqlTags);
 
             const schedulingRateVar = totalLeads > 0 ? Math.round((citaAgendadaCount / totalLeads) * 100) : 0;
             const discardRateVar = totalLeads > 0 ? Math.round((desinteresadoCount / totalLeads) * 100) : 0;
@@ -299,7 +332,15 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             })).sort((a, b) => b.leads - a.leads);
 
             // Trends grouping (monthly)
-            const monthlyTrendMap = new Map<string, { date: string, leads: number, sqls: number, appointments: number, timestamp: number }>();
+            interface MonthlyTrendItem {
+                date: string;
+                leads: number;
+                sqls: number;
+                appointments: number;
+                closedSales: number;
+                timestamp: number;
+            }
+            const monthlyTrendMap = new Map<string, MonthlyTrendItem>();
             kpiConversations.forEach(conv => {
                 const d = parseTs(conv.timestamp);
                 const monthKey = d.toLocaleString('es-ES', { month: 'short', year: '2-digit' });
@@ -307,22 +348,25 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 const monthTs = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
 
                 if (!monthlyTrendMap.has(monthKey)) {
-                    monthlyTrendMap.set(monthKey, { date: monthKey, leads: 0, sqls: 0, appointments: 0, timestamp: monthTs });
+                    monthlyTrendMap.set(monthKey, { date: monthKey, leads: 0, sqls: 0, appointments: 0, closedSales: 0, timestamp: monthTs });
                 }
                 const stat = monthlyTrendMap.get(monthKey)!;
                 stat.leads++;
-                if (conv.labels && (conv.labels.includes('interesado') || conv.labels.includes('crear_confianza') || conv.labels.includes('crear_urgencia'))) {
+                if (conv.labels && sqlTags.some(l => conv.labels.includes(l))) {
                     stat.sqls++;
                 }
-                if (conv.labels && (conv.labels.includes('cita_agendada') || conv.labels.includes('cita'))) {
+                if (conv.labels && appointmentTags.some(l => conv.labels.includes(l))) {
                     stat.appointments++;
+                }
+                if (conv.labels && saleTags.some(l => conv.labels.includes(l))) {
+                    stat.closedSales = (stat.closedSales || 0) + 1;
                 }
             });
             const monthlyTrend = Array.from(monthlyTrendMap.values()).sort((a, b) => a.timestamp - b.timestamp);
 
             return {
                 kpis: {
-                    totalLeads,
+                    totalLeads: kpiConversations.length,
                     interestedLeads: interestedLeadsCount,
                     scheduledAppointments: citaAgendadaCount,
                     closedSales: ventaExitosaCount,
@@ -331,7 +375,7 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                     discardRate: discardRateVar,
                     responseRate: responseRateVar,
                     monthlyProfit,
-                    totalProfit: totalProfitAll
+                    totalProfit
                 },
                 funnelData: displayFunnel,
                 labelDistribution,
@@ -341,6 +385,7 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
                 weeklyTrend: [],
                 monthlyTrend,
                 disqualificationReasons: [],
+                allLabels: Array.from(new Set([...(configuredLabels || []), ...Array.from(allLabelSet)])),
                 dataCapture: emptyData.dataCapture,
                 responseTime,
                 ownerPerformance,
@@ -350,7 +395,7 @@ export const useDashboardData = (selectedMonth: Date | null = null, selectedWeek
             console.error("Error calculating dashboard data:", e);
             return emptyData;
         }
-    }, [allConversationsRaw, inboxes, selectedMonth, selectedWeek]);
+    }, [allConversationsRaw, inboxes, configuredLabels, globalTagSettings, filters]);
 
     return { loading, error, data, refetch: () => { } };
 };

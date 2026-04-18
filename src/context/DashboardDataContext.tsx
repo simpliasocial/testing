@@ -4,20 +4,40 @@ import { StorageService, MinifiedConversation } from '../services/StorageService
 import { SyncService } from '../services/SyncService';
 import { supabase } from '../lib/supabase';
 
+export interface TagConfig {
+    sqlTags: string[];
+    appointmentTags: string[];
+    saleTags: string[];
+    unqualifiedTags: string[];
+}
+
 type DashboardDataContextType = {
     conversations: MinifiedConversation[];
     inboxes: any[];
+    labels: string[];
+    tagSettings: TagConfig;
     loading: boolean;
     error: string | null;
     dataSource: 'API' | 'SUPABASE';
+    updateTagSettings: (config: TagConfig) => void;
+};
+
+const DEFAULT_TAG_CONFIG: TagConfig = {
+    sqlTags: ['interesado', 'crear_confianza', 'crear_urgencia'],
+    appointmentTags: ['cita_agendada', 'cita'],
+    saleTags: ['venta_exitosa', 'venta'],
+    unqualifiedTags: ['desinteresado', 'descartado']
 };
 
 const DashboardDataContext = createContext<DashboardDataContextType>({
     conversations: [],
     inboxes: [],
+    labels: [],
+    tagSettings: DEFAULT_TAG_CONFIG,
     loading: true,
     error: null,
-    dataSource: 'API'
+    dataSource: 'API',
+    updateTagSettings: () => { }
 });
 
 export const useDashboardContext = () => useContext(DashboardDataContext);
@@ -53,6 +73,8 @@ const minimizeConvs = (conv: any): MinifiedConversation => {
 export const DashboardDataProvider = ({ children }: { children: ReactNode }) => {
     const [conversations, setConversations] = useState<MinifiedConversation[]>([]);
     const [inboxes, setInboxes] = useState<any[]>([]);
+    const [labels, setLabels] = useState<string[]>([]);
+    const [tagSettings, setTagSettings] = useState<TagConfig>(DEFAULT_TAG_CONFIG);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [dataSource, setDataSource] = useState<'API' | 'SUPABASE'>('API');
@@ -65,6 +87,50 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         setConversations(newData);
     };
 
+    const updateTagSettings = async (newConfig: TagConfig) => {
+        setTagSettings(newConfig);
+        // Local fallback
+        localStorage.setItem('dashboard_tag_settings', JSON.stringify(newConfig));
+
+        // Cloud persistence
+        try {
+            await supabase
+                .from('dashboard_tag_settings')
+                .upsert({ account_id: 0, settings: newConfig, updated_at: new Date() }, { onConflict: 'account_id' });
+        } catch (e) {
+            console.error("Failed to save settings to cloud", e);
+        }
+    };
+
+    const loadTagSettings = async () => {
+        // 1. Try cloud first
+        try {
+            const { data, error } = await supabase
+                .from('dashboard_tag_settings')
+                .select('settings')
+                .eq('account_id', 0)
+                .single();
+
+            if (data?.settings) {
+                setTagSettings(data.settings);
+                localStorage.setItem('dashboard_tag_settings', JSON.stringify(data.settings));
+                return;
+            }
+        } catch (e) {
+            console.warn("Cloud settings load failed, using local/default", e);
+        }
+
+        // 2. Local fallback
+        const saved = localStorage.getItem('dashboard_tag_settings');
+        if (saved) {
+            try {
+                setTagSettings(JSON.parse(saved));
+            } catch (e) {
+                console.error("Failed to parse saved tag settings", e);
+            }
+        }
+    };
+
     const fetchInboxes = async (signal: AbortSignal) => {
         try {
             const inboxesData = await chatwootService.getInboxes({ signal } as any);
@@ -72,6 +138,17 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         } catch (err: any) {
             if (err.name !== 'AbortError' && err.name !== 'CanceledError') {
                 console.error("Failed to fetch inboxes:", err);
+            }
+        }
+    };
+
+    const fetchLabels = async (signal: AbortSignal) => {
+        try {
+            const labelsData = await chatwootService.getLabels({ signal } as any);
+            setLabels(labelsData);
+        } catch (err: any) {
+            if (err.name !== 'AbortError' && err.name !== 'CanceledError') {
+                console.error("Failed to fetch labels:", err);
             }
         }
     };
@@ -218,6 +295,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     };
 
     const initData = async () => {
+        loadTagSettings();
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
@@ -236,8 +314,11 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 setLoading(false); // Make it responsive immediately
             }
 
-            // 2. Load the inboxes map
-            await fetchInboxes(signal);
+            // 2. Load the metadata
+            await Promise.all([
+                fetchInboxes(signal),
+                fetchLabels(signal)
+            ]);
 
             // 3. Sync Historical or Incremental
             await processSync(signal);
@@ -271,7 +352,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     }, []);
 
     return (
-        <DashboardDataContext.Provider value={{ conversations, inboxes, loading, error, dataSource }}>
+        <DashboardDataContext.Provider value={{ conversations, inboxes, labels, tagSettings, loading, error, dataSource, updateTagSettings }}>
             {children}
         </DashboardDataContext.Provider>
     );
