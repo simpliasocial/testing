@@ -266,5 +266,31 @@ export const chatwootService = {
             console.error('Error fetching Chatwoot account reports:', error);
             return null;
         }
+    },
+
+    updateConversationLabels: async (conversationId: number, labels: string[]): Promise<any> => {
+        try {
+            const response = await axios.post(`${CHATWOOT_API_URL}/conversations/${conversationId}/labels`, {
+                labels: labels
+            }, {
+                headers: { api_access_token: API_TOKEN }
+            });
+            return response.data;
+        } catch (error) {
+            console.error(`Error updating labels for conversation ${conversationId}:`, error);
+            throw error;
+        }
+    },
+
+    updateContact: async (contactId: number, data: any): Promise<any> => {
+        try {
+            const response = await axios.put(`${CHATWOOT_API_URL}/contacts/${contactId}`, data, {
+                headers: { api_access_token: API_TOKEN }
+            });
+            return response.data;
+        } catch (error) {
+            console.error(`Error updating contact ${contactId}:`, error);
+            throw error;
+        }
     }
 };

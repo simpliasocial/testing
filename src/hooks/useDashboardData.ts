@@ -24,7 +24,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
     }, [filtersOrMonth]);
 
     const { startDate, endDate, selectedInboxes = [], ...overrideTags } = filters;
-    const { conversations: allConversationsRaw, inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error } = useDashboardContext();
+    const { conversations: allConversationsRaw, inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error, refetch: contextRefetch } = useDashboardContext();
 
     const sqlTags = overrideTags.sqlTags || globalTagSettings.sqlTags;
     const appointmentTags = overrideTags.appointmentTags || globalTagSettings.appointmentTags;
@@ -65,7 +65,22 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             leadsSinRespuesta: 0,
             slaPercentage: 0,
             agingData: [] as any[],
-            activeLeads: [] as any[]
+            activeLeads: [] as any[],
+            trafficData: [] as any[],
+            followUpQueue: [] as any[]
+        },
+        humanMetrics: {
+            followup: 0,
+            appointments: 0,
+            salesCount: 0,
+            salesVolume: 0,
+            conversionRate: 0
+        },
+        trendMetrics: {
+            channelLeads: [] as any[],
+            disqualificationStats: [] as any[],
+            campaignList: [] as any[],
+            revenuePeaks: [] as any[]
         }
     };
 
@@ -263,28 +278,44 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             });
             const responseTime = conversationsWithResponse > 0 ? Math.round(totalResponseTime / (conversationsWithResponse * 60)) : 0;
 
-            // Owner Performance
+            // Owner Performance with 'Responsable' override
             const ownerStats = new Map<string, { name: string, leads: number, appointments: number }>();
             kpiConversations.forEach(conv => {
-                const ownerName = conv.meta?.assignee?.name;
-                if (!ownerName) return; // Skip Sin Asignar
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const contactResponsable = attrs.responsable;
 
-                if (!ownerStats.has(ownerName)) ownerStats.set(ownerName, { name: ownerName, leads: 0, appointments: 0 });
-                const s = ownerStats.get(ownerName)!;
+                // USER RULE: if 'responsable' exists in contact attributes, it takes precedence
+                const effectiveOwnerName = (contactResponsable && contactResponsable.toString().trim().length > 0)
+                    ? contactResponsable.toString()
+                    : (conv.meta?.assignee?.name || "Sin Asignar");
+
+                if (!ownerStats.has(effectiveOwnerName)) {
+                    ownerStats.set(effectiveOwnerName, { name: effectiveOwnerName, leads: 0, appointments: 0 });
+                }
+                const s = ownerStats.get(effectiveOwnerName)!;
                 s.leads++;
-                if (conv.labels?.includes('cita_agendada')) s.appointments++;
+
+                const hasAppointment = conv.labels && appointmentTags.some(l => conv.labels.includes(l));
+                if (hasAppointment) s.appointments++;
             });
 
-            const ownerPerformance = Array.from(ownerStats.values()).map(s => ({
-                ...s,
-                winRate: s.leads > 0 ? Math.round((s.appointments / s.leads) * 100) : 0,
-                score: Math.min(100, 70 + (s.appointments * 2))
-            })).sort((a, b) => b.leads - a.leads);
+            const ownerPerformance = Array.from(ownerStats.values())
+                .filter(s => s.name !== "Sin Asignar") // We usually show performance for actual names
+                .map(s => ({
+                    ...s,
+                    winRate: s.leads > 0 ? Math.round((s.appointments / s.leads) * 100) : 0,
+                    score: Math.min(100, 70 + (s.appointments * 2))
+                }))
+                .sort((a, b) => b.leads - a.leads);
 
             // Operational Metrics
             const nowTs = Math.floor(Date.now() / 1000);
             let leadsWithOwnerCount = 0;
             let withinSlaCount = 0;
+
+            // Traffic Peak Hours Calculation (0-23)
+            const hourCounts = new Array(24).fill(0);
+
             const agingBuckets = [
                 { range: "0-1 días", count: 0, color: "#10b981", maxDays: 1 },
                 { range: "2-3 días", count: 0, color: "#3b82f6", maxDays: 3 },
@@ -293,25 +324,64 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             ];
 
             kpiConversations.forEach(conv => {
-                if (conv.meta?.assignee?.name) leadsWithOwnerCount++;
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const contactResponsable = attrs.responsable;
+                const hasEffectiveOwner = (contactResponsable && contactResponsable.toString().trim().length > 0) || !!conv.meta?.assignee?.name;
+
+                if (hasEffectiveOwner) leadsWithOwnerCount++;
+
+                const d = parseTs(conv.timestamp);
+                hourCounts[d.getHours()]++;
+
+                // SLA Check (Keeping it for calculation but user wants it off the KPI board)
                 if (conv.first_reply_created_at && conv.created_at && (conv.first_reply_created_at - conv.created_at) < 600) withinSlaCount++;
+
                 const daysOld = (nowTs - conv.timestamp) / 86400;
                 const bucket = agingBuckets.find(b => daysOld <= b.maxDays);
                 if (bucket) bucket.count++;
             });
+
+            const trafficData = hourCounts.map((count, hour) => ({
+                hour: `${hour.toString().padStart(2, '0')}:00`,
+                count
+            }));
 
             const operationalMetrics = {
                 leadsWithOwnerPercentage: totalLeads > 0 ? Math.round((leadsWithOwnerCount / totalLeads) * 100) : 0,
                 leadsSinRespuesta: kpiConversations.filter(c => !c.first_reply_created_at).length,
                 slaPercentage: interactedConversations > 0 ? Math.round((withinSlaCount / interactedConversations) * 100) : 0,
                 agingData: agingBuckets,
+                trafficData: trafficData,
+                followUpQueue: kpiConversations
+                    .filter(c => c.labels?.includes('seguimiento_humano'))
+                    .map(c => {
+                        const contactAttrs = c.meta?.sender?.custom_attributes || {};
+                        const convAttrs = c.custom_attributes || {};
+                        const allAttrs = { ...convAttrs, ...contactAttrs };
+
+                        return {
+                            id: c.id,
+                            name: c.meta?.sender?.name || "Desconocido",
+                            owner: allAttrs.responsable?.toString() || c.meta?.assignee?.name || "Sin Asignar",
+                            status: c.status,
+                            channel: inboxMap.get(c.inbox_id!)?.name || "Chatwoot",
+                            channel_type: inboxMap.get(c.inbox_id!)?.channel_type || "",
+                            inbox_id: c.inbox_id,
+                            labels: c.labels || [],
+                            meta: c.meta,
+                            custom_attributes: c.custom_attributes,
+                            last_message: c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null,
+                            timestamp: c.timestamp
+                        };
+                    })
+                    .sort((a, b) => b.timestamp - a.timestamp),
                 activeLeads: kpiConversations.filter(c => c.status !== 'resolved').slice(0, 10).map(c => ({
                     id: c.id,
                     name: c.meta?.sender?.name || "Sin Nombre",
-                    owner: c.meta?.assignee?.name || "Sin Asignar",
+                    owner: (c.meta?.sender?.custom_attributes?.responsable || c.meta?.assignee?.name || "Sin Asignar"),
                     status: c.status,
-                    time: new Date(c.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    channel: inboxMap.get(c.inbox_id!)?.name || "Chatwoot"
+                    channel: inboxMap.get(c.inbox_id!)?.name || "Chatwoot",
+                    timestamp: c.timestamp
                 }))
             };
 
@@ -364,6 +434,78 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             });
             const monthlyTrend = Array.from(monthlyTrendMap.values()).sort((a, b) => a.timestamp - b.timestamp);
 
+            // 7. Human Performance Metrics
+            const humanFollowup = kpiConversations.filter(c => c.labels?.includes('seguimiento_humano')).length;
+            const humanAppointments = kpiConversations.filter(c => c.labels?.includes('cita_agendada_humano')).length;
+            const humanSales = kpiConversations.filter(c => c.labels?.includes('venta_exitosa'));
+            const totalHumanSalesVolume = humanSales.reduce((acc, c) => acc + parseMonto(c.custom_attributes?.monto_operacion), 0);
+
+            const humanMetrics = {
+                followup: humanFollowup,
+                appointments: humanAppointments,
+                salesCount: humanSales.length,
+                salesVolume: totalHumanSalesVolume,
+                conversionRate: (humanFollowup + humanAppointments) > 0
+                    ? Math.round((humanAppointments / (humanFollowup + humanAppointments)) * 100)
+                    : 0
+            };
+
+            // 8. Trend Metrics
+            const trendChannelCounts = {
+                Instagram: 0,
+                Facebook: 0,
+                WhatsApp: 0,
+                TikTok: 0,
+                Messenger: 0,
+                Otros: 0
+            };
+
+            const disqualificationMap = new Map<string, number>();
+            const campaignMap = new Map<string, number>();
+            const revenueByDayMap = new Map<string, number>();
+
+            kpiConversations.forEach(conv => {
+                // Channel detection
+                const inbox = inboxMap.get(conv.inbox_id!);
+                const type = inbox?.channel_type || "";
+                if (type.includes("Whatsapp")) trendChannelCounts.WhatsApp++;
+                else if (type.includes("Instagram")) trendChannelCounts.Instagram++;
+                else if (type.includes("Facebook")) {
+                    if (inbox?.name.toLowerCase().includes("messenger")) trendChannelCounts.Messenger++;
+                    else trendChannelCounts.Facebook++;
+                }
+                else if (inbox?.name.toLowerCase().includes("tiktok")) trendChannelCounts.TikTok++;
+                else trendChannelCounts.Otros++;
+
+                // Disqualification stats (only if has desinteresado label)
+                const desinteresadoLabels = globalTagSettings?.unqualifiedTags || [];
+                const matchedDisqualified = conv.labels?.find(l => desinteresadoLabels.includes(l));
+                if (matchedDisqualified) {
+                    disqualificationMap.set(matchedDisqualified, (disqualificationMap.get(matchedDisqualified) || 0) + 1);
+                }
+
+                // Campaigns
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const camp = attrs.campana?.toString();
+                if (camp && camp.trim()) {
+                    campaignMap.set(camp, (campaignMap.get(camp) || 0) + 1);
+                }
+
+                // Revenue peaks (only for successful sales)
+                if (conv.labels?.includes('venta_exitosa')) {
+                    const dateStr = parseTs(conv.timestamp).toISOString().split('T')[0];
+                    const val = parseMonto(conv.custom_attributes?.monto_operacion);
+                    revenueByDayMap.set(dateStr, (revenueByDayMap.get(dateStr) || 0) + val);
+                }
+            });
+
+            const trendMetrics = {
+                channelLeads: Object.entries(trendChannelCounts).map(([name, value]) => ({ name, value })).filter(c => c.value > 0),
+                disqualificationStats: Array.from(disqualificationMap.entries()).map(([name, value]) => ({ name, value })),
+                campaignList: Array.from(campaignMap.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
+                revenuePeaks: Array.from(revenueByDayMap.entries()).map(([date, value]) => ({ date, value })).sort((a, b) => a.date.localeCompare(b.date))
+            };
+
             return {
                 kpis: {
                     totalLeads: kpiConversations.length,
@@ -384,18 +526,25 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 campaignData,
                 weeklyTrend: [],
                 monthlyTrend,
-                disqualificationReasons: [],
+                disqualificationReasons: trendMetrics.disqualificationStats,
                 allLabels: Array.from(new Set([...(configuredLabels || []), ...Array.from(allLabelSet)])),
                 dataCapture: emptyData.dataCapture,
                 responseTime,
                 ownerPerformance,
-                operationalMetrics
+                operationalMetrics,
+                humanMetrics,
+                trendMetrics
             };
         } catch (e) {
             console.error("Error calculating dashboard data:", e);
-            return emptyData;
+            return {
+                ...emptyData,
+                ownerPerformance: emptyData.ownerPerformance,
+                operationalMetrics: emptyData.operationalMetrics,
+                humanMetrics: emptyData.humanMetrics
+            };
         }
     }, [allConversationsRaw, inboxes, configuredLabels, globalTagSettings, filters]);
 
-    return { loading, error, data, refetch: () => { } };
+    return { loading, error, data, refetch: contextRefetch };
 };

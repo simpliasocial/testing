@@ -4,6 +4,12 @@ import { StorageService, MinifiedConversation } from '../services/StorageService
 import { SyncService } from '../services/SyncService';
 import { supabase } from '../lib/supabase';
 
+export interface DashboardFilters {
+    startDate?: Date;
+    endDate?: Date;
+    selectedInboxes?: number[];
+}
+
 export interface TagConfig {
     sqlTags: string[];
     appointmentTags: string[];
@@ -20,6 +26,9 @@ type DashboardDataContextType = {
     error: string | null;
     dataSource: 'API' | 'SUPABASE';
     updateTagSettings: (config: TagConfig) => void;
+    globalFilters: DashboardFilters;
+    setGlobalFilters: React.Dispatch<React.SetStateAction<DashboardFilters>>;
+    refetch: () => Promise<void>;
 };
 
 const DEFAULT_TAG_CONFIG: TagConfig = {
@@ -37,7 +46,10 @@ const DashboardDataContext = createContext<DashboardDataContextType>({
     loading: true,
     error: null,
     dataSource: 'API',
-    updateTagSettings: () => { }
+    updateTagSettings: () => { },
+    globalFilters: {},
+    setGlobalFilters: () => { },
+    refetch: async () => { }
 });
 
 export const useDashboardContext = () => useContext(DashboardDataContext);
@@ -78,6 +90,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [dataSource, setDataSource] = useState<'API' | 'SUPABASE'>('API');
+    const [globalFilters, setGlobalFilters] = useState<DashboardFilters>({});
     const conversationsRef = useRef<MinifiedConversation[]>([]);
     const abortControllerRef = useRef<AbortController | null>(null);
     const retryCountRef = useRef(0);
@@ -134,7 +147,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     const fetchInboxes = async (signal: AbortSignal) => {
         try {
             const inboxesData = await chatwootService.getInboxes({ signal } as any);
-            setInboxes(inboxesData);
+            setInboxes(Array.isArray(inboxesData) ? inboxesData.filter(i => i && i.id && i.channel_type) : []);
         } catch (err: any) {
             if (err.name !== 'AbortError' && err.name !== 'CanceledError') {
                 console.error("Failed to fetch inboxes:", err);
@@ -145,7 +158,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     const fetchLabels = async (signal: AbortSignal) => {
         try {
             const labelsData = await chatwootService.getLabels({ signal } as any);
-            setLabels(labelsData);
+            setLabels(Array.isArray(labelsData) ? labelsData.filter(l => typeof l === 'string') : []);
         } catch (err: any) {
             if (err.name !== 'AbortError' && err.name !== 'CanceledError') {
                 console.error("Failed to fetch labels:", err);
@@ -294,6 +307,67 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         }
     };
 
+    const fetchHistoricalRangeFromSupabase = async (startDate: Date, endDate: Date) => {
+        try {
+            console.log(`Fetching historical data from Supabase for range: ${startDate.toISOString()} - ${endDate.toISOString()}`);
+            setLoading(true);
+            const { data: convs, error: dbError } = await supabase
+                .schema('cw')
+                .from('conversations_current')
+                .select('*')
+                .gte('created_at_chatwoot', startDate.toISOString())
+                .lte('created_at_chatwoot', endDate.toISOString());
+
+            if (dbError) throw dbError;
+
+            if (convs && convs.length > 0) {
+                const mapped = convs.map(c => ({
+                    id: c.chatwoot_conversation_id,
+                    status: c.status,
+                    labels: c.labels || [],
+                    timestamp: Math.floor(new Date(c.created_at_chatwoot).getTime() / 1000),
+                    created_at: Math.floor(new Date(c.created_at_chatwoot).getTime() / 1000),
+                    first_reply_created_at: c.first_reply_created_at_chatwoot ? Math.floor(new Date(c.first_reply_created_at_chatwoot).getTime() / 1000) : undefined,
+                    meta: c.meta || { sender: {}, assignee: {} },
+                    custom_attributes: c.custom_attributes,
+                    inbox_id: c.chatwoot_inbox_id
+                }));
+
+                // Merge with existing conversations avoiding duplicates
+                const map = new Map<number, MinifiedConversation>();
+                conversationsRef.current.forEach(c => map.set(c.id, c));
+                mapped.forEach(c => map.set((c as any).id, c as any));
+                const merged = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
+
+                updateVisualState(merged);
+            }
+        } catch (err) {
+            console.error("Failed to fetch historical data from Supabase:", err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (globalFilters.startDate) {
+            const startDate = new Date(globalFilters.startDate);
+            const endDate = globalFilters.endDate ? new Date(globalFilters.endDate) : new Date();
+
+            // Chatwoot typically retains 1 year of data.
+            const oneYearAgo = new Date();
+            oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+            // Fetch from Supabase if:
+            // 1. The range starts more than a year ago.
+            // 2. OR we want to ensure we have all data for this range (since local cache might be partial)
+            // for now, we follow the 1-year rule strictly as requested, but also if local data is empty for a selected range
+            if (startDate < oneYearAgo) {
+                console.log("Date range is older than 1 year, fetching historical data from Supabase");
+                fetchHistoricalRangeFromSupabase(startDate, endDate);
+            }
+        }
+    }, [globalFilters.startDate, globalFilters.endDate]);
+
     const initData = async () => {
         loadTagSettings();
         if (abortControllerRef.current) {
@@ -352,7 +426,19 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     }, []);
 
     return (
-        <DashboardDataContext.Provider value={{ conversations, inboxes, labels, tagSettings, loading, error, dataSource, updateTagSettings }}>
+        <DashboardDataContext.Provider value={{
+            conversations,
+            inboxes,
+            labels,
+            tagSettings,
+            loading,
+            error,
+            dataSource,
+            updateTagSettings,
+            globalFilters,
+            setGlobalFilters,
+            refetch: initData
+        }}>
             {children}
         </DashboardDataContext.Provider>
     );

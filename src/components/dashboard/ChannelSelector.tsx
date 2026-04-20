@@ -36,19 +36,27 @@ export function ChannelSelector({
         onChange(next);
     };
 
-    const getChannelIcon = (type: string) => {
+    const getChannelName = (type: string) => {
         switch (type) {
             case "Channel::Whatsapp": return "WhatsApp";
             case "Channel::FacebookPage": return "Facebook";
-            case "Channel::Instagram": return "Instagram";
+            case "Channel::InstagramDirect": return "Instagram";
             case "Channel::TwitterProfile": return "Twitter";
-            default: return type.replace("Channel::", "");
+            case "Channel::TelegramBot": return "Telegram";
+            case "Channel::Line": return "Line";
+            case "Channel::Viber": return "Viber";
+            default: return type.replace("Channel::", "").replace("Direct", "").replace("Page", "");
         }
     };
 
-    const selectedLabels = selectedInboxes.length === 0
-        ? "Todos los Canales"
-        : `${selectedInboxes.length} selecionado(s)`;
+    const selectedLabels = React.useMemo(() => {
+        if (selectedInboxes.length === 0) return "Todos los Canales";
+        if (selectedInboxes.length === 1) {
+            const inbox = inboxes.find(i => i.id === selectedInboxes[0]);
+            return inbox ? getChannelName(inbox.channel_type) : "1 selecionado";
+        }
+        return `${selectedInboxes.length} selecionado(s)`;
+    }, [selectedInboxes, inboxes]);
 
     return (
         <Popover open={open} onOpenChange={setOpen}>
@@ -70,24 +78,24 @@ export function ChannelSelector({
                     <CommandList>
                         <CommandEmpty>No se encontraron canales.</CommandEmpty>
                         <CommandGroup>
-                            {inboxes.map((inbox) => (
-                                <CommandItem
-                                    key={inbox.id}
-                                    value={inbox.name}
-                                    onSelect={() => toggleInbox(inbox.id)}
-                                >
-                                    <Check
-                                        className={cn(
-                                            "mr-2 h-4 w-4",
-                                            selectedInboxes.includes(inbox.id) ? "opacity-100" : "opacity-0"
-                                        )}
-                                    />
-                                    <div>
-                                        <div className="text-sm font-semibold">{getChannelIcon(inbox.channel_type)}</div>
-                                        <div className="text-[10px] text-muted-foreground">{inbox.name}</div>
-                                    </div>
-                                </CommandItem>
-                            ))}
+                            {inboxes.map((inbox) => {
+                                const channelName = getChannelName(inbox.channel_type);
+                                return (
+                                    <CommandItem
+                                        key={inbox.id}
+                                        value={channelName + ' ' + inbox.name} // Keep full name for searchability
+                                        onSelect={() => toggleInbox(inbox.id)}
+                                    >
+                                        <Check
+                                            className={cn(
+                                                "mr-2 h-4 w-4",
+                                                selectedInboxes.includes(inbox.id) ? "opacity-100" : "opacity-0"
+                                            )}
+                                        />
+                                        <span className="text-sm font-medium">{channelName}</span>
+                                    </CommandItem>
+                                );
+                            })}
                         </CommandGroup>
                     </CommandList>
                 </Command>

@@ -15,11 +15,13 @@ import {
     LabelList
 } from "recharts";
 
+import { useDashboardContext } from "@/context/DashboardDataContext";
+
 const FunnelLayer = () => {
-    const [selectedMonth, setSelectedMonth] = useState<Date | null>(null);
+    const { globalFilters, tagSettings } = useDashboardContext();
     const { loading, error, data } = useDashboardData({
-        startDate: selectedMonth ? startOfMonth(selectedMonth) : undefined,
-        endDate: selectedMonth ? endOfMonth(selectedMonth) : undefined
+        ...globalFilters,
+        ...tagSettings
     });
 
     if (loading) {
@@ -140,18 +142,6 @@ const FunnelLayer = () => {
                         </CardContent>
                     </Card>
 
-                    <Card className="bg-primary/5 border-primary/10">
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium text-primary">Hallazgo Clave</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <p className="text-xs leading-relaxed text-muted-foreground">
-                                El mayor cuello de botella se encuentra entre
-                                <span className="font-semibold text-foreground"> SQL y Cita</span>.
-                                Se están perdiendo el {100 - convSqlToAppointment}% de los leads calificados.
-                            </p>
-                        </CardContent>
-                    </Card>
                 </div>
             </div>
 

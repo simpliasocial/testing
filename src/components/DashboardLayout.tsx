@@ -24,7 +24,13 @@ import ChatwootPage from '@/pages/ChatwootPage';
 import ReportsPage from '@/pages/ReportsPage';
 import HistoricalTrendLayer from '@/pages/layers/HistoricalTrendLayer';
 import { useDashboardContext } from '@/context/DashboardDataContext';
-import { Database, Activity } from 'lucide-react';
+import { Database, Activity, RefreshCw } from 'lucide-react';
+import { DateRangePicker } from '@/components/dashboard/DateRangePicker';
+import { ChannelSelector } from '@/components/dashboard/ChannelSelector';
+import { TagConfigDialog } from '@/components/dashboard/TagConfigDialog';
+import { ExportToExcel } from '@/components/dashboard/ExportToExcel';
+import { startOfMonth, endOfMonth } from 'date-fns';
+import { useEffect } from 'react';
 
 const Placeholder = ({ name }: { name: string }) => (
     <div className="flex flex-col items-center justify-center h-96 border-2 border-dashed rounded-xl bg-muted/30">
@@ -38,7 +44,26 @@ const Placeholder = ({ name }: { name: string }) => (
 
 const DashboardLayout = () => {
     const [activeTab, setActiveTab] = useState('overview');
-    const { dataSource } = useDashboardContext();
+    const { dataSource, globalFilters, setGlobalFilters, tagSettings, updateTagSettings, labels } = useDashboardContext();
+
+    // Initialize default global filters on mount
+    useEffect(() => {
+        if (!globalFilters.startDate) {
+            setGlobalFilters({
+                startDate: startOfMonth(new Date()),
+                endDate: endOfMonth(new Date()),
+                selectedInboxes: []
+            });
+        }
+    }, []);
+
+    const handleDateRangeChange = (range: any) => {
+        setGlobalFilters(prev => ({ ...prev, startDate: range?.from, endDate: range?.to }));
+    };
+
+    const handleInboxesChange = (inboxes: number[]) => {
+        setGlobalFilters(prev => ({ ...prev, selectedInboxes: inboxes }));
+    };
 
     const handleLogout = () => {
         localStorage.removeItem('isAuthenticated');
@@ -95,7 +120,7 @@ const DashboardLayout = () => {
                                 { id: 'funnel', label: 'Embudo', icon: Filter },
                                 { id: 'operational', label: 'Operación', icon: Zap },
                                 { id: 'followup', label: 'Seguimiento', icon: ListTodo },
-                                { id: 'performance', label: 'Rendimiento', icon: BarChart3 },
+                                { id: 'performance', label: 'Rendimiento Humano', icon: BarChart3 },
                                 { id: 'trends', label: 'Tendencias', icon: TrendingUp },
                                 { id: 'history', label: 'Tendencia Histórica', icon: Database },
                                 { id: 'chats', label: 'Conversaciones', icon: Search },
@@ -111,6 +136,33 @@ const DashboardLayout = () => {
                                 </TabsTrigger>
                             ))}
                         </TabsList>
+                    </div>
+
+                    {/* Global Filter Bar */}
+                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-card p-4 rounded-xl border shadow-sm">
+                        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                            <ChannelSelector
+                                selectedInboxes={globalFilters.selectedInboxes || []}
+                                onChange={handleInboxesChange}
+                            />
+                            <DateRangePicker
+                                value={{ from: globalFilters.startDate, to: globalFilters.endDate } as any}
+                                onChange={handleDateRangeChange}
+                            />
+                            <div className="h-8 w-px bg-border mx-1 hidden sm:block" />
+                            <TagConfigDialog
+                                availableLabels={labels} // Using standard labels from context
+                                config={tagSettings}
+                                onSave={updateTagSettings}
+                            />
+                        </div>
+
+                        <div className="flex items-center gap-2 w-full lg:w-auto lg:ml-auto justify-end">
+                            <ExportToExcel />
+                            <Button variant="outline" size="icon" onClick={() => window.location.reload()} title="Actualizar datos">
+                                <RefreshCw className="h-4 w-4" />
+                            </Button>
+                        </div>
                     </div>
 
                     <div className="mt-6 transition-all duration-300">

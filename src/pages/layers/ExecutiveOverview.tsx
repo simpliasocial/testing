@@ -1,33 +1,21 @@
-import { Users, Target, Calendar as CalendarIcon, CheckSquare, TrendingUp, Percent, DollarSign, RefreshCw, Layers } from "lucide-react";
-import { useState, useMemo } from "react";
-import { Button } from "@/components/ui/button";
+import { Users, Target, Calendar as CalendarIcon, CheckSquare, TrendingUp, Percent, DollarSign, Layers } from "lucide-react";
+import { useMemo } from "react";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useDashboardContext } from "@/context/DashboardDataContext";
 import { Loader2 } from "lucide-react";
-import { ExportToExcel } from "@/components/dashboard/ExportToExcel";
-import { DateRangePicker } from "@/components/dashboard/DateRangePicker";
-import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
-import { TagConfigDialog } from "@/components/dashboard/TagConfigDialog";
-import { DateRange } from "react-day-picker";
-import { startOfMonth, endOfMonth, format } from "date-fns";
+import { format } from "date-fns";
 import { es } from "date-fns/locale";
 
 const ExecutiveOverview = () => {
-    const [dateRange, setDateRange] = useState<DateRange | undefined>({
-        from: startOfMonth(new Date()),
-        to: endOfMonth(new Date())
-    });
-
-    const [selectedInboxes, setSelectedInboxes] = useState<number[]>([]);
-    const { tagSettings, updateTagSettings } = useDashboardContext();
+    const { tagSettings, globalFilters } = useDashboardContext();
 
     const filters = useMemo(() => ({
-        startDate: dateRange?.from,
-        endDate: dateRange?.to,
-        selectedInboxes,
+        startDate: globalFilters.startDate,
+        endDate: globalFilters.endDate,
+        selectedInboxes: globalFilters.selectedInboxes,
         ...tagSettings
-    }), [dateRange, selectedInboxes, tagSettings]);
+    }), [globalFilters, tagSettings]);
 
     const { loading, error, data, refetch } = useDashboardData(filters);
 
@@ -56,8 +44,8 @@ const ExecutiveOverview = () => {
         ? Math.round((kpis.scheduledAppointments / kpis.interestedLeads) * 100)
         : 0;
 
-    const periodLabel = dateRange?.from && dateRange?.to
-        ? `${format(dateRange.from, "dd/MM/yy")} - ${format(dateRange.to, "dd/MM/yy")}`
+    const periodLabel = globalFilters.startDate && globalFilters.endDate
+        ? `${format(globalFilters.startDate, "dd/MM/yy")} - ${format(globalFilters.endDate, "dd/MM/yy")}`
         : "Todo el historial";
 
     return (
@@ -71,33 +59,6 @@ const ExecutiveOverview = () => {
                     <div>
                         <h3 className="text-lg font-bold">Resumen de Negocio</h3>
                         <p className="text-xs text-muted-foreground uppercase">{periodLabel}</p>
-                    </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-                    <ChannelSelector
-                        selectedInboxes={selectedInboxes}
-                        onChange={setSelectedInboxes}
-                    />
-
-                    <DateRangePicker
-                        value={dateRange}
-                        onChange={setDateRange}
-                    />
-
-                    <div className="h-8 w-px bg-border mx-1 hidden lg:block" />
-
-                    <TagConfigDialog
-                        availableLabels={allLabels}
-                        config={tagSettings}
-                        onSave={updateTagSettings}
-                    />
-
-                    <div className="flex items-center gap-2 ml-auto">
-                        <ExportToExcel />
-                        <Button variant="outline" size="icon" onClick={() => refetch()} title="Actualizar datos">
-                            <RefreshCw className="h-4 w-4" />
-                        </Button>
                     </div>
                 </div>
             </div>
