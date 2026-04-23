@@ -36,9 +36,42 @@ export const getLeadName = (lead: Partial<MinifiedConversation> | any) => {
 export const getRawLeadPhone = (lead: Partial<MinifiedConversation> | any) =>
     cleanText(lead?.meta?.sender?.phone_number);
 
+const CHANNEL_ALIAS_LABELS: Array<{ label: string; tokens: string[] }> = [
+    { label: "WhatsApp", tokens: ["whatsapp", "whats app", "wa.me"] },
+    { label: "Instagram", tokens: ["instagram"] },
+    { label: "Facebook", tokens: ["facebook", "messenger"] },
+    { label: "Telegram", tokens: ["telegram", "t.me", "tg://", "cwcloudbot_bot"] },
+    { label: "TikTok", tokens: ["tiktok", "tik tok", "douyin", "simplia.social"] }
+];
+
+const resolveSocialChannelLabel = (value: unknown) => {
+    const normalizedValue = normalize(value);
+    if (!normalizedValue) return "";
+
+    const matched = CHANNEL_ALIAS_LABELS.find(({ tokens }) =>
+        tokens.some(token => normalizedValue.includes(token))
+    );
+
+    return matched?.label || "";
+};
+
+export const getInboxChannelName = (inbox?: any) =>
+    channelLabelFromType(
+        inbox?.channel_type,
+        [
+            inbox?.name,
+            inbox?.provider,
+            inbox?.slug,
+            inbox?.website_token,
+            inbox?.channel?.type
+        ].filter(Boolean).join(" ")
+    );
+
 export const isWhatsappChannel = (lead: Partial<MinifiedConversation> | any, channelOverride = "") => {
-    const channelHint = normalize(`${lead?.channel_type || ""} ${lead?.channel || ""} ${channelOverride}`);
-    return channelHint.includes("whatsapp");
+    return channelLabelFromType(
+        lead?.channel_type,
+        `${lead?.channel || ""} ${channelOverride}`
+    ) === "WhatsApp";
 };
 
 export const getLeadPhone = (lead: Partial<MinifiedConversation> | any, channelOverride = "") => {
@@ -85,15 +118,73 @@ export const formatDateTime = (value: unknown) => {
     });
 };
 
+const getMessageNumericType = (message: any) => {
+    const numeric = Number(message?.message_type);
+    if (!Number.isNaN(numeric)) return numeric;
+
+    const normalizedType = normalize(message?.message_type);
+    if (normalizedType === "incoming") return 0;
+    if (normalizedType === "outgoing") return 1;
+    if (normalizedType === "activity") return 2;
+
+    return null;
+};
+
+const hasRenderableMessagePayload = (message: any) => {
+    if (cleanText(message?.content)) return true;
+    if (Array.isArray(message?.attachments) && message.attachments.length > 0) return true;
+    if (Array.isArray(message?.attachment) && message.attachment.length > 0) return true;
+    if (Array.isArray(message?.content_attributes?.attachments) && message.content_attributes.attachments.length > 0) return true;
+    return false;
+};
+
+export const getConversationMessageRole = (message: any): "incoming" | "outgoing" | null => {
+    if (!message) return null;
+    if (message?.is_private === true || message?.private === true) return null;
+
+    const direction = normalize(message?.message_direction || message?.direction);
+    const senderType = normalize(message?.sender_type || message?.sender?.type || message?.sender?.sender_type);
+    const contentType = normalize(message?.content_type);
+    const numericType = getMessageNumericType(message);
+
+    if (!hasRenderableMessagePayload(message)) return null;
+    if (direction.includes("activity") || contentType.includes("activity") || numericType === 2) return null;
+
+    if (direction === "incoming") return "incoming";
+    if (direction === "outgoing") return "outgoing";
+
+    if (numericType === 0) return "incoming";
+    if (numericType === 1) return "outgoing";
+
+    if (senderType.includes("contact")) return "incoming";
+    if (["agent", "user", "administrator", "bot"].some(token => senderType.includes(token))) return "outgoing";
+
+    return null;
+};
+
+export const isRenderableConversationMessage = (message: any) =>
+    getConversationMessageRole(message) !== null;
+
+export const getDisplayMessages = (messages: any[] = []) =>
+    (messages || [])
+        .filter(isRenderableConversationMessage)
+        .sort((a, b) => toUnixSeconds(a?.created_at || a?.created_at_chatwoot) - toUnixSeconds(b?.created_at || b?.created_at_chatwoot));
+
+export const getMessageText = (message: any) => {
+    if (!message) return "";
+    return cleanText(message?.content) || "[Adjunto / contenido no textual]";
+};
+
 export const getLastMessage = (lead: Partial<MinifiedConversation> | any) => {
-    if (lead?.last_message) return lead.last_message;
-    if (lead?.last_non_activity_message) return lead.last_non_activity_message;
-    if (Array.isArray(lead?.messages) && lead.messages.length > 0) return lead.messages[lead.messages.length - 1];
+    const displayMessages = getDisplayMessages(Array.isArray(lead?.messages) ? lead.messages : []);
+    if (displayMessages.length > 0) return displayMessages[displayMessages.length - 1];
+    if (isRenderableConversationMessage(lead?.last_non_activity_message)) return lead.last_non_activity_message;
+    if (isRenderableConversationMessage(lead?.last_message)) return lead.last_message;
     return null;
 };
 
 export const getMessagePreview = (lead: Partial<MinifiedConversation> | any) =>
-    cleanText(getLastMessage(lead)?.content) || "Sin mensajes";
+    getMessageText(getLastMessage(lead)) || "Sin mensajes";
 
 export const getMessageTimestamp = (lead: Partial<MinifiedConversation> | any) =>
     getLastMessage(lead)?.created_at || lead?.timestamp || lead?.created_at;
@@ -111,22 +202,42 @@ export const getInitials = (name: string) =>
         .toUpperCase() || "LD";
 
 export const channelLabelFromType = (type?: string, fallback?: string) => {
+    const resolvedFromType = resolveSocialChannelLabel(type);
+    if (resolvedFromType) return resolvedFromType;
+
+    const resolvedFromFallback = resolveSocialChannelLabel(fallback);
+    if (resolvedFromFallback) return resolvedFromFallback;
+
     const normalizedType = normalize(type);
-    const normalizedFallback = normalize(fallback);
+    if (normalizedType.includes("api")) {
+        const resolvedApiFallback = resolveSocialChannelLabel(fallback);
+        if (resolvedApiFallback) return resolvedApiFallback;
+    }
 
-    if (normalizedType.includes("instagram") || normalizedFallback.includes("instagram")) return "Instagram";
-    if (normalizedType.includes("facebook") || normalizedFallback.includes("messenger")) return "Messenger";
-    if (normalizedType.includes("whatsapp") || normalizedFallback.includes("whatsapp")) return "WhatsApp";
-    if (normalizedType.includes("telegram") || normalizedFallback.includes("telegram")) return "Telegram";
-    if (normalizedType.includes("twitter") || normalizedFallback.includes("twitter") || normalizedFallback.includes("x ")) return "X";
-    if (normalizedFallback.includes("tiktok")) return "TikTok";
-    if (normalizedType.includes("web") || normalizedFallback.includes("web")) return "Web";
-
-    return cleanText(fallback) || "Otro";
+    return "Otro";
 };
 
-export const getLeadChannelName = (lead: Partial<MinifiedConversation> | any, inbox?: any) =>
-    channelLabelFromType(lead?.channel_type || inbox?.channel_type, inbox?.name || lead?.channel || getAttrs(lead).canal);
+export const getLeadChannelName = (lead: Partial<MinifiedConversation> | any, inbox?: any) => {
+    const attrs = getAttrs(lead);
+    const fallbackHints = [
+        attrs.canal,
+        lead?.channel,
+        lead?.channel_name,
+        lead?.source,
+        lead?.meta?.sender?.additional_attributes?.channel,
+        lead?.meta?.sender?.additional_attributes?.social_channel,
+        lead?.meta?.sender?.additional_attributes?.provider,
+        lead?.meta?.sender?.additional_attributes?.platform,
+        lead?.meta?.sender?.additional_attributes?.source,
+        lead?.meta?.sender?.additional_attributes?.service,
+        lead?.meta?.sender?.additional_attributes?.channel_type,
+        lead?.meta?.sender?.identifier,
+        getInboxChannelName(inbox),
+        inbox?.name
+    ].filter(Boolean).join(" ");
+
+    return channelLabelFromType(lead?.channel_type || inbox?.channel_type, fallbackHints);
+};
 
 export const getLeadInboxName = (lead: Partial<MinifiedConversation> | any, inbox?: any) =>
     cleanText(inbox?.name || lead?.channel);

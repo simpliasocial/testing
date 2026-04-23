@@ -16,6 +16,7 @@ import {
     PopoverTrigger,
 } from "@/components/ui/popover";
 import { useDashboardContext } from "@/context/DashboardDataContext";
+import { getInboxChannelName } from "@/lib/leadDisplay";
 
 interface ChannelSelectorProps {
     selectedInboxes: number[];
@@ -36,24 +37,11 @@ export function ChannelSelector({
         onChange(next);
     };
 
-    const getChannelName = (type: string) => {
-        switch (type) {
-            case "Channel::Whatsapp": return "WhatsApp";
-            case "Channel::FacebookPage": return "Facebook";
-            case "Channel::InstagramDirect": return "Instagram";
-            case "Channel::TwitterProfile": return "Twitter";
-            case "Channel::TelegramBot": return "Telegram";
-            case "Channel::Line": return "Line";
-            case "Channel::Viber": return "Viber";
-            default: return type.replace("Channel::", "").replace("Direct", "").replace("Page", "");
-        }
-    };
-
     const selectedLabels = React.useMemo(() => {
         if (selectedInboxes.length === 0) return "Todos los Canales";
         if (selectedInboxes.length === 1) {
             const inbox = inboxes.find(i => i.id === selectedInboxes[0]);
-            return inbox ? getChannelName(inbox.channel_type) : "1 selecionado";
+            return inbox ? getInboxChannelName(inbox) : "1 selecionado";
         }
         return `${selectedInboxes.length} selecionado(s)`;
     }, [selectedInboxes, inboxes]);
@@ -79,7 +67,7 @@ export function ChannelSelector({
                         <CommandEmpty>No se encontraron canales.</CommandEmpty>
                         <CommandGroup>
                             {inboxes.map((inbox) => {
-                                const channelName = getChannelName(inbox.channel_type);
+                                const channelName = getInboxChannelName(inbox);
                                 return (
                                     <CommandItem
                                         key={inbox.id}

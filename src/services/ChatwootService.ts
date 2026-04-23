@@ -224,13 +224,44 @@ export const chatwootService = {
     },
 
     getAttributeDefinitions: async (params?: { signal?: AbortSignal }): Promise<any[]> => {
+        const requestVariants = [
+            undefined,
+            { attribute_model: 1 },
+            { attribute_model: 'contact' },
+            { attribute_scope: 'contact' }
+        ];
+
+        const byKey = new Map<string, any>();
+
         try {
-            const response = await axios.get(`${CHATWOOT_API_URL}/custom_attribute_definitions`, {
-                headers: { api_access_token: API_TOKEN },
-                signal: params?.signal
+            const results = await Promise.allSettled(
+                requestVariants.map((requestParams) =>
+                    axios.get(`${CHATWOOT_API_URL}/custom_attribute_definitions`, {
+                        headers: { api_access_token: API_TOKEN },
+                        params: requestParams,
+                        signal: params?.signal
+                    })
+                )
+            );
+
+            results.forEach((result) => {
+                if (result.status !== 'fulfilled') return;
+                const rawBody = result.value.data.data || result.value.data;
+                const definitions = Array.isArray(rawBody) ? rawBody : (rawBody.payload || rawBody || []);
+
+                (definitions || []).forEach((definition: any) => {
+                    const key = String(definition?.attribute_key || definition?.key || definition?.id || '').trim();
+                    if (!key) return;
+
+                    const existing = byKey.get(key) || {};
+                    byKey.set(key, {
+                        ...existing,
+                        ...definition
+                    });
+                });
             });
-            const rawBody = response.data.data || response.data;
-            return Array.isArray(rawBody) ? rawBody : (rawBody.payload || rawBody);
+
+            return Array.from(byKey.values());
         } catch (error) {
             console.error('Error fetching Chatwoot attribute definitions:', error);
             return [];

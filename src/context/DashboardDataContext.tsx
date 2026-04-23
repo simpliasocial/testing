@@ -19,6 +19,11 @@ export interface TagConfig {
     scoreHighTags?: string[];
     scoreMediumTags?: string[];
     scoreLowTags?: string[];
+    humanFollowupQueueTags?: string[];
+    humanAppointmentTargetLabel?: string;
+    humanSalesQueueTags?: string[];
+    humanSaleTargetLabel?: string;
+    humanAppointmentFieldKeys?: string[];
 }
 
 type DashboardDataSource = 'HYBRID' | 'API_ONLY' | 'SUPABASE_ONLY';
@@ -41,11 +46,61 @@ type DashboardDataContextType = {
     refetch: () => Promise<void>;
 };
 
-const DEFAULT_TAG_CONFIG: TagConfig = {
+export const DEFAULT_TAG_CONFIG: TagConfig = {
     sqlTags: ['interesado', 'crear_confianza', 'crear_urgencia'],
     appointmentTags: ['cita_agendada', 'cita'],
     saleTags: ['venta_exitosa', 'venta'],
-    unqualifiedTags: ['desinteresado', 'descartado']
+    unqualifiedTags: ['desinteresado', 'descartado'],
+    humanFollowupQueueTags: ['seguimiento_humano'],
+    humanAppointmentTargetLabel: 'cita_agendada_humano',
+    humanSalesQueueTags: ['cita_agendada', 'cita_agendada_humano'],
+    humanSaleTargetLabel: 'venta_exitosa',
+    humanAppointmentFieldKeys: []
+};
+
+const TAG_SETTINGS_STORAGE_KEY = 'dashboard_tag_settings';
+
+const normalizeTagArray = (value: unknown, fallback: string[]) => {
+    if (!Array.isArray(value)) return [...fallback];
+    return Array.from(new Set(
+        value
+            .map(item => String(item || '').trim())
+            .filter(Boolean)
+    ));
+};
+
+export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig => ({
+    sqlTags: normalizeTagArray(value?.sqlTags, DEFAULT_TAG_CONFIG.sqlTags),
+    appointmentTags: normalizeTagArray(value?.appointmentTags, DEFAULT_TAG_CONFIG.appointmentTags),
+    saleTags: normalizeTagArray(value?.saleTags, DEFAULT_TAG_CONFIG.saleTags),
+    unqualifiedTags: normalizeTagArray(value?.unqualifiedTags, DEFAULT_TAG_CONFIG.unqualifiedTags),
+    scoreHighTags: normalizeTagArray(value?.scoreHighTags, DEFAULT_TAG_CONFIG.scoreHighTags || []),
+    scoreMediumTags: normalizeTagArray(value?.scoreMediumTags, DEFAULT_TAG_CONFIG.scoreMediumTags || []),
+    scoreLowTags: normalizeTagArray(value?.scoreLowTags, DEFAULT_TAG_CONFIG.scoreLowTags || []),
+    humanFollowupQueueTags: normalizeTagArray(value?.humanFollowupQueueTags, DEFAULT_TAG_CONFIG.humanFollowupQueueTags || []),
+    humanAppointmentTargetLabel: String(value?.humanAppointmentTargetLabel || DEFAULT_TAG_CONFIG.humanAppointmentTargetLabel || '').trim() || DEFAULT_TAG_CONFIG.humanAppointmentTargetLabel,
+    humanSalesQueueTags: normalizeTagArray(value?.humanSalesQueueTags, DEFAULT_TAG_CONFIG.humanSalesQueueTags || []),
+    humanSaleTargetLabel: String(value?.humanSaleTargetLabel || DEFAULT_TAG_CONFIG.humanSaleTargetLabel || '').trim() || DEFAULT_TAG_CONFIG.humanSaleTargetLabel,
+    humanAppointmentFieldKeys: normalizeTagArray(value?.humanAppointmentFieldKeys, DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || [])
+});
+
+const persistTagSettingsLocally = (config: TagConfig) => {
+    try {
+        localStorage.setItem(TAG_SETTINGS_STORAGE_KEY, JSON.stringify(config));
+    } catch (storageError) {
+        console.warn('[Dashboard] Could not persist tag settings in localStorage:', storageError);
+    }
+};
+
+const readLocalTagSettings = (): TagConfig | null => {
+    try {
+        const saved = localStorage.getItem(TAG_SETTINGS_STORAGE_KEY);
+        if (!saved) return null;
+        return normalizeTagConfig(JSON.parse(saved));
+    } catch (storageError) {
+        console.warn('[Dashboard] Could not read local tag settings:', storageError);
+        return null;
+    }
 };
 
 const POLL_INTERVAL_MS = 30000;
@@ -109,14 +164,15 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     };
 
     const updateTagSettings = async (newConfig: TagConfig) => {
-        setTagSettings(newConfig);
-        localStorage.setItem('dashboard_tag_settings', JSON.stringify(newConfig));
+        const normalizedConfig = normalizeTagConfig(newConfig);
+        setTagSettings(normalizedConfig);
+        persistTagSettingsLocally(normalizedConfig);
 
         try {
             const { error: cwError } = await supabase
                 .schema('cw')
                 .from('dashboard_tag_settings')
-                .upsert({ account_id: 0, settings: newConfig, updated_at: new Date().toISOString() }, { onConflict: 'account_id' });
+                .upsert({ account_id: 0, settings: normalizedConfig, updated_at: new Date().toISOString() }, { onConflict: 'account_id' });
 
             if (cwError) throw cwError;
             return;
@@ -127,7 +183,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         try {
             await supabase
                 .from('dashboard_tag_settings')
-                .upsert({ account_id: 0, settings: newConfig, updated_at: new Date().toISOString() }, { onConflict: 'account_id' });
+                .upsert({ account_id: 0, settings: normalizedConfig, updated_at: new Date().toISOString() }, { onConflict: 'account_id' });
         } catch (publicError) {
             console.error('Failed to save dashboard tag settings:', publicError);
         }
@@ -144,8 +200,9 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
 
             if (cwError) throw cwError;
             if (data?.settings) {
-                setTagSettings(data.settings);
-                localStorage.setItem('dashboard_tag_settings', JSON.stringify(data.settings));
+                const normalizedConfig = normalizeTagConfig(data.settings);
+                setTagSettings(normalizedConfig);
+                persistTagSettingsLocally(normalizedConfig);
                 return;
             }
         } catch (cwError) {
@@ -161,21 +218,18 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
 
             if (publicError) throw publicError;
             if (data?.settings) {
-                setTagSettings(data.settings);
-                localStorage.setItem('dashboard_tag_settings', JSON.stringify(data.settings));
+                const normalizedConfig = normalizeTagConfig(data.settings);
+                setTagSettings(normalizedConfig);
+                persistTagSettingsLocally(normalizedConfig);
                 return;
             }
         } catch (publicError) {
             console.warn('[Dashboard] Cloud settings load failed, using local/default:', publicError);
         }
 
-        const saved = localStorage.getItem('dashboard_tag_settings');
+        const saved = readLocalTagSettings();
         if (saved) {
-            try {
-                setTagSettings(JSON.parse(saved));
-            } catch (parseError) {
-                console.error('Failed to parse saved tag settings:', parseError);
-            }
+            setTagSettings(saved);
         }
     };
 

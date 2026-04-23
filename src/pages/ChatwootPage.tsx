@@ -21,6 +21,8 @@ import {
     UserCircle
 } from 'lucide-react';
 import {
+    getConversationMessageRole,
+    getDisplayMessages,
     formatDateTime,
     getAttrs,
     getChatwootUrl,
@@ -31,6 +33,7 @@ import {
     getLeadInboxName,
     getLeadName,
     getLeadPhone,
+    getMessageText,
     getMessagePreview,
     getMessageTimestamp,
     getRawLeadPhone,
@@ -179,7 +182,7 @@ const ChatwootPage = () => {
                 history = [lead.last_non_activity_message];
             }
 
-            setMessages(history || []);
+            setMessages(getDisplayMessages(history || []));
         } catch (historyError) {
             console.error('[ChatwootPage] History Error:', historyError);
             toast.error('Error al cargar el historial');
@@ -262,7 +265,6 @@ const ChatwootPage = () => {
                                                     const inbox = getInbox(lead);
                                                     const displayName = getLeadName(lead);
                                                     const channelDisplay = getLeadChannelName(lead, inbox);
-                                                    const inboxName = getLeadInboxName(lead, inbox);
                                                     const phoneDisplay = getLeadPhone(lead, channelDisplay);
                                                     const lastMessage = getMessagePreview(lead);
                                                     const lastMessageDate = formatDateTime(getMessageTimestamp(lead));
@@ -286,16 +288,9 @@ const ChatwootPage = () => {
                                                                 </div>
                                                             </td>
                                                             <td className="px-6 py-4">
-                                                                <div className="flex flex-col items-start gap-1">
-                                                                    <Badge variant="secondary" className="px-2 py-0 text-[10px] uppercase font-bold">
-                                                                        {channelDisplay}
-                                                                    </Badge>
-                                                                    {inboxName && inboxName !== channelDisplay && (
-                                                                        <span className="max-w-[160px] truncate text-[10px] text-muted-foreground">
-                                                                            {inboxName}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
+                                                                <Badge variant="secondary" className="px-2 py-0 text-[10px] uppercase font-bold">
+                                                                    {channelDisplay}
+                                                                </Badge>
                                                             </td>
                                                             <td className="px-6 py-4">
                                                                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium italic">
@@ -409,7 +404,8 @@ const ChatwootPage = () => {
                                     </div>
                                 )}
                                 {messages.map((msg: any, index) => {
-                                    const isOutgoing = msg.message_type === 1 || msg.message_direction === 'outgoing';
+                                    const role = getConversationMessageRole(msg);
+                                    const isOutgoing = role === 'outgoing';
                                     return (
                                         <div key={msg.id || index} className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}>
                                             <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${isOutgoing
@@ -419,7 +415,7 @@ const ChatwootPage = () => {
                                                 <div className="font-bold text-[10px] mb-1 opacity-70 uppercase">
                                                     {isOutgoing ? 'Agente / Bot' : 'Cliente'}
                                                 </div>
-                                                <p className="whitespace-pre-wrap">{msg.content || '[Adjunto / contenido no textual]'}</p>
+                                                <p className="whitespace-pre-wrap">{getMessageText(msg)}</p>
                                                 <div className="text-[9px] mt-1 text-right opacity-60">
                                                     {formatDateTime(msg.created_at || msg.created_at_chatwoot)}
                                                 </div>

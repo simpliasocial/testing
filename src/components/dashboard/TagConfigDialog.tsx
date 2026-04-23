@@ -14,13 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-interface TagConfig {
-    sqlTags: string[];
-    appointmentTags: string[];
-    saleTags: string[];
-    unqualifiedTags: string[];
-}
+import { TagConfig } from "@/context/DashboardDataContext";
 
 interface TagConfigDialogProps {
     availableLabels: string[];

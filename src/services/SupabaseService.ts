@@ -79,7 +79,12 @@ export const SupabaseService = {
                     id: msg.chatwoot_message_id,
                     content: msg.content,
                     message_type: messageType,
+                    message_direction: msg.message_direction,
+                    sender_type: msg.sender_type,
+                    is_private: msg.is_private,
                     sender: msg.sender || {},
+                    attachments: msg.attachments || [],
+                    content_attributes: msg.content_attributes || {},
                     created_at: parseDateToUnix(msg.created_at_chatwoot)
                 };
             });

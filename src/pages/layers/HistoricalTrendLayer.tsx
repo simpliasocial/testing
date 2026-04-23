@@ -33,6 +33,7 @@ import {
     ComposedChart
 } from "recharts";
 import { Button } from "@/components/ui/button";
+import { channelLabelFromType } from "@/lib/leadDisplay";
 
 const HistoricalTrendLayer = () => {
     const [loading, setLoading] = useState(true);
@@ -86,7 +87,8 @@ const HistoricalTrendLayer = () => {
             if (!d.created_at_chatwoot) return false;
             const date = new Date(d.created_at_chatwoot);
             const matchesYear = selectedYear === 'all' || date.getFullYear().toString() === selectedYear;
-            const matchesChannel = selectedChannel === 'all' || (d.canal && d.canal.toLowerCase() === selectedChannel.toLowerCase());
+            const channelName = channelLabelFromType(undefined, d.canal);
+            const matchesChannel = selectedChannel === 'all' || channelName === selectedChannel;
             return matchesYear && matchesChannel;
         });
     }, [rawData, selectedYear, selectedChannel]);
@@ -238,7 +240,10 @@ const HistoricalTrendLayer = () => {
         link.click();
     };
 
-    const channels = useMemo(() => Array.from(new Set(rawData.map(d => d.canal).filter(Boolean))), [rawData]);
+    const channels = useMemo(
+        () => Array.from(new Set(rawData.map(d => channelLabelFromType(undefined, d.canal)).filter(channel => channel && channel !== "Otro"))),
+        [rawData]
+    );
     const years = useMemo(() => Array.from(new Set(rawData.map(d => new Date(d.created_at_chatwoot).getFullYear()))).sort(), [rawData]);
 
     if (loading) {

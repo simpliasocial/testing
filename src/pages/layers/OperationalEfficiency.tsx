@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { useDashboardContext } from "@/context/DashboardDataContext";
 import { GUAYAQUIL_TIMEZONE, getGuayaquilDateString } from "@/lib/guayaquilTime";
+import { getInboxChannelName } from "@/lib/leadDisplay";
 import {
     HybridDashboardService,
     IncomingMessageTrafficEvent
@@ -220,15 +221,10 @@ const OperationalEfficiency = () => {
     const selectedChannelLabel = useMemo(() => {
         const selectedInboxes = globalFilters.selectedInboxes || [];
         if (selectedInboxes.length === 0) return "Todos los canales";
-        const names = selectedInboxes
+        const names = Array.from(new Set(selectedInboxes
             .map((id) => inboxes.find((inbox: any) => Number(inbox.id) === Number(id)))
             .filter(Boolean)
-            .map((inbox: any) => {
-                if (inbox.channel_type === "Channel::Whatsapp") return "WhatsApp";
-                if (inbox.channel_type === "Channel::FacebookPage") return "Facebook";
-                if (inbox.channel_type === "Channel::InstagramDirect") return "Instagram";
-                return inbox.name || inbox.channel_type?.replace("Channel::", "") || "Canal";
-            });
+            .map((inbox: any) => getInboxChannelName(inbox))));
         return names.join(", ");
     }, [globalFilters.selectedInboxes, inboxes]);
 

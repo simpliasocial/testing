@@ -11,6 +11,7 @@ import { dateStringIncludesToday, guayaquilEndOfDayIso, guayaquilStartOfDayIso }
 import { config } from '@/config';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
+import { getInboxChannelName, getLeadChannelName } from '@/lib/leadDisplay';
 
 const ReportsPage = () => {
     const [isExporting, setIsExporting] = useState(false);
@@ -32,16 +33,6 @@ const ReportsPage = () => {
         };
         loadInboxes();
     }, []);
-
-    const getInboxDisplayName = (name: string) => {
-        const lowerName = name.toLowerCase();
-        if (lowerName.includes('whatsapp')) return 'WhatsApp';
-        if (lowerName.includes('messenger') || lowerName.includes('facebook')) return 'Facebook Messenger';
-        if (lowerName.includes('facebook') || lowerName.includes('página') || lowerName.includes('page')) return 'Facebook';
-        if (lowerName.includes('tiktok')) return 'TikTok';
-        if (lowerName.includes('instagram')) return 'Instagram';
-        return name;
-    };
 
     const labels = [
         'interesado', 'crear_confianza', 'crear_urgencia', 'desinteresado', 'cita_agendada', 'venta_exitosa'
@@ -112,7 +103,7 @@ const ReportsPage = () => {
 
         const headerRow1 = ["Etiqueta", "Total"];
         inboxes.forEach(inbox => {
-            headerRow1.push(getInboxDisplayName(inbox.name));
+            headerRow1.push(getInboxChannelName(inbox));
         });
         resumenData.push(headerRow1);
 
@@ -177,7 +168,7 @@ const ReportsPage = () => {
                 const vA = conv.custom_attributes || {};
 
                 const inbox = inboxes.find(i => i.id === conv.inbox_id);
-                const canal = getInboxDisplayName(inbox?.name || '');
+                const canal = getLeadChannelName(conv, inbox);
 
                 let telefonoPrincipal = "";
                 if (canal.toLowerCase().includes('whatsapp')) {

@@ -16,7 +16,6 @@ import {
     formatDateTime,
     getAttrs,
     getLeadChannelName,
-    getLeadInboxName,
     getLeadName,
     getLeadPhone,
     normalize
@@ -602,7 +601,6 @@ const LeadScoringLayer = () => {
                                                 </td>
                                                 <td className="px-4 py-3">
                                                     <div className="font-medium">{item.channel}</div>
-                                                    <div className="text-[10px] text-muted-foreground">{getLeadInboxName(item.lead, inboxMap.get(Number(item.lead.inbox_id)))}</div>
                                                 </td>
                                                 <td className="px-4 py-3">{item.campaign}</td>
                                                 <td className="px-4 py-3">{item.reason}</td>

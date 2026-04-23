@@ -1,8 +1,17 @@
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useDashboardContext } from "@/context/DashboardDataContext";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { CalendarCheck2, DollarSign, Loader2, TrendingUp } from "lucide-react";
+import { CalendarCheck2, ArrowRightLeft, DollarSign, Loader2, TrendingUp } from "lucide-react";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue
+} from "@/components/ui/select";
+import { getGuayaquilDateString } from "@/lib/guayaquilTime";
 import {
     Bar,
     BarChart,
@@ -33,12 +42,145 @@ const modeCopy: Record<string, { label: string; description: string }> = {
     }
 };
 
+const parseTs = (ts: any): Date => {
+    if (!ts) return new Date(0);
+    const numeric = Number(ts);
+    if (Number.isNaN(numeric)) return new Date(ts);
+    return new Date(numeric < 10000000000 ? numeric * 1000 : numeric);
+};
+
+const getCreatedDate = (conv: any): Date => parseTs(conv.created_at || conv.timestamp);
+
+const labelsInclude = (conv: any, label: string) => Array.isArray(conv?.labels) && conv.labels.includes(label);
+
 const PerformanceLayer = () => {
-    const { globalFilters, tagSettings } = useDashboardContext();
+    const { globalFilters, tagSettings, labels, conversations, labelEvents } = useDashboardContext();
     const { loading, error, data } = useDashboardData({
         ...globalFilters,
         ...tagSettings
     });
+
+    const humanFollowupQueueTags = tagSettings.humanFollowupQueueTags || ['seguimiento_humano'];
+    const humanAppointmentTargetLabel = tagSettings.humanAppointmentTargetLabel || 'cita_agendada_humano';
+    const humanSaleTargetLabel = tagSettings.humanSaleTargetLabel || 'venta_exitosa';
+    const defaultFromLabel = humanFollowupQueueTags[0] || "seguimiento_humano";
+    const defaultToLabel = humanAppointmentTargetLabel || "cita_agendada_humano";
+    const [transitionFromLabel, setTransitionFromLabel] = useState(defaultFromLabel);
+    const [transitionToLabel, setTransitionToLabel] = useState(defaultToLabel);
+
+    useEffect(() => {
+        setTransitionFromLabel(defaultFromLabel);
+    }, [defaultFromLabel]);
+
+    useEffect(() => {
+        setTransitionToLabel(defaultToLabel);
+    }, [defaultToLabel]);
+
+    const availableHumanTransitionLabels = useMemo(() => {
+        const merged = Array.from(
+            new Set(
+                [
+                    ...labels,
+                    ...humanFollowupQueueTags,
+                    humanAppointmentTargetLabel
+                ]
+                    .map((label) => String(label || "").trim())
+                    .filter(Boolean)
+            )
+        );
+        return merged.sort((a, b) => a.localeCompare(b));
+    }, [humanAppointmentTargetLabel, humanFollowupQueueTags, labels]);
+
+    const humanAppointmentMetrics = useMemo(() => {
+        let globalStart: Date;
+        let globalEnd: Date;
+
+        if (globalFilters.startDate && globalFilters.endDate) {
+            globalStart = new Date(globalFilters.startDate);
+            globalStart.setHours(0, 0, 0, 0);
+            globalEnd = new Date(globalFilters.endDate);
+            globalEnd.setHours(23, 59, 59, 999);
+        } else if (globalFilters.startDate) {
+            globalStart = new Date(globalFilters.startDate);
+            globalStart.setHours(0, 0, 0, 0);
+            globalEnd = new Date();
+            globalEnd.setHours(23, 59, 59, 999);
+        } else {
+            globalStart = new Date(2024, 0, 1);
+            globalEnd = new Date(2030, 0, 1);
+        }
+
+        const selectedInboxes = globalFilters.selectedInboxes || [];
+        const conversationById = new Map(conversations.map((conv) => [Number(conv.id), conv]));
+        const filteredConversations = conversations.filter((conv) => {
+            if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return false;
+            const createdAt = getCreatedDate(conv);
+            return !Number.isNaN(createdAt.getTime()) && createdAt >= globalStart && createdAt <= globalEnd;
+        });
+
+        const followupCurrent = filteredConversations.filter((conv) => labelsInclude(conv, transitionFromLabel)).length;
+
+        const sortedLabelEvents = [...(labelEvents || [])].sort(
+            (a: any, b: any) => parseTs(a.occurred_at).getTime() - parseTs(b.occurred_at).getTime()
+        );
+        const trackingStartedAt = sortedLabelEvents[0]?.occurred_at || null;
+        const trackingStartDate = trackingStartedAt ? parseTs(trackingStartedAt) : null;
+        const humanAppointmentMode: "exact" | "mixed" | "estimated_legacy" = !trackingStartDate
+            ? "estimated_legacy"
+            : globalStart < trackingStartDate && globalEnd >= trackingStartDate
+                ? "mixed"
+                : globalEnd < trackingStartDate
+                    ? "estimated_legacy"
+                    : "exact";
+
+        const filteredLabelEvents = sortedLabelEvents.filter((event: any) => {
+            const eventDate = parseTs(event.occurred_at);
+            if (Number.isNaN(eventDate.getTime()) || eventDate < globalStart || eventDate > globalEnd) return false;
+
+            if (selectedInboxes.length > 0) {
+                const eventConversation = conversationById.get(Number(event.chatwoot_conversation_id));
+                if (!eventConversation || !selectedInboxes.includes(Number(eventConversation.inbox_id))) return false;
+            }
+
+            return true;
+        });
+
+        const exactHumanAppointmentIds = new Set<number>();
+        filteredLabelEvents.forEach((event: any) => {
+            const added = Array.isArray(event.added_labels) ? event.added_labels : [];
+            const removed = Array.isArray(event.removed_labels) ? event.removed_labels : [];
+            if (added.includes(transitionToLabel) && removed.includes(transitionFromLabel)) {
+                exactHumanAppointmentIds.add(Number(event.chatwoot_conversation_id));
+            }
+        });
+
+        const legacyHumanAppointments = filteredConversations.filter((conv) => {
+            if (!labelsInclude(conv, transitionToLabel)) return false;
+            if (exactHumanAppointmentIds.has(Number(conv.id))) return false;
+            if (humanAppointmentMode === "exact") return false;
+            if (!trackingStartDate) return true;
+            return getCreatedDate(conv) < trackingStartDate;
+        }).length;
+
+        const humanAppointmentConversions = humanAppointmentMode === "estimated_legacy"
+            ? legacyHumanAppointments
+            : exactHumanAppointmentIds.size + legacyHumanAppointments;
+        const humanAppointmentConversionRate = (followupCurrent + humanAppointmentConversions) > 0
+            ? Math.round((humanAppointmentConversions / (followupCurrent + humanAppointmentConversions)) * 100)
+            : 0;
+
+        return {
+            followupCurrent,
+            humanAppointmentConversions,
+            humanAppointmentConversionRate,
+            humanAppointmentMode,
+            trackingStartedAt,
+            rangeLabel:
+                globalFilters.startDate && globalFilters.endDate
+                    ? `${getGuayaquilDateString(globalFilters.startDate)} - ${getGuayaquilDateString(globalFilters.endDate)}`
+                    : "Rango global"
+        };
+    }, [conversations, globalFilters.endDate, globalFilters.selectedInboxes, globalFilters.startDate, labelEvents, transitionFromLabel, transitionToLabel]);
 
     if (loading) {
         return (
@@ -57,10 +199,10 @@ const PerformanceLayer = () => {
     }
 
     const { humanMetrics } = data;
-    const mode = modeCopy[humanMetrics.humanAppointmentMode] || modeCopy.estimated_legacy;
+    const mode = modeCopy[humanAppointmentMetrics.humanAppointmentMode] || modeCopy.estimated_legacy;
     const appointmentComparison = [
-        { name: "Seguimiento actual", value: humanMetrics.followupCurrent, fill: "#243d90" },
-        { name: "Citas humanas", value: humanMetrics.humanAppointmentConversions, fill: "#059669" }
+        { name: transitionFromLabel, value: humanAppointmentMetrics.followupCurrent, fill: "#243d90" },
+        { name: transitionToLabel, value: humanAppointmentMetrics.humanAppointmentConversions, fill: "#059669" }
     ];
     const salesChartData = humanMetrics.salesByDate?.length
         ? humanMetrics.salesByDate
@@ -80,29 +222,75 @@ const PerformanceLayer = () => {
                                     Citas agendadas por humano
                                 </CardTitle>
                                 <CardDescription>
-                                    Mide leads que pasan de seguimiento_humano a cita_agendada_humano.
+                                    Analiza cuántos leads estaban en una etiqueta y luego pasaron a otra. Elige abajo la etiqueta inicial y la etiqueta destino para este negocio.
                                 </CardDescription>
                             </div>
                             <Badge variant="outline" className="w-fit">{mode.label}</Badge>
                         </div>
                     </CardHeader>
                     <CardContent className="space-y-5">
+                        <div className="rounded-xl border bg-muted/20 p-4">
+                            <div className="grid gap-3 lg:grid-cols-[1fr_auto_1fr] lg:items-end">
+                                <div className="space-y-2">
+                                    <p className="text-xs font-medium text-muted-foreground">Etiqueta inicial</p>
+                                    <Select value={transitionFromLabel} onValueChange={setTransitionFromLabel}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Selecciona etiqueta inicial" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {availableHumanTransitionLabels.map((label) => (
+                                                <SelectItem key={`human-from-${label}`} value={label}>
+                                                    {label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+
+                                <div className="flex items-center justify-center pb-1 text-muted-foreground">
+                                    <ArrowRightLeft className="h-4 w-4" />
+                                </div>
+
+                                <div className="space-y-2">
+                                    <p className="text-xs font-medium text-muted-foreground">Etiqueta destino</p>
+                                    <Select value={transitionToLabel} onValueChange={setTransitionToLabel}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Selecciona etiqueta destino" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {availableHumanTransitionLabels.map((label) => (
+                                                <SelectItem key={`human-to-${label}`} value={label}>
+                                                    {label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+                            <p className="mt-3 text-xs text-muted-foreground">
+                                Se calcula sobre leads que estaban en <span className="font-medium text-foreground">{transitionFromLabel}</span> y después pasaron a <span className="font-medium text-foreground">{transitionToLabel}</span>, respetando el rango y canal seleccionados.
+                            </p>
+                        </div>
+
                         <div className="grid grid-cols-3 gap-3">
                             <div className="rounded-lg border bg-muted/20 p-3">
                                 <p className="text-[10px] uppercase font-bold text-muted-foreground">Seguimiento</p>
-                                <p className="text-2xl font-bold">{humanMetrics.followupCurrent}</p>
+                                <p className="text-2xl font-bold">{humanAppointmentMetrics.followupCurrent}</p>
                             </div>
                             <div className="rounded-lg border bg-muted/20 p-3">
                                 <p className="text-[10px] uppercase font-bold text-muted-foreground">Citas humanas</p>
-                                <p className="text-2xl font-bold">{humanMetrics.humanAppointmentConversions}</p>
+                                <p className="text-2xl font-bold">{humanAppointmentMetrics.humanAppointmentConversions}</p>
                             </div>
                             <div className="rounded-lg border bg-muted/20 p-3">
                                 <p className="text-[10px] uppercase font-bold text-muted-foreground">Conversion</p>
-                                <p className="text-2xl font-bold">{humanMetrics.humanAppointmentConversionRate}%</p>
+                                <p className="text-2xl font-bold">{humanAppointmentMetrics.humanAppointmentConversionRate}%</p>
                             </div>
                         </div>
 
-                        <p className="text-xs text-muted-foreground">{mode.description}</p>
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                            <p>{mode.description}</p>
+                            <p>Rango aplicado: {humanAppointmentMetrics.rangeLabel}</p>
+                        </div>
 
                         <div className="h-[300px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
@@ -130,7 +318,7 @@ const PerformanceLayer = () => {
                             Ventas exitosas
                         </CardTitle>
                         <CardDescription>
-                            Leads con venta_exitosa y valores de monto_operacion.
+                            Leads con {humanSaleTargetLabel} y valores de monto_operacion.
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-5">

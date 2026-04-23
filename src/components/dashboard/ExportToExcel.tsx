@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import { useDashboardContext } from "@/context/DashboardDataContext";
 import { config } from "@/config";
 import { toast } from "sonner";
+import { getLeadChannelName } from "@/lib/leadDisplay";
 
 export function ExportToExcel() {
     const { conversations, inboxes } = useDashboardContext();
@@ -16,7 +17,7 @@ export function ExportToExcel() {
         }
 
         try {
-            const inboxMap = new Map(inboxes.map(i => [i.id, i.name]));
+            const inboxMap = new Map(inboxes.map(i => [i.id, i]));
 
             // 1. Discover all unique custom attribute keys across both contact and conversation
             const customAttrKeys = new Set<string>();
@@ -36,10 +37,8 @@ export function ExportToExcel() {
                 const convAttrs = conv.custom_attributes || {};
                 const allAttrs = { ...convAttrs, ...contactAttrs };
 
-                let canal = "Unknown";
-                if (conv.inbox_id && inboxMap.has(conv.inbox_id)) {
-                    canal = inboxMap.get(conv.inbox_id) || "Unknown";
-                }
+                const inbox = conv.inbox_id ? inboxMap.get(conv.inbox_id) : undefined;
+                const canal = getLeadChannelName(conv, inbox);
 
                 const createdAt = conv.created_at ? new Date(conv.created_at * 1000) : null;
                 const lastActivity = conv.timestamp ? new Date(conv.timestamp * 1000) : null;

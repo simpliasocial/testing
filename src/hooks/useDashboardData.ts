@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useDashboardContext } from '../context/DashboardDataContext';
 import { getGuayaquilDateString } from '../lib/guayaquilTime';
+import { getLeadChannelName } from '../lib/leadDisplay';
 
 export interface DashboardFilters {
     startDate?: Date;
@@ -10,6 +11,11 @@ export interface DashboardFilters {
     appointmentTags?: string[];
     saleTags?: string[];
     unqualifiedTags?: string[];
+    humanFollowupQueueTags?: string[];
+    humanAppointmentTargetLabel?: string;
+    humanSalesQueueTags?: string[];
+    humanSaleTargetLabel?: string;
+    humanAppointmentFieldKeys?: string[];
 }
 
 const FIRST_RESPONSE_GRACE_SECONDS = 60;
@@ -35,6 +41,10 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
     const appointmentTags = overrideTags.appointmentTags || globalTagSettings.appointmentTags;
     const saleTags = overrideTags.saleTags || globalTagSettings.saleTags;
     const unqualifiedTags = overrideTags.unqualifiedTags || globalTagSettings.unqualifiedTags;
+    const humanFollowupQueueTags = overrideTags.humanFollowupQueueTags || globalTagSettings.humanFollowupQueueTags || ['seguimiento_humano'];
+    const humanAppointmentTargetLabel = overrideTags.humanAppointmentTargetLabel || globalTagSettings.humanAppointmentTargetLabel || 'cita_agendada_humano';
+    const humanSalesQueueTags = overrideTags.humanSalesQueueTags || globalTagSettings.humanSalesQueueTags || ['cita_agendada', 'cita_agendada_humano'];
+    const humanSaleTargetLabel = overrideTags.humanSaleTargetLabel || globalTagSettings.humanSaleTargetLabel || 'venta_exitosa';
 
     const emptyData = {
         kpis: {
@@ -83,7 +93,8 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             agingData: [] as any[],
             activeLeads: [] as any[],
             trafficData: [] as any[],
-            followUpQueue: [] as any[]
+            followUpQueue: [] as any[],
+            scheduledAppointmentsQueue: [] as any[]
         },
         humanMetrics: {
             followup: 0,
@@ -229,8 +240,10 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             });
 
             const totalLeads = kpiConversations.length;
+            const labelsIncludeAny = (conv: any, labels: string[]) =>
+                Array.isArray(conv?.labels) && labels.some(label => conv.labels.includes(label));
             const countByLabels = (labels: string[]) =>
-                kpiConversations.filter(c => c.labels && labels.some(l => c.labels.includes(l))).length;
+                kpiConversations.filter(c => labelsIncludeAny(c, labels)).length;
 
             const interestedLeadsCount = countByLabels(sqlTags);
             // == DYNAMIC DISCOVERY ==
@@ -262,7 +275,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const responseRateVar = totalLeads > 0 ? Math.round((interactedConversations / totalLeads) * 100) : 0;
 
             const recentAppointments = kpiConversations
-                .filter(c => c.labels && (c.labels.includes('cita_agendada') || c.labels.includes('venta_exitosa') || c.labels.includes('cita')))
+                .filter(c => labelsIncludeAny(c, appointmentTags) || labelsIncludeAny(c, saleTags))
                 .slice(0, 5)
                 .map(conv => {
                     const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
@@ -289,10 +302,12 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 : funnelData;
 
             const inboxMap = new Map((inboxes || []).map((inbox: any) => [inbox.id, inbox]));
+            const getChannelDisplayName = (conv: any) =>
+                getLeadChannelName(conv, inboxMap.get(conv.inbox_id!));
+
             const channelCounts = new Map<string, number>();
             kpiConversations.forEach(conv => {
-                const inbox = conv.inbox_id ? inboxMap.get(conv.inbox_id) : null;
-                const channelName = inbox ? (inbox.channel_type === 'Channel::Whatsapp' ? 'WhatsApp' : inbox.name) : 'Otro';
+                const channelName = getChannelDisplayName(conv);
                 channelCounts.set(channelName, (channelCounts.get(channelName) || 0) + 1);
             });
 
@@ -366,6 +381,32 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 if (manualResponsible) return { name: manualResponsible, source: 'responsable' };
                 if (assignedAgent) return { name: assignedAgent, source: 'agente' };
                 return { name: UNASSIGNED_OWNER_NAME, source: UNASSIGNED_OWNER_SOURCE };
+            };
+
+            const mapQueueLead = (conv: any) => {
+                const contactAttrs = conv.meta?.sender?.custom_attributes || {};
+                const convAttrs = conv.custom_attributes || {};
+                const allAttrs = { ...convAttrs, ...contactAttrs };
+
+                return {
+                    id: conv.id,
+                    name: conv.meta?.sender?.name || "Desconocido",
+                    owner: allAttrs.responsable?.toString() || conv.meta?.assignee?.name || "Sin Asignar",
+                    status: conv.status,
+                    channel: getChannelDisplayName(conv),
+                    channel_type: inboxMap.get(conv.inbox_id!)?.channel_type || "",
+                    inbox_id: conv.inbox_id,
+                    labels: conv.labels || [],
+                    meta: conv.meta,
+                    custom_attributes: conv.custom_attributes,
+                    messages: conv.messages || [],
+                    last_message: conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : conv.last_non_activity_message || null,
+                    last_non_activity_message: conv.last_non_activity_message,
+                    timestamp: conv.timestamp,
+                    created_at: conv.created_at,
+                    first_reply_created_at: conv.first_reply_created_at,
+                    source: conv.source
+                };
             };
 
             // Owner Performance with 'responsable' override. All assigned agents and manual responsable values are listed.
@@ -456,39 +497,19 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 agingData: [],
                 trafficData: trafficData,
                 followUpQueue: kpiConversations
-                    .filter(c => c.labels?.includes('seguimiento_humano'))
-                    .map(c => {
-                        const contactAttrs = c.meta?.sender?.custom_attributes || {};
-                        const convAttrs = c.custom_attributes || {};
-                        const allAttrs = { ...convAttrs, ...contactAttrs };
-
-                        return {
-                            id: c.id,
-                            name: c.meta?.sender?.name || "Desconocido",
-                            owner: allAttrs.responsable?.toString() || c.meta?.assignee?.name || "Sin Asignar",
-                            status: c.status,
-                            channel: inboxMap.get(c.inbox_id!)?.name || "Chatwoot",
-                            channel_type: inboxMap.get(c.inbox_id!)?.channel_type || "",
-                            inbox_id: c.inbox_id,
-                            labels: c.labels || [],
-                            meta: c.meta,
-                            custom_attributes: c.custom_attributes,
-                            messages: c.messages || [],
-                            last_message: c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : c.last_non_activity_message || null,
-                            last_non_activity_message: c.last_non_activity_message,
-                            timestamp: c.timestamp,
-                            created_at: c.created_at,
-                            first_reply_created_at: c.first_reply_created_at,
-                            source: c.source
-                        };
-                    })
+                    .filter(c => labelsIncludeAny(c, humanFollowupQueueTags))
+                    .map(mapQueueLead)
+                    .sort((a, b) => b.timestamp - a.timestamp),
+                scheduledAppointmentsQueue: kpiConversations
+                    .filter(c => labelsIncludeAny(c, humanSalesQueueTags))
+                    .map(mapQueueLead)
                     .sort((a, b) => b.timestamp - a.timestamp),
                 activeLeads: kpiConversations.filter(c => c.status !== 'resolved').slice(0, 10).map(c => ({
                     id: c.id,
                     name: c.meta?.sender?.name || "Sin Nombre",
                     owner: (c.meta?.sender?.custom_attributes?.responsable || c.meta?.assignee?.name || "Sin Asignar"),
                     status: c.status,
-                    channel: inboxMap.get(c.inbox_id!)?.name || "Chatwoot",
+                    channel: getChannelDisplayName(c),
                     timestamp: c.timestamp
                 }))
             };
@@ -545,7 +566,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             // 7. Human Performance Metrics
             const conversationById = new Map(allConversationsRaw.map(conv => [Number(conv.id), conv]));
             const labelsInclude = (conv: any, label: string) => Array.isArray(conv.labels) && conv.labels.includes(label);
-            const humanFollowup = kpiConversations.filter(c => labelsInclude(c, 'seguimiento_humano')).length;
+            const humanFollowup = kpiConversations.filter(c => labelsIncludeAny(c, humanFollowupQueueTags)).length;
 
             const sortedLabelEvents = [...(labelEvents || [])].sort((a: any, b: any) =>
                 parseTs(a.occurred_at).getTime() - parseTs(b.occurred_at).getTime()
@@ -576,13 +597,13 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             filteredLabelEvents.forEach((event: any) => {
                 const added = Array.isArray(event.added_labels) ? event.added_labels : [];
                 const removed = Array.isArray(event.removed_labels) ? event.removed_labels : [];
-                if (added.includes('cita_agendada_humano') && removed.includes('seguimiento_humano')) {
+                if (added.includes(humanAppointmentTargetLabel) && humanFollowupQueueTags.some(label => removed.includes(label))) {
                     exactHumanAppointmentIds.add(Number(event.chatwoot_conversation_id));
                 }
             });
 
             const legacyHumanAppointments = kpiConversations.filter(conv => {
-                if (!labelsInclude(conv, 'cita_agendada_humano')) return false;
+                if (!labelsInclude(conv, humanAppointmentTargetLabel)) return false;
                 if (exactHumanAppointmentIds.has(Number(conv.id))) return false;
                 if (humanAppointmentMode === 'exact') return false;
                 if (!trackingStartDate) return true;
@@ -599,7 +620,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const humanSales = allConversationsRaw
                 .filter(conv => {
                     if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return false;
-                    if (!labelsInclude(conv, 'venta_exitosa')) return false;
+                    if (!labelsInclude(conv, humanSaleTargetLabel)) return false;
 
                     const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
                     const saleDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
@@ -635,21 +656,6 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             };
 
             // 8. Trend Metrics
-            const getChannelDisplayName = (conv: any) => {
-                const inbox = inboxMap.get(conv.inbox_id!);
-                const type = (inbox?.channel_type || '').toString().toLowerCase();
-                const name = (inbox?.name || '').toString();
-                const normalizedName = name.toLowerCase();
-
-                if (type.includes('instagram') || normalizedName.includes('instagram')) return 'Instagram';
-                if (type.includes('whatsapp') || normalizedName.includes('whatsapp')) return 'WhatsApp';
-                if (type.includes('telegram') || normalizedName.includes('telegram')) return 'Telegram';
-                if (type.includes('facebook') || normalizedName.includes('messenger')) return 'Messenger';
-                if (normalizedName.includes('tiktok')) return 'TikTok';
-                if (type.includes('web') || normalizedName.includes('web')) return 'Web';
-                return name || 'Otro';
-            };
-
             const trendChannelCounts = new Map<string, number>();
 
             const disqualificationMap = new Map<string, number>();
