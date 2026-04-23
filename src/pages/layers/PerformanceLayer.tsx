@@ -1,30 +1,37 @@
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { useDashboardContext } from "@/context/DashboardDataContext";
 import { useDashboardData } from "@/hooks/useDashboardData";
+import { CalendarCheck2, DollarSign, Loader2, TrendingUp } from "lucide-react";
 import {
-    Loader2,
-    Users,
-    Target,
-    Trophy,
-    TrendingUp,
-    DollarSign,
-    Zap,
-    MousePointerClick,
-    BarChart3
-} from "lucide-react";
-import {
-    BarChart,
     Bar,
-    XAxis,
-    YAxis,
+    BarChart,
     CartesianGrid,
-    Tooltip,
-    ResponsiveContainer,
     Cell,
-    LabelList
+    LabelList,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis
 } from "recharts";
 
-import { useDashboardContext } from "@/context/DashboardDataContext";
-import { KPICard } from "@/components/dashboard/KPICard";
+const formatCurrency = (value: number) =>
+    new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(value || 0);
+
+const modeCopy: Record<string, { label: string; description: string }> = {
+    exact: {
+        label: "Exacto",
+        description: "Medido con eventos reales de cambio de etiqueta."
+    },
+    mixed: {
+        label: "Mixto",
+        description: "Combina eventos reales nuevos con estimacion historica anterior al tracking."
+    },
+    estimated_legacy: {
+        label: "Estimado historico",
+        description: "No existia historial de cambios para este rango; se estima con etiquetas actuales."
+    }
+};
 
 const PerformanceLayer = () => {
     const { globalFilters, tagSettings } = useDashboardContext();
@@ -50,83 +57,65 @@ const PerformanceLayer = () => {
     }
 
     const { humanMetrics } = data;
-
-    const conversionData = [
-        { name: "Seguimiento Humano", value: humanMetrics.followup, color: "#6366f1" },
-        { name: "Citas Agendadas", value: humanMetrics.appointments, color: "#10b981" }
+    const mode = modeCopy[humanMetrics.humanAppointmentMode] || modeCopy.estimated_legacy;
+    const appointmentComparison = [
+        { name: "Seguimiento actual", value: humanMetrics.followupCurrent, fill: "#243d90" },
+        { name: "Citas humanas", value: humanMetrics.humanAppointmentConversions, fill: "#059669" }
     ];
-
-    const formatCurrency = (value: number) => {
-        return new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(value);
-    };
+    const salesChartData = humanMetrics.salesByDate?.length
+        ? humanMetrics.salesByDate
+        : [{ date: "Sin ventas", sales: 0, salesVolume: 0 }];
 
     return (
         <div className="space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Rendimiento Humano</h2>
-                    <p className="text-muted-foreground">Análisis de conversión y efectividad del equipo comercial</p>
-                </div>
-            </div>
+            <h2 className="text-2xl font-bold tracking-tight">Rendimiento Humano</h2>
 
-            {/* Main Human KPIs */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <KPICard
-                    title="Leads en Seguimiento"
-                    value={humanMetrics.followup.toLocaleString()}
-                    subtitle="Etiqueta seguimiento_humano"
-                    icon={Users}
-                    variant="primary"
-                />
-                <KPICard
-                    title="Citas Agendadas"
-                    value={humanMetrics.appointments.toLocaleString()}
-                    subtitle="Etiqueta cita_agendada_humano"
-                    icon={Target}
-                    variant="accent"
-                />
-                <KPICard
-                    title="Tasa de Cierre (Humano)"
-                    value={`${humanMetrics.conversionRate}%`}
-                    subtitle="Citas / (Seguimiento + Citas)"
-                    icon={TrendingUp}
-                    variant="success"
-                />
-                <KPICard
-                    title="Ventas Exitosas"
-                    value={humanMetrics.salesCount.toLocaleString()}
-                    subtitle="Etiqueta venta_exitosa"
-                    icon={Trophy}
-                    variant="success"
-                />
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Comparison Chart */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                 <Card>
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Zap className="h-5 w-5 text-amber-500" />
-                            Comparativa: Seguimiento vs Citas
-                        </CardTitle>
-                        <CardDescription>Visualización del embudo de gestión humana</CardDescription>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <CardTitle className="flex items-center gap-2">
+                                    <CalendarCheck2 className="h-5 w-5 text-emerald-600" />
+                                    Citas agendadas por humano
+                                </CardTitle>
+                                <CardDescription>
+                                    Mide leads que pasan de seguimiento_humano a cita_agendada_humano.
+                                </CardDescription>
+                            </div>
+                            <Badge variant="outline" className="w-fit">{mode.label}</Badge>
+                        </div>
                     </CardHeader>
-                    <CardContent>
-                        <div className="h-[300px] w-full mt-4">
+                    <CardContent className="space-y-5">
+                        <div className="grid grid-cols-3 gap-3">
+                            <div className="rounded-lg border bg-muted/20 p-3">
+                                <p className="text-[10px] uppercase font-bold text-muted-foreground">Seguimiento</p>
+                                <p className="text-2xl font-bold">{humanMetrics.followupCurrent}</p>
+                            </div>
+                            <div className="rounded-lg border bg-muted/20 p-3">
+                                <p className="text-[10px] uppercase font-bold text-muted-foreground">Citas humanas</p>
+                                <p className="text-2xl font-bold">{humanMetrics.humanAppointmentConversions}</p>
+                            </div>
+                            <div className="rounded-lg border bg-muted/20 p-3">
+                                <p className="text-[10px] uppercase font-bold text-muted-foreground">Conversion</p>
+                                <p className="text-2xl font-bold">{humanMetrics.humanAppointmentConversionRate}%</p>
+                            </div>
+                        </div>
+
+                        <p className="text-xs text-muted-foreground">{mode.description}</p>
+
+                        <div className="h-[300px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={conversionData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.1} />
+                                <BarChart data={appointmentComparison} margin={{ top: 20, right: 20, left: 0, bottom: 10 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
                                     <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                                    <YAxis hide />
-                                    <Tooltip
-                                        cursor={{ fill: 'transparent' }}
-                                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                    />
-                                    <Bar dataKey="value" barSize={60} radius={[8, 8, 0, 0]}>
-                                        {conversionData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={entry.color} />
+                                    <YAxis allowDecimals={false} />
+                                    <Tooltip cursor={{ fill: "transparent" }} />
+                                    <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                                        {appointmentComparison.map((entry) => (
+                                            <Cell key={entry.name} fill={entry.fill} />
                                         ))}
-                                        <LabelList dataKey="value" position="top" style={{ fontWeight: 'bold' }} />
+                                        <LabelList dataKey="value" position="top" style={{ fontWeight: 700 }} />
                                     </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
@@ -134,59 +123,64 @@ const PerformanceLayer = () => {
                     </CardContent>
                 </Card>
 
-                {/* Sales Volume / Impact */}
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
-                            <DollarSign className="h-5 w-5 text-emerald-500" />
-                            Impacto por Ventas Exitosas
+                            <DollarSign className="h-5 w-5 text-emerald-600" />
+                            Ventas exitosas
                         </CardTitle>
-                        <CardDescription>Resumen financiero de leads con cierre comercial</CardDescription>
+                        <CardDescription>
+                            Leads con venta_exitosa y valores de monto_operacion.
+                        </CardDescription>
                     </CardHeader>
-                    <CardContent className="flex flex-col justify-center h-[300px]">
-                        <div className="space-y-6 text-center">
-                            <div className="p-6 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 inline-block px-12">
-                                <p className="text-sm font-medium text-emerald-600 uppercase tracking-wider mb-2">Volumen Total Vendido</p>
-                                <p className="text-5xl font-extrabold text-emerald-700 font-display">
-                                    {formatCurrency(humanMetrics.salesVolume)}
-                                </p>
+                    <CardContent className="space-y-5">
+                        <div className="grid grid-cols-3 gap-3">
+                            <div className="rounded-lg border bg-muted/20 p-3">
+                                <p className="text-[10px] uppercase font-bold text-muted-foreground">Ventas</p>
+                                <p className="text-2xl font-bold">{humanMetrics.salesCount}</p>
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="p-4 rounded-xl bg-muted/50">
-                                    <p className="text-xs text-muted-foreground uppercase font-bold mb-1">Tiket Promedio</p>
-                                    <p className="text-xl font-bold">
-                                        {formatCurrency(humanMetrics.salesCount > 0 ? humanMetrics.salesVolume / humanMetrics.salesCount : 0)}
-                                    </p>
-                                </div>
-                                <div className="p-4 rounded-xl bg-muted/50">
-                                    <p className="text-xs text-muted-foreground uppercase font-bold mb-1">Total Leads</p>
-                                    <p className="text-xl font-bold">{humanMetrics.salesCount}</p>
-                                </div>
+                            <div className="rounded-lg border bg-muted/20 p-3">
+                                <p className="text-[10px] uppercase font-bold text-muted-foreground">Total vendido</p>
+                                <p className="text-2xl font-bold">{formatCurrency(humanMetrics.salesVolume)}</p>
                             </div>
+                            <div className="rounded-lg border bg-muted/20 p-3">
+                                <p className="text-[10px] uppercase font-bold text-muted-foreground">Ticket promedio</p>
+                                <p className="text-2xl font-bold">{formatCurrency(humanMetrics.averageTicket)}</p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <TrendingUp className="h-4 w-4" />
+                            La fecha del grafico usa fecha_monto_operacion; si falta, usa la fecha de creacion del lead.
+                        </div>
+
+                        <div className="h-[300px] w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={salesChartData} margin={{ top: 20, right: 20, left: 0, bottom: 10 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
+                                    <XAxis dataKey="date" axisLine={false} tickLine={false} />
+                                    <YAxis tickFormatter={(value) => `$${value}`} />
+                                    <Tooltip
+                                        cursor={{ fill: "transparent" }}
+                                        formatter={(value: number, name: string, item: any) => {
+                                            if (name === "salesVolume") return [formatCurrency(value), "Monto vendido"];
+                                            return [item?.payload?.sales || 0, "Ventas"];
+                                        }}
+                                    />
+                                    <Bar dataKey="salesVolume" fill="#059669" radius={[6, 6, 0, 0]}>
+                                        <LabelList
+                                            dataKey="sales"
+                                            position="top"
+                                            formatter={(value: number) => `${value} venta${value === 1 ? "" : "s"}`}
+                                            style={{ fontWeight: 700 }}
+                                        />
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
                         </div>
                     </CardContent>
                 </Card>
             </div>
-
-            {/* Additional Context Card */}
-            <Card className="bg-primary/5 border-primary/20">
-                <CardContent className="pt-6">
-                    <div className="flex items-start gap-4">
-                        <div className="p-2 bg-primary/10 rounded-lg shrink-0">
-                            <BarChart3 className="h-5 w-5 text-primary" />
-                        </div>
-                        <div>
-                            <h4 className="font-bold text-primary mb-1">Analítica de Gestión</h4>
-                            <p className="text-sm text-muted-foreground leading-relaxed">
-                                Esta vista se sincroniza con las etiquetas <code className="bg-background px-1 rounded">seguimiento_humano</code>,
-                                <code className="bg-background px-1 rounded">cita_agendada_humano</code> y
-                                <code className="bg-background px-1 rounded">venta_exitosa</code>. Los datos financieros se extraen
-                                del campo <code className="bg-background px-1 rounded">monto_operacion</code> en los atributos personalizados.
-                            </p>
-                        </div>
-                    </div>
-                </CardContent>
-            </Card>
         </div>
     );
 };

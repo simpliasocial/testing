@@ -1,5 +1,9 @@
 import { supabase } from '../lib/supabase';
 import { ChatwootConversation } from './ChatwootService';
+import {
+    mapSupabaseConversationRowToChatwoot,
+    parseDateToUnix
+} from './ConversationMapper';
 
 export interface HistoricalFilters {
     page?: number;
@@ -7,16 +11,6 @@ export interface HistoricalFilters {
     since?: string;
     until?: string;
 }
-
-const parseDateToUnix = (dateInput: any): number => {
-    try {
-        if (!dateInput) return Math.floor(Date.now() / 1000);
-        const d = new Date(dateInput);
-        return isNaN(d.getTime()) ? Math.floor(Date.now() / 1000) : Math.floor(d.getTime() / 1000);
-    } catch {
-        return Math.floor(Date.now() / 1000);
-    }
-};
 
 export const SupabaseService = {
     getHistoricalConversations: async (params: HistoricalFilters = {}): Promise<{ payload: ChatwootConversation[]; meta: any }> => {
@@ -49,23 +43,7 @@ export const SupabaseService = {
 
             if (error) throw error;
 
-            const payload: ChatwootConversation[] = (data || []).map((row: any) => {
-                const unixTs = parseDateToUnix(row.created_at_chatwoot);
-                return {
-                    id: row.chatwoot_conversation_id,
-                    status: row.status || 'open',
-                    inbox_id: row.chatwoot_inbox_id,
-                    messages: [],
-                    meta: row.meta || { sender: { name: row.nombre_completo || 'Sin Nombre', phone_number: row.celular } },
-                    labels: row.labels || [],
-                    last_non_activity_message: {
-                        content: row.raw_payload?.last_non_activity_message?.content || 'Historial de DB',
-                        created_at: unixTs
-                    },
-                    timestamp: unixTs,
-                    custom_attributes: row.custom_attributes || {}
-                };
-            });
+            const payload: ChatwootConversation[] = (data || []).map(mapSupabaseConversationRowToChatwoot);
 
             return {
                 payload,
@@ -91,13 +69,20 @@ export const SupabaseService = {
 
             if (error) throw error;
 
-            return (data || []).map((msg: any) => ({
-                id: msg.chatwoot_message_id,
-                content: msg.content,
-                message_type: msg.message_type,
-                sender: msg.sender || {},
-                created_at: parseDateToUnix(msg.created_at_chatwoot)
-            }));
+            return (data || []).map((msg: any) => {
+                const numericType = Number(msg.message_type);
+                const messageType = Number.isNaN(numericType)
+                    ? (msg.message_direction === 'outgoing' ? 1 : 0)
+                    : numericType;
+
+                return {
+                    id: msg.chatwoot_message_id,
+                    content: msg.content,
+                    message_type: messageType,
+                    sender: msg.sender || {},
+                    created_at: parseDateToUnix(msg.created_at_chatwoot)
+                };
+            });
         } catch (error) {
             console.error(`Error fetching historical messages for ${conversationId}:`, error);
             return [];

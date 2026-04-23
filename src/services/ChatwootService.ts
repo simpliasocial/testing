@@ -13,17 +13,23 @@ export interface ChatwootConversation {
     messages: any[];
     meta: {
         sender: {
+            id?: number;
             name: string;
             email: string;
             phone_number: string;
             thumbnail: string;
+            identifier?: string;
             custom_attributes?: any;
+            additional_attributes?: any;
         };
     };
     labels: string[];
     last_non_activity_message: {
         content: string;
         created_at: number;
+        message_type?: number | string;
+        message_direction?: string;
+        sender_type?: string;
     };
     timestamp: number;
     created_at?: number; // Unix timestamp when conversation was created

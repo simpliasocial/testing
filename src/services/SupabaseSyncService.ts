@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { getLabelDelta } from './LabelEventService';
 
 export const SupabaseSyncService = {
     // Helper to safely parse any incoming custom attribute to a valid database numeric or null
@@ -8,6 +9,15 @@ export const SupabaseSyncService = {
         const clean = val.toString().replace(/[^0-9.-]/g, '');
         const num = parseFloat(clean);
         return isNaN(num) ? null : num;
+    },
+
+    parseDateIso(val: any): string {
+        if (!val) return new Date().toISOString();
+        const numeric = Number(val);
+        const date = Number.isNaN(numeric)
+            ? new Date(val)
+            : new Date(numeric < 10000000000 ? numeric * 1000 : numeric);
+        return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
     },
 
     async upsertRawIngest(data: {
@@ -160,6 +170,53 @@ export const SupabaseSyncService = {
     },
 
     async upsertConversations(conversations: any[]) {
+        const conversationIds = conversations.map(conv => Number(conv.id)).filter(Boolean);
+        const previousLabelsById = new Map<number, string[]>();
+
+        if (conversationIds.length > 0) {
+            const { data, error } = await supabase
+                .schema('cw')
+                .from('conversations_current')
+                .select('chatwoot_conversation_id, labels')
+                .in('chatwoot_conversation_id', conversationIds);
+
+            if (error) throw error;
+            (data || []).forEach((row: any) => {
+                previousLabelsById.set(Number(row.chatwoot_conversation_id), row.labels || []);
+            });
+        }
+
+        const labelEventRows = conversations
+            .map(conv => {
+                const conversationId = Number(conv.id);
+                const delta = getLabelDelta(previousLabelsById.get(conversationId) || [], conv.labels || []);
+                if (delta.added.length === 0 && delta.removed.length === 0) return null;
+
+                const occurredAt = SupabaseSyncService.parseDateIso(conv.updated_at || conv.last_activity_at || conv.timestamp);
+                return {
+                    chatwoot_conversation_id: conversationId,
+                    previous_labels: delta.previous,
+                    next_labels: delta.next,
+                    added_labels: delta.added,
+                    removed_labels: delta.removed,
+                    event_source: 'sync_diff',
+                    occurred_at: occurredAt,
+                    detected_at: new Date().toISOString(),
+                    raw_payload: { source: 'SupabaseSyncService', previous_labels: delta.previous, next_labels: delta.next },
+                    event_key: ['sync_diff', conversationId, occurredAt, delta.previous.join('|'), delta.next.join('|')].join(':')
+                };
+            })
+            .filter(Boolean);
+
+        if (labelEventRows.length > 0) {
+            const { error } = await supabase
+                .schema('cw')
+                .from('conversation_label_events')
+                .upsert(labelEventRows, { onConflict: 'event_key', ignoreDuplicates: true });
+
+            if (error) throw error;
+        }
+
         const rows = conversations.map(conv => {
             const contactAttrs = conv.meta?.sender?.custom_attributes || {};
             const convAttrs = conv.custom_attributes || {};

@@ -7,10 +7,13 @@ export interface MinifiedConversation {
     first_reply_created_at?: number;
     meta: {
         sender: {
+            id?: number;
             name: string;
             email?: string;
             phone_number: string;
+            identifier?: string;
             custom_attributes?: any;
+            additional_attributes?: any;
         };
         assignee?: {
             name?: string;
@@ -22,6 +25,14 @@ export interface MinifiedConversation {
     };
     messages?: any[];
     inbox_id?: number;
+    last_non_activity_message?: {
+        content?: string;
+        created_at?: number;
+        message_type?: number | string;
+        message_direction?: string;
+        sender_type?: string;
+    };
+    source?: 'api' | 'supabase' | 'cache';
 }
 
 const DB_NAME = 'MonteMidasDB';

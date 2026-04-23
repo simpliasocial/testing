@@ -5,6 +5,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Download, Loader2, Activity, CalendarDays } from 'lucide-react';
 import { toast } from 'sonner';
 import { chatwootService } from '@/services/ChatwootService';
+import { HybridDashboardService } from '@/services/HybridDashboardService';
+import { mapMinifiedToChatwootConversation } from '@/services/ConversationMapper';
+import { dateStringIncludesToday, guayaquilEndOfDayIso, guayaquilStartOfDayIso } from '@/lib/guayaquilTime';
 import { config } from '@/config';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
@@ -45,46 +48,17 @@ const ReportsPage = () => {
     ];
 
     const fetchAllConversations = async (startDate: string, endDate: string, inboxId: string) => {
-        const payloadParams: any = {
-            page: 1,
-            since: (new Date(startDate + "T00:00:00").getTime() / 1000).toString(),
-        };
+        const hybridConversations = await HybridDashboardService.fetchHybridReportConversations(startDate, endDate);
+        let allConvs = hybridConversations.map(mapMinifiedToChatwootConversation);
+
         if (inboxId !== 'all') {
-            payloadParams.inbox_id = inboxId;
+            allConvs = allConvs.filter(conv => conv.inbox_id?.toString() === inboxId);
         }
 
-        const data = await chatwootService.getConversations(payloadParams);
-
-        let allConvs = [...data.payload];
-        const totalCount = data.meta.all_count || data.meta.count || allConvs.length;
-        const startTimestamp = new Date(startDate + "T00:00:00").getTime();
-
-        if (totalCount > 15 && data.payload.length > 0) {
-            let cp = 2;
-            let maxAttempts = 200;
-            while (allConvs.length < totalCount && maxAttempts > 0) {
-                const nextParams = { ...payloadParams, page: cp };
-                const nextData = await chatwootService.getConversations(nextParams);
-                if (!nextData || !nextData.payload || nextData.payload.length === 0) break;
-
-                const newItems = nextData.payload.filter((np: any) => !allConvs.find(c => c.id === np.id));
-                if (newItems.length === 0) break;
-
-                const oldestInPage = Math.min(...newItems.map((c: any) => c.timestamp * 1000));
-                if (oldestInPage > 0 && oldestInPage < startTimestamp) {
-                    allConvs = [...allConvs, ...newItems];
-                    break;
-                }
-
-                allConvs = [...allConvs, ...newItems];
-                cp++;
-                maxAttempts--;
-            }
-        }
         return allConvs;
     };
 
-    const generateExcel = (filteredConvs: any[], createdConvs: any[], labelTitle: string, filename: string, startDate: string, endDate: string) => {
+    const generateExcel = (filteredConvs: any[], createdConvs: any[], labelTitle: string, filename: string, startDate: string, endDate: string, isPreliminary = false) => {
         const labelCounts: Record<string, any> = {};
         const labelCountsUnicas: Record<string, any> = {};
 
@@ -131,6 +105,9 @@ const ReportsPage = () => {
         const resumenData: any[][] = [];
         resumenData.push([`Fecha Inicio`, startDate]);
         resumenData.push([`Fecha Fin`, endDate]);
+        if (isPreliminary) {
+            resumenData.push([`Nota`, `Incluye datos live/preliminares de Chatwoot para hoy en horario Guayaquil.`]);
+        }
         resumenData.push([]);
 
         const headerRow1 = ["Etiqueta", "Total"];
@@ -247,6 +224,9 @@ const ReportsPage = () => {
         const resumenUnicasData: any[][] = [];
         resumenUnicasData.push([`Fecha Inicio`, startDate]);
         resumenUnicasData.push([`Fecha Fin`, endDate]);
+        if (isPreliminary) {
+            resumenUnicasData.push([`Nota`, `Incluye datos live/preliminares de Chatwoot para hoy en horario Guayaquil.`]);
+        }
         resumenUnicasData.push([]);
 
         resumenUnicasData.push(headerRow1);
@@ -305,11 +285,12 @@ const ReportsPage = () => {
 
     const downloadReport = async (start: string, end: string, type: 'hoy' | 'mes' | 'rango') => {
         setIsExporting(true);
-        const toastId = toast.loading(`Descargando reporte de ${type}...`);
+        const isPreliminary = dateStringIncludesToday(start, end);
+        const toastId = toast.loading(`Descargando reporte de ${type}${isPreliminary ? ' con datos live' : ''}...`);
         try {
             const allConvs = await fetchAllConversations(start, end, 'all');
-            const startTimestamp = new Date(start + "T00:00:00").getTime();
-            const endTimestamp = new Date(end + "T23:59:59").getTime();
+            const startTimestamp = new Date(guayaquilStartOfDayIso(start)).getTime();
+            const endTimestamp = new Date(guayaquilEndOfDayIso(end)).getTime();
 
             const filteredConvs = allConvs.filter(conv => {
                 const convTime = conv.timestamp * 1000;
@@ -321,7 +302,7 @@ const ReportsPage = () => {
                 return creationTime >= startTimestamp && creationTime <= endTimestamp;
             });
 
-            generateExcel(filteredConvs, createdConvs, `Total Leads con Actividad (${type})`, `reporte_avance_${type}`, start, end);
+            generateExcel(filteredConvs, createdConvs, `Total Leads con Actividad (${type})`, `reporte_avance_${type}`, start, end, isPreliminary);
             toast.success('Reporte exportado correctamente', { id: toastId });
         } catch (error) {
             console.error(error);

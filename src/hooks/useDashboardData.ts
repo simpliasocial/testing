@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useDashboardContext } from '../context/DashboardDataContext';
+import { getGuayaquilDateString } from '../lib/guayaquilTime';
 
 export interface DashboardFilters {
     startDate?: Date;
@@ -10,6 +11,10 @@ export interface DashboardFilters {
     saleTags?: string[];
     unqualifiedTags?: string[];
 }
+
+const FIRST_RESPONSE_GRACE_SECONDS = 60;
+const UNASSIGNED_OWNER_NAME = 'Sin responsable';
+const UNASSIGNED_OWNER_SOURCE = 'sin_asignar';
 
 export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null = {}) => {
     const filters: DashboardFilters = useMemo(() => {
@@ -24,7 +29,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
     }, [filtersOrMonth]);
 
     const { startDate, endDate, selectedInboxes = [], ...overrideTags } = filters;
-    const { conversations: allConversationsRaw, inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error, refetch: contextRefetch } = useDashboardContext();
+    const { conversations: allConversationsRaw, labelEvents = [], inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error, refetch: contextRefetch } = useDashboardContext();
 
     const sqlTags = overrideTags.sqlTags || globalTagSettings.sqlTags;
     const appointmentTags = overrideTags.appointmentTags || globalTagSettings.appointmentTags;
@@ -61,6 +66,17 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
         responseTime: 0,
         ownerPerformance: [] as any[],
         operationalMetrics: {
+            averageFirstResponseSeconds: 0,
+            firstResponseAverageSeconds: 0,
+            firstResponseRawAverageSeconds: 0,
+            firstResponseGraceSeconds: FIRST_RESPONSE_GRACE_SECONDS,
+            firstResponseMedianSeconds: 0,
+            firstResponseCount: 0,
+            incomingMessageTrafficByHour: [] as any[],
+            incomingMessageTrafficByDateHour: [] as any[],
+            trafficMeta: null as any,
+            leadsWithOwnerCount: 0,
+            totalLeads: 0,
             leadsWithOwnerPercentage: 0,
             leadsSinRespuesta: 0,
             slaPercentage: 0,
@@ -72,9 +88,16 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
         humanMetrics: {
             followup: 0,
             appointments: 0,
+            followupCurrent: 0,
+            humanAppointmentConversions: 0,
+            humanAppointmentConversionRate: 0,
+            humanAppointmentMode: 'estimated_legacy' as 'exact' | 'mixed' | 'estimated_legacy',
             salesCount: 0,
             salesVolume: 0,
-            conversionRate: 0
+            averageTicket: 0,
+            conversionRate: 0,
+            salesByDate: [] as any[],
+            trackingStartedAt: null as string | null
         },
         trendMetrics: {
             channelLeads: [] as any[],
@@ -98,10 +121,23 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             return new Date(n);
         };
 
+        const getCreatedDate = (conv: any): Date => parseTs(conv.created_at || conv.timestamp);
+        const getActivityDate = (conv: any): Date => parseTs(conv.timestamp || conv.created_at);
+        const getCreatedUnix = (conv: any): number => {
+            const created = conv.created_at || conv.timestamp || 0;
+            const n = Number(created);
+            if (!Number.isNaN(n)) return n < 10000000000 ? n : Math.floor(n / 1000);
+            return Math.floor(parseTs(created).getTime() / 1000);
+        };
+
         // Helper to parse "monto_operacion"
         const parseMonto = (val: any): number => {
             if (!val) return 0;
-            const clean = val.toString().replace(/[^0-9.]/g, '');
+            const raw = val.toString().trim();
+            const normalized = raw.includes(',') && !raw.includes('.')
+                ? raw.replace(',', '.')
+                : raw.replace(/,/g, '');
+            const clean = normalized.replace(/[^0-9.-]/g, '');
             const num = parseFloat(clean);
             return isNaN(num) ? 0 : num;
         };
@@ -130,7 +166,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             console.log(`[Dashboard] Range: ${globalStart.toLocaleDateString()} -> ${globalEnd.toLocaleDateString()}`);
             console.log(`[Dashboard] Total conversations in memory: ${allConversationsRaw.length}`);
             allConversationsRaw.forEach((c, idx) => {
-                if (idx < 5) console.debug(`[Dashboard] Example Conv ${c.id} date: ${parseTs(c.timestamp).toLocaleString()}`);
+                if (idx < 5) console.debug(`[Dashboard] Example Conv ${c.id} created: ${getCreatedDate(c).toLocaleString()} activity: ${getActivityDate(c).toLocaleString()}`);
             });
 
             // 2. Determine Monthly Trend Range
@@ -153,7 +189,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 }
 
                 // 2. Date Filter
-                const convDate = parseTs(conv.timestamp);
+                const convDate = getCreatedDate(conv);
                 const isInRange = convDate >= globalStart && convDate <= globalEnd;
 
                 return isInRange;
@@ -184,7 +220,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                     if (fechaMontoStr) {
                         fechaMonto = new Date(fechaMontoStr);
                     } else {
-                        fechaMonto = parseTs(conv.timestamp);
+                        fechaMonto = getCreatedDate(conv);
                     }
                     if (fechaMonto >= globalStart && fechaMonto <= globalEnd) {
                         monthlyProfit += monto;
@@ -264,54 +300,117 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 name, count, percentage: totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0
             }));
 
-            // Response Time Calculation
-            let totalResponseTime = 0;
-            let conversationsWithResponse = 0;
-            kpiConversations.forEach(conv => {
+            // Customer-service response timing from official Chatwoot first_reply metric.
+            const getMessageTs = (message: any) => {
+                const raw = message?.created_at_chatwoot || message?.created_at || message?.timestamp;
+                const parsed = parseTs(raw);
+                const seconds = Math.floor(parsed.getTime() / 1000);
+                return Number.isFinite(seconds) ? seconds : 0;
+            };
+            const isIncomingMessage = (message: any) =>
+                message?.message_direction === 'incoming' ||
+                Number(message?.message_type) === 0 ||
+                String(message?.message_type).toLowerCase() === 'incoming' ||
+                String(message?.sender_type || '').toLowerCase() === 'contact';
+            const getConversationMessages = (conv: any) =>
+                Array.isArray(conv.messages)
+                    ? conv.messages
+                        .filter((message: any) => !message?.private && !message?.is_private && getMessageTs(message) > 0)
+                        .sort((a: any, b: any) => getMessageTs(a) - getMessageTs(b))
+                    : [];
+            const getFirstResponseSeconds = (conv: any) => {
                 if (conv.first_reply_created_at && conv.created_at) {
-                    const diff = conv.first_reply_created_at - conv.created_at;
-                    if (diff >= 0 && diff <= 3600) {
-                        totalResponseTime += diff;
-                        conversationsWithResponse++;
-                    }
+                    const diff = Number(conv.first_reply_created_at) - Number(conv.created_at);
+                    if (diff >= 0 && diff <= 86400) return diff;
                 }
-            });
-            const responseTime = conversationsWithResponse > 0 ? Math.round(totalResponseTime / (conversationsWithResponse * 60)) : 0;
 
-            // Owner Performance with 'Responsable' override
-            const ownerStats = new Map<string, { name: string, leads: number, appointments: number }>();
+                return null;
+            };
+            const hasUnansweredCustomerMessage = (conv: any) => {
+                const messages = getConversationMessages(conv);
+                if (messages.length > 0) {
+                    const lastMessage = messages[messages.length - 1];
+                    return isIncomingMessage(lastMessage);
+                }
+
+                if (conv.last_non_activity_message) {
+                    return isIncomingMessage(conv.last_non_activity_message);
+                }
+
+                return !conv.first_reply_created_at;
+            };
+            const firstResponseRawSamples = kpiConversations
+                .map(getFirstResponseSeconds)
+                .filter((value): value is number => typeof value === 'number');
+            const firstResponseSamples = firstResponseRawSamples
+                .map(value => Math.max(0, value - FIRST_RESPONSE_GRACE_SECONDS));
+            const firstResponseAverageSeconds = firstResponseSamples.length > 0
+                ? Math.round(firstResponseSamples.reduce((sum, value) => sum + value, 0) / firstResponseSamples.length)
+                : 0;
+            const firstResponseRawAverageSeconds = firstResponseRawSamples.length > 0
+                ? Math.round(firstResponseRawSamples.reduce((sum, value) => sum + value, 0) / firstResponseRawSamples.length)
+                : 0;
+            const sortedFirstResponseSamples = [...firstResponseSamples].sort((a, b) => a - b);
+            const firstResponseMedianSeconds = sortedFirstResponseSamples.length > 0
+                ? sortedFirstResponseSamples.length % 2 === 0
+                    ? Math.round((sortedFirstResponseSamples[(sortedFirstResponseSamples.length / 2) - 1] + sortedFirstResponseSamples[sortedFirstResponseSamples.length / 2]) / 2)
+                    : sortedFirstResponseSamples[Math.floor(sortedFirstResponseSamples.length / 2)]
+                : 0;
+            const responseTime = firstResponseAverageSeconds > 0 ? Math.round(firstResponseAverageSeconds / 60) : 0;
+
+            const getEffectiveOwner = (conv: any) => {
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const manualResponsible = attrs.responsable?.toString().trim();
+                const assignedAgent = conv.meta?.assignee?.name?.toString().trim();
+
+                if (manualResponsible) return { name: manualResponsible, source: 'responsable' };
+                if (assignedAgent) return { name: assignedAgent, source: 'agente' };
+                return { name: UNASSIGNED_OWNER_NAME, source: UNASSIGNED_OWNER_SOURCE };
+            };
+
+            // Owner Performance with 'responsable' override. All assigned agents and manual responsable values are listed.
+            const ownerStats = new Map<string, { name: string, leads: number, appointments: number, unanswered: number, source: string }>();
+            const ensureOwner = (name: string, source: string) => {
+                const cleanName = name?.toString().trim();
+                if (!cleanName) return;
+                if (!ownerStats.has(cleanName)) {
+                    ownerStats.set(cleanName, { name: cleanName, leads: 0, appointments: 0, unanswered: 0, source });
+                }
+            };
+
             kpiConversations.forEach(conv => {
                 const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
-                const contactResponsable = attrs.responsable;
+                ensureOwner(conv.meta?.assignee?.name, 'agente');
+                ensureOwner(attrs.responsable, 'responsable');
+            });
 
-                // USER RULE: if 'responsable' exists in contact attributes, it takes precedence
-                const effectiveOwnerName = (contactResponsable && contactResponsable.toString().trim().length > 0)
-                    ? contactResponsable.toString()
-                    : (conv.meta?.assignee?.name || "Sin Asignar");
+            kpiConversations.forEach(conv => {
+                const effectiveOwner = getEffectiveOwner(conv);
+                ensureOwner(effectiveOwner.name, effectiveOwner.source);
+                const s = effectiveOwner.name ? ownerStats.get(effectiveOwner.name) : null;
+                if (!s) return;
 
-                if (!ownerStats.has(effectiveOwnerName)) {
-                    ownerStats.set(effectiveOwnerName, { name: effectiveOwnerName, leads: 0, appointments: 0 });
-                }
-                const s = ownerStats.get(effectiveOwnerName)!;
+                s.source = effectiveOwner.source === 'responsable' || effectiveOwner.source === UNASSIGNED_OWNER_SOURCE
+                    ? effectiveOwner.source
+                    : s.source;
                 s.leads++;
+                if (hasUnansweredCustomerMessage(conv)) s.unanswered++;
 
                 const hasAppointment = conv.labels && appointmentTags.some(l => conv.labels.includes(l));
                 if (hasAppointment) s.appointments++;
             });
 
             const ownerPerformance = Array.from(ownerStats.values())
-                .filter(s => s.name !== "Sin Asignar") // We usually show performance for actual names
                 .map(s => ({
                     ...s,
                     winRate: s.leads > 0 ? Math.round((s.appointments / s.leads) * 100) : 0,
                     score: Math.min(100, 70 + (s.appointments * 2))
                 }))
-                .sort((a, b) => b.leads - a.leads);
+                .sort((a, b) => b.leads - a.leads || a.name.localeCompare(b.name));
 
             // Operational Metrics
-            const nowTs = Math.floor(Date.now() / 1000);
             let leadsWithOwnerCount = 0;
-            let withinSlaCount = 0;
+            let unassignedLeadsCount = 0;
 
             // Traffic Peak Hours Calculation (0-23)
             const hourCounts = new Array(24).fill(0);
@@ -324,33 +423,37 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             ];
 
             kpiConversations.forEach(conv => {
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
-                const contactResponsable = attrs.responsable;
-                const hasEffectiveOwner = (contactResponsable && contactResponsable.toString().trim().length > 0) || !!conv.meta?.assignee?.name;
+                const effectiveOwner = getEffectiveOwner(conv);
+                if (effectiveOwner.source === UNASSIGNED_OWNER_SOURCE) {
+                    unassignedLeadsCount++;
+                } else {
+                    leadsWithOwnerCount++;
+                }
 
-                if (hasEffectiveOwner) leadsWithOwnerCount++;
-
-                const d = parseTs(conv.timestamp);
+                const d = getCreatedDate(conv);
                 hourCounts[d.getHours()]++;
-
-                // SLA Check (Keeping it for calculation but user wants it off the KPI board)
-                if (conv.first_reply_created_at && conv.created_at && (conv.first_reply_created_at - conv.created_at) < 600) withinSlaCount++;
-
-                const daysOld = (nowTs - conv.timestamp) / 86400;
-                const bucket = agingBuckets.find(b => daysOld <= b.maxDays);
-                if (bucket) bucket.count++;
             });
 
             const trafficData = hourCounts.map((count, hour) => ({
                 hour: `${hour.toString().padStart(2, '0')}:00`,
-                count
+                count,
+                label: `${hour.toString().padStart(2, '0')}:00`
             }));
 
             const operationalMetrics = {
+                averageFirstResponseSeconds: firstResponseAverageSeconds,
+                firstResponseAverageSeconds,
+                firstResponseRawAverageSeconds,
+                firstResponseGraceSeconds: FIRST_RESPONSE_GRACE_SECONDS,
+                firstResponseMedianSeconds,
+                firstResponseCount: firstResponseSamples.length,
+                leadsWithOwnerCount,
+                unassignedLeadsCount,
+                totalLeads,
                 leadsWithOwnerPercentage: totalLeads > 0 ? Math.round((leadsWithOwnerCount / totalLeads) * 100) : 0,
-                leadsSinRespuesta: kpiConversations.filter(c => !c.first_reply_created_at).length,
-                slaPercentage: interactedConversations > 0 ? Math.round((withinSlaCount / interactedConversations) * 100) : 0,
-                agingData: agingBuckets,
+                leadsSinRespuesta: kpiConversations.filter(hasUnansweredCustomerMessage).length,
+                slaPercentage: 0,
+                agingData: [],
                 trafficData: trafficData,
                 followUpQueue: kpiConversations
                     .filter(c => c.labels?.includes('seguimiento_humano'))
@@ -370,8 +473,13 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                             labels: c.labels || [],
                             meta: c.meta,
                             custom_attributes: c.custom_attributes,
-                            last_message: c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null,
-                            timestamp: c.timestamp
+                            messages: c.messages || [],
+                            last_message: c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : c.last_non_activity_message || null,
+                            last_non_activity_message: c.last_non_activity_message,
+                            timestamp: c.timestamp,
+                            created_at: c.created_at,
+                            first_reply_created_at: c.first_reply_created_at,
+                            source: c.source
                         };
                     })
                     .sort((a, b) => b.timestamp - a.timestamp),
@@ -412,7 +520,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             }
             const monthlyTrendMap = new Map<string, MonthlyTrendItem>();
             kpiConversations.forEach(conv => {
-                const d = parseTs(conv.timestamp);
+                const d = getCreatedDate(conv);
                 const monthKey = d.toLocaleString('es-ES', { month: 'short', year: '2-digit' });
                 // We use timestamp to sort them chronologically later
                 const monthTs = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
@@ -435,75 +543,161 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const monthlyTrend = Array.from(monthlyTrendMap.values()).sort((a, b) => a.timestamp - b.timestamp);
 
             // 7. Human Performance Metrics
-            const humanFollowup = kpiConversations.filter(c => c.labels?.includes('seguimiento_humano')).length;
-            const humanAppointments = kpiConversations.filter(c => c.labels?.includes('cita_agendada_humano')).length;
-            const humanSales = kpiConversations.filter(c => c.labels?.includes('venta_exitosa'));
-            const totalHumanSalesVolume = humanSales.reduce((acc, c) => acc + parseMonto(c.custom_attributes?.monto_operacion), 0);
+            const conversationById = new Map(allConversationsRaw.map(conv => [Number(conv.id), conv]));
+            const labelsInclude = (conv: any, label: string) => Array.isArray(conv.labels) && conv.labels.includes(label);
+            const humanFollowup = kpiConversations.filter(c => labelsInclude(c, 'seguimiento_humano')).length;
+
+            const sortedLabelEvents = [...(labelEvents || [])].sort((a: any, b: any) =>
+                parseTs(a.occurred_at).getTime() - parseTs(b.occurred_at).getTime()
+            );
+            const trackingStartedAt = sortedLabelEvents[0]?.occurred_at || null;
+            const trackingStartDate = trackingStartedAt ? parseTs(trackingStartedAt) : null;
+            const humanAppointmentMode: 'exact' | 'mixed' | 'estimated_legacy' = !trackingStartDate
+                ? 'estimated_legacy'
+                : globalStart < trackingStartDate && globalEnd >= trackingStartDate
+                    ? 'mixed'
+                    : globalEnd < trackingStartDate
+                        ? 'estimated_legacy'
+                        : 'exact';
+
+            const filteredLabelEvents = sortedLabelEvents.filter((event: any) => {
+                const eventDate = parseTs(event.occurred_at);
+                if (Number.isNaN(eventDate.getTime()) || eventDate < globalStart || eventDate > globalEnd) return false;
+
+                if (selectedInboxes.length > 0) {
+                    const eventConversation = conversationById.get(Number(event.chatwoot_conversation_id));
+                    if (!eventConversation || !selectedInboxes.includes(Number(eventConversation.inbox_id))) return false;
+                }
+
+                return true;
+            });
+
+            const exactHumanAppointmentIds = new Set<number>();
+            filteredLabelEvents.forEach((event: any) => {
+                const added = Array.isArray(event.added_labels) ? event.added_labels : [];
+                const removed = Array.isArray(event.removed_labels) ? event.removed_labels : [];
+                if (added.includes('cita_agendada_humano') && removed.includes('seguimiento_humano')) {
+                    exactHumanAppointmentIds.add(Number(event.chatwoot_conversation_id));
+                }
+            });
+
+            const legacyHumanAppointments = kpiConversations.filter(conv => {
+                if (!labelsInclude(conv, 'cita_agendada_humano')) return false;
+                if (exactHumanAppointmentIds.has(Number(conv.id))) return false;
+                if (humanAppointmentMode === 'exact') return false;
+                if (!trackingStartDate) return true;
+                return getCreatedDate(conv) < trackingStartDate;
+            }).length;
+
+            const humanAppointmentConversions = humanAppointmentMode === 'estimated_legacy'
+                ? legacyHumanAppointments
+                : exactHumanAppointmentIds.size + legacyHumanAppointments;
+            const humanAppointmentConversionRate = (humanFollowup + humanAppointmentConversions) > 0
+                ? Math.round((humanAppointmentConversions / (humanFollowup + humanAppointmentConversions)) * 100)
+                : 0;
+
+            const humanSales = allConversationsRaw
+                .filter(conv => {
+                    if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return false;
+                    if (!labelsInclude(conv, 'venta_exitosa')) return false;
+
+                    const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                    const saleDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
+                    return !Number.isNaN(saleDate.getTime()) && saleDate >= globalStart && saleDate <= globalEnd;
+                });
+            const salesByDateMap = new Map<string, { date: string, sales: number, salesVolume: number }>();
+            const totalHumanSalesVolume = humanSales.reduce((acc, conv) => {
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const saleDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
+                const dateKey = getGuayaquilDateString(saleDate);
+                const amount = parseMonto(attrs.monto_operacion);
+                const row = salesByDateMap.get(dateKey) || { date: dateKey, sales: 0, salesVolume: 0 };
+                row.sales += 1;
+                row.salesVolume += amount;
+                salesByDateMap.set(dateKey, row);
+                return acc + amount;
+            }, 0);
+            const salesByDate = Array.from(salesByDateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
             const humanMetrics = {
                 followup: humanFollowup,
-                appointments: humanAppointments,
+                appointments: humanAppointmentConversions,
+                followupCurrent: humanFollowup,
+                humanAppointmentConversions,
+                humanAppointmentConversionRate,
+                humanAppointmentMode,
                 salesCount: humanSales.length,
                 salesVolume: totalHumanSalesVolume,
-                conversionRate: (humanFollowup + humanAppointments) > 0
-                    ? Math.round((humanAppointments / (humanFollowup + humanAppointments)) * 100)
-                    : 0
+                averageTicket: humanSales.length > 0 ? totalHumanSalesVolume / humanSales.length : 0,
+                conversionRate: humanAppointmentConversionRate,
+                salesByDate,
+                trackingStartedAt
             };
 
             // 8. Trend Metrics
-            const trendChannelCounts = {
-                Instagram: 0,
-                Facebook: 0,
-                WhatsApp: 0,
-                TikTok: 0,
-                Messenger: 0,
-                Otros: 0
+            const getChannelDisplayName = (conv: any) => {
+                const inbox = inboxMap.get(conv.inbox_id!);
+                const type = (inbox?.channel_type || '').toString().toLowerCase();
+                const name = (inbox?.name || '').toString();
+                const normalizedName = name.toLowerCase();
+
+                if (type.includes('instagram') || normalizedName.includes('instagram')) return 'Instagram';
+                if (type.includes('whatsapp') || normalizedName.includes('whatsapp')) return 'WhatsApp';
+                if (type.includes('telegram') || normalizedName.includes('telegram')) return 'Telegram';
+                if (type.includes('facebook') || normalizedName.includes('messenger')) return 'Messenger';
+                if (normalizedName.includes('tiktok')) return 'TikTok';
+                if (type.includes('web') || normalizedName.includes('web')) return 'Web';
+                return name || 'Otro';
             };
+
+            const trendChannelCounts = new Map<string, number>();
 
             const disqualificationMap = new Map<string, number>();
             const campaignMap = new Map<string, number>();
-            const revenueByDayMap = new Map<string, number>();
+            const revenueByDayMap = new Map<string, { date: string, value: number, sales: number }>();
 
             kpiConversations.forEach(conv => {
-                // Channel detection
-                const inbox = inboxMap.get(conv.inbox_id!);
-                const type = inbox?.channel_type || "";
-                if (type.includes("Whatsapp")) trendChannelCounts.WhatsApp++;
-                else if (type.includes("Instagram")) trendChannelCounts.Instagram++;
-                else if (type.includes("Facebook")) {
-                    if (inbox?.name.toLowerCase().includes("messenger")) trendChannelCounts.Messenger++;
-                    else trendChannelCounts.Facebook++;
-                }
-                else if (inbox?.name.toLowerCase().includes("tiktok")) trendChannelCounts.TikTok++;
-                else trendChannelCounts.Otros++;
+                const channelName = getChannelDisplayName(conv);
+                trendChannelCounts.set(channelName, (trendChannelCounts.get(channelName) || 0) + 1);
 
-                // Disqualification stats (only if has desinteresado label)
-                const desinteresadoLabels = globalTagSettings?.unqualifiedTags || [];
-                const matchedDisqualified = conv.labels?.find(l => desinteresadoLabels.includes(l));
+                const matchedDisqualified = conv.labels?.find(l => unqualifiedTags.includes(l));
                 if (matchedDisqualified) {
                     disqualificationMap.set(matchedDisqualified, (disqualificationMap.get(matchedDisqualified) || 0) + 1);
                 }
 
-                // Campaigns
                 const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
                 const camp = attrs.campana?.toString();
                 if (camp && camp.trim()) {
-                    campaignMap.set(camp, (campaignMap.get(camp) || 0) + 1);
-                }
-
-                // Revenue peaks (only for successful sales)
-                if (conv.labels?.includes('venta_exitosa')) {
-                    const dateStr = parseTs(conv.timestamp).toISOString().split('T')[0];
-                    const val = parseMonto(conv.custom_attributes?.monto_operacion);
-                    revenueByDayMap.set(dateStr, (revenueByDayMap.get(dateStr) || 0) + val);
+                    const cleanCamp = camp.trim();
+                    campaignMap.set(cleanCamp, (campaignMap.get(cleanCamp) || 0) + 1);
                 }
             });
 
+            allConversationsRaw.forEach(conv => {
+                if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return;
+                if (!conv.labels?.includes('venta_exitosa')) return;
+
+                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const revenueDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
+                if (Number.isNaN(revenueDate.getTime()) || revenueDate < globalStart || revenueDate > globalEnd) return;
+
+                const dateStr = getGuayaquilDateString(revenueDate);
+                const val = parseMonto(attrs.monto_operacion);
+                const row = revenueByDayMap.get(dateStr) || { date: dateStr, value: 0, sales: 0 };
+                row.value += val;
+                row.sales += 1;
+                revenueByDayMap.set(dateStr, row);
+            });
+
+            const revenuePeaks = Array.from(revenueByDayMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+            const revenuePeakDays = [...revenuePeaks].sort((a, b) => b.value - a.value).slice(0, 5);
+
             const trendMetrics = {
-                channelLeads: Object.entries(trendChannelCounts).map(([name, value]) => ({ name, value })).filter(c => c.value > 0),
-                disqualificationStats: Array.from(disqualificationMap.entries()).map(([name, value]) => ({ name, value })),
+                channelLeads: Array.from(trendChannelCounts.entries()).map(([name, value]) => ({ name, value })).filter(c => c.value > 0).sort((a, b) => b.value - a.value),
+                disqualificationStats: Array.from(disqualificationMap.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
                 campaignList: Array.from(campaignMap.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
-                revenuePeaks: Array.from(revenueByDayMap.entries()).map(([date, value]) => ({ date, value })).sort((a, b) => a.date.localeCompare(b.date))
+                revenuePeaks,
+                revenuePeakDays
             };
 
             return {
@@ -544,7 +738,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 humanMetrics: emptyData.humanMetrics
             };
         }
-    }, [allConversationsRaw, inboxes, configuredLabels, globalTagSettings, filters]);
+    }, [allConversationsRaw, labelEvents, inboxes, configuredLabels, globalTagSettings, filters]);
 
     return { loading, error, data, refetch: contextRefetch };
 };

@@ -2,20 +2,38 @@ import { useState } from "react";
 import { startOfMonth, endOfMonth } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { Loader2, ArrowRight, Filter, TrendingDown, Percent } from "lucide-react";
+import { Loader2, ArrowRight, Filter, TrendingDown, Percent, Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
     BarChart,
     Bar,
     XAxis,
     YAxis,
     CartesianGrid,
-    Tooltip,
+    Tooltip as RechartsTooltip,
     ResponsiveContainer,
     Cell,
     LabelList
 } from "recharts";
 
 import { useDashboardContext } from "@/context/DashboardDataContext";
+
+const MetricInfo = ({ text }: { text: string }) => (
+    <Tooltip>
+        <TooltipTrigger asChild>
+            <button
+                type="button"
+                className="order-last inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Informacion de la metrica"
+            >
+                <Info className="h-3.5 w-3.5" />
+            </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-64 text-xs leading-relaxed">
+            {text}
+        </TooltipContent>
+    </Tooltip>
+);
 
 const FunnelLayer = () => {
     const { globalFilters, tagSettings } = useDashboardContext();
@@ -92,7 +110,7 @@ const FunnelLayer = () => {
                                         width={120}
                                         tick={{ fontSize: 12, fontWeight: 500 }}
                                     />
-                                    <Tooltip
+                                    <RechartsTooltip
                                         cursor={{ fill: 'transparent' }}
                                         contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                                     />
@@ -114,6 +132,7 @@ const FunnelLayer = () => {
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium flex items-center gap-2">
                                 <Percent className="h-4 w-4 text-indigo-500" />
+                                <MetricInfo text="Este porcentaje representa el total de leads que se vuelven SQLs." />
                                 Tasa de Calificación
                             </CardTitle>
                         </CardHeader>
@@ -130,6 +149,7 @@ const FunnelLayer = () => {
                         <CardHeader className="pb-2">
                             <CardTitle className="text-sm font-medium flex items-center gap-2">
                                 <TrendingDown className="h-4 w-4 text-emerald-500" />
+                                <MetricInfo text="Este porcentaje representa el total de SQLs que se convierten en citas." />
                                 Conversión a Cita
                             </CardTitle>
                         </CardHeader>
