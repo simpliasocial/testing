@@ -28,6 +28,7 @@ import {
 import { useDashboardContext } from "@/context/DashboardDataContext";
 
 const COLORS = ["#243d90", "#059669", "#d97706", "#7c3aed", "#db2777", "#475569", "#0891b2"];
+const WARM_COLORS = ["#ef4444", "#f97316", "#f43f5e", "#f59e0b", "#dc2626", "#ea580c"];
 
 const formatCurrency = (value: number) =>
     new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(value || 0);
@@ -167,7 +168,7 @@ const TrendLayer = () => {
                                     </ResponsiveContainer>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    {(trendMetrics.revenuePeakDays || []).slice(0, 4).map((item: any) => (
+                                    {((trendMetrics as any).revenuePeakDays || []).slice(0, 4).map((item: any) => (
                                         <div key={item.date} className="rounded-lg border bg-muted/20 p-3">
                                             <p className="text-xs font-semibold">{item.date}</p>
                                             <p className="text-lg font-bold text-emerald-700">{formatCurrency(item.value)}</p>
@@ -222,7 +223,7 @@ const TrendLayer = () => {
                                                 paddingAngle={4}
                                             >
                                                 {trendMetrics.disqualificationStats.map((entry: any, index: number) => (
-                                                    <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
+                                                    <Cell key={entry.name} fill={WARM_COLORS[index % WARM_COLORS.length]} />
                                                 ))}
                                             </Pie>
                                             <Tooltip formatter={(value: number) => [`${value} leads`, "Descalificacion"]} />
@@ -233,7 +234,7 @@ const TrendLayer = () => {
                                     {trendMetrics.disqualificationStats.slice(0, 6).map((item: any, index: number) => (
                                         <div key={item.name} className="flex items-center justify-between rounded-lg border p-2 text-sm">
                                             <div className="flex items-center gap-2 min-w-0">
-                                                <div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                                                <div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: WARM_COLORS[index % WARM_COLORS.length] }} />
                                                 <span className="truncate">{item.name}</span>
                                             </div>
                                             <span className="font-bold">{item.value}</span>

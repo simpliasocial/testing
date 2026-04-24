@@ -1,14 +1,32 @@
-import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 import { chatwootService } from '../services/ChatwootService';
 import { StorageService, MinifiedConversation } from '../services/StorageService';
 import { HybridDashboardService, mergeConversationsPreferApi } from '../services/HybridDashboardService';
 import { ConversationLabelEvent, LabelEventService } from '../services/LabelEventService';
 import { supabase } from '../lib/supabase';
+import { applyLatestLabelState, collectKnownLabels, getLeadAttrs, resolveLeadStage } from '../lib/conversationState';
 
 export interface DashboardFilters {
     startDate?: Date;
     endDate?: Date;
     selectedInboxes?: number[];
+}
+
+export interface ChatwootAttributeDefinition {
+    chatwoot_attribute_id?: number;
+    attribute_key: string;
+    attribute_display_name: string;
+    attribute_display_type: string;
+    attribute_description?: string;
+    attribute_scope?: string;
+    regex_pattern?: string | null;
+    regex_cue?: string | null;
+    raw_payload?: any;
+}
+
+export interface ScoreThresholds {
+    highMin: number;
+    mediumMin: number;
 }
 
 export interface TagConfig {
@@ -24,15 +42,26 @@ export interface TagConfig {
     humanSalesQueueTags?: string[];
     humanSaleTargetLabel?: string;
     humanAppointmentFieldKeys?: string[];
+    scoreAttributeKey?: string;
+    scoreAppointmentLabels?: string[];
+    scoreThresholds?: ScoreThresholds;
+    excelExportFields?: string[];
+}
+
+export interface ResolvedConversation extends MinifiedConversation {
+    resolvedLabels: string[];
+    resolvedAttrs: Record<string, any>;
+    resolvedStage: 'sale' | 'appointment' | 'unqualified' | 'followup' | 'sql' | 'other';
 }
 
 type DashboardDataSource = 'HYBRID' | 'API_ONLY' | 'SUPABASE_ONLY';
 
 type DashboardDataContextType = {
-    conversations: MinifiedConversation[];
+    conversations: ResolvedConversation[];
     labelEvents: ConversationLabelEvent[];
     inboxes: any[];
     labels: string[];
+    contactAttributeDefinitions: ChatwootAttributeDefinition[];
     tagSettings: TagConfig;
     loading: boolean;
     error: string | null;
@@ -40,7 +69,7 @@ type DashboardDataContextType = {
     lastLiveFetchAt: Date | null;
     liveError: string | null;
     historicalError: string | null;
-    updateTagSettings: (config: TagConfig) => void;
+    updateTagSettings: (config: TagConfig) => Promise<void>;
     globalFilters: DashboardFilters;
     setGlobalFilters: React.Dispatch<React.SetStateAction<DashboardFilters>>;
     refetch: () => Promise<void>;
@@ -55,7 +84,29 @@ export const DEFAULT_TAG_CONFIG: TagConfig = {
     humanAppointmentTargetLabel: 'cita_agendada_humano',
     humanSalesQueueTags: ['cita_agendada', 'cita_agendada_humano'],
     humanSaleTargetLabel: 'venta_exitosa',
-    humanAppointmentFieldKeys: []
+    scoreAttributeKey: '',
+    scoreAppointmentLabels: ['cita_agendada', 'cita', 'cita_agendada_humano'],
+    scoreThresholds: {
+        highMin: 20,
+        mediumMin: 10
+    },
+    excelExportFields: [
+        "ID",
+        "Nombre",
+        "Telefono",
+        "Canal",
+        "Etiquetas",
+        "Correo",
+        "Monto",
+        "Fecha Monto",
+        "Agencia",
+        "Check-in",
+        "Check-out",
+        "URL Red Social",
+        "Enlace Chatwoot",
+        "Fecha Ingreso",
+        "Ultima Interaccion"
+    ]
 };
 
 const TAG_SETTINGS_STORAGE_KEY = 'dashboard_tag_settings';
@@ -67,6 +118,29 @@ const normalizeTagArray = (value: unknown, fallback: string[]) => {
             .map(item => String(item || '').trim())
             .filter(Boolean)
     ));
+};
+
+const normalizeScoreThresholds = (value?: Partial<ScoreThresholds> | null): ScoreThresholds => {
+    const defaultHigh = DEFAULT_TAG_CONFIG.scoreThresholds?.highMin ?? 20;
+    const defaultMedium = DEFAULT_TAG_CONFIG.scoreThresholds?.mediumMin ?? 10;
+
+    const parsedHigh = Number(value?.highMin);
+    const parsedMedium = Number(value?.mediumMin);
+
+    const highMin = Number.isFinite(parsedHigh) ? parsedHigh : defaultHigh;
+    const mediumMin = Number.isFinite(parsedMedium) ? parsedMedium : defaultMedium;
+
+    if (highMin <= mediumMin) {
+        return {
+            highMin: defaultHigh,
+            mediumMin: defaultMedium
+        };
+    }
+
+    return {
+        highMin,
+        mediumMin
+    };
 };
 
 export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig => ({
@@ -81,14 +155,24 @@ export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig
     humanAppointmentTargetLabel: String(value?.humanAppointmentTargetLabel || DEFAULT_TAG_CONFIG.humanAppointmentTargetLabel || '').trim() || DEFAULT_TAG_CONFIG.humanAppointmentTargetLabel,
     humanSalesQueueTags: normalizeTagArray(value?.humanSalesQueueTags, DEFAULT_TAG_CONFIG.humanSalesQueueTags || []),
     humanSaleTargetLabel: String(value?.humanSaleTargetLabel || DEFAULT_TAG_CONFIG.humanSaleTargetLabel || '').trim() || DEFAULT_TAG_CONFIG.humanSaleTargetLabel,
-    humanAppointmentFieldKeys: normalizeTagArray(value?.humanAppointmentFieldKeys, DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || [])
+    humanAppointmentFieldKeys: normalizeTagArray(value?.humanAppointmentFieldKeys, DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || []),
+    scoreAttributeKey: String(value?.scoreAttributeKey || DEFAULT_TAG_CONFIG.scoreAttributeKey || '').trim(),
+    scoreAppointmentLabels: normalizeTagArray(value?.scoreAppointmentLabels, DEFAULT_TAG_CONFIG.scoreAppointmentLabels || []),
+    scoreThresholds: normalizeScoreThresholds(value?.scoreThresholds),
+    excelExportFields: normalizeTagArray(value?.excelExportFields, DEFAULT_TAG_CONFIG.excelExportFields || [])
 });
 
 const persistTagSettingsLocally = (config: TagConfig) => {
+    const serialized = JSON.stringify(normalizeTagConfig(config));
     try {
-        localStorage.setItem(TAG_SETTINGS_STORAGE_KEY, JSON.stringify(config));
+        localStorage.setItem(TAG_SETTINGS_STORAGE_KEY, serialized);
     } catch (storageError) {
-        console.warn('[Dashboard] Could not persist tag settings in localStorage:', storageError);
+        try {
+            localStorage.removeItem(TAG_SETTINGS_STORAGE_KEY);
+            localStorage.setItem(TAG_SETTINGS_STORAGE_KEY, serialized);
+        } catch (retryError) {
+            console.warn('[Dashboard] Could not persist tag settings in localStorage:', retryError);
+        }
     }
 };
 
@@ -104,12 +188,15 @@ const readLocalTagSettings = (): TagConfig | null => {
 };
 
 const POLL_INTERVAL_MS = 30000;
+const HISTORICAL_DETAIL_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+const HISTORICAL_DETAIL_REFRESH_LIMIT = 250;
 
 const DashboardDataContext = createContext<DashboardDataContextType>({
     conversations: [],
     labelEvents: [],
     inboxes: [],
     labels: [],
+    contactAttributeDefinitions: [],
     tagSettings: DEFAULT_TAG_CONFIG,
     loading: true,
     error: null,
@@ -117,7 +204,7 @@ const DashboardDataContext = createContext<DashboardDataContextType>({
     lastLiveFetchAt: null,
     liveError: null,
     historicalError: null,
-    updateTagSettings: () => { },
+    updateTagSettings: async () => { },
     globalFilters: {},
     setGlobalFilters: () => { },
     refetch: async () => { }
@@ -132,11 +219,73 @@ const isAbortError = (error: any) =>
     error?.name === 'CanceledError' ||
     error?.message === 'canceled';
 
+const normalizeText = (value: unknown) => String(value || '').trim();
+
+const resolveAttributeScope = (definition: any) => {
+    const rawPayload = definition?.raw_payload || definition;
+    const directScope = normalizeText(definition?.attribute_scope || rawPayload?.attribute_scope).toLowerCase();
+    if (directScope.includes('conversation')) return 'conversation';
+    if (directScope.includes('contact')) return 'contact';
+
+    const directModel = normalizeText(definition?.attribute_model || rawPayload?.attribute_model_type).toLowerCase();
+    if (directModel.includes('conversation')) return 'conversation';
+    if (directModel.includes('contact')) return 'contact';
+
+    const numericModel = Number(rawPayload?.attribute_model ?? definition?.attribute_model);
+    if (!Number.isNaN(numericModel)) {
+        return numericModel === 0 ? 'conversation' : 'contact';
+    }
+
+    return 'contact';
+};
+
+const normalizeAttributeDefinition = (definition: any): ChatwootAttributeDefinition | null => {
+    const rawPayload = definition?.raw_payload || definition;
+    const attribute_key = normalizeText(definition?.attribute_key || rawPayload?.attribute_key || rawPayload?.key);
+    if (!attribute_key) return null;
+
+    const chatwoot_attribute_id = Number(definition?.chatwoot_attribute_id ?? rawPayload?.id);
+
+    return {
+        chatwoot_attribute_id: Number.isNaN(chatwoot_attribute_id) ? undefined : chatwoot_attribute_id,
+        attribute_key,
+        attribute_display_name: normalizeText(definition?.attribute_display_name || rawPayload?.attribute_display_name || attribute_key),
+        attribute_display_type: normalizeText(definition?.attribute_display_type || rawPayload?.attribute_display_type || rawPayload?.type),
+        attribute_description: normalizeText(definition?.attribute_description || rawPayload?.attribute_description || rawPayload?.description || rawPayload?.regex_cue),
+        attribute_scope: resolveAttributeScope(definition),
+        regex_pattern: definition?.regex_pattern ?? rawPayload?.regex_pattern ?? null,
+        regex_cue: definition?.regex_cue ?? rawPayload?.regex_cue ?? null,
+        raw_payload: rawPayload
+    };
+};
+
+const dedupeAttributeDefinitions = (definitions: any[]) => {
+    const byKey = new Map<string, ChatwootAttributeDefinition>();
+
+    definitions.forEach((definition) => {
+        const normalizedDefinition = normalizeAttributeDefinition(definition);
+        if (!normalizedDefinition) return;
+
+        const existing = byKey.get(normalizedDefinition.attribute_key);
+        byKey.set(normalizedDefinition.attribute_key, {
+            ...existing,
+            ...normalizedDefinition
+        });
+    });
+
+    return Array.from(byKey.values())
+        .filter((definition) => definition.attribute_scope !== 'conversation')
+        .sort((a, b) =>
+            (a.attribute_display_name || a.attribute_key).localeCompare(b.attribute_display_name || b.attribute_key)
+        );
+};
+
 export const DashboardDataProvider = ({ children }: { children: ReactNode }) => {
     const [conversations, setConversations] = useState<MinifiedConversation[]>([]);
     const [labelEvents, setLabelEvents] = useState<ConversationLabelEvent[]>([]);
     const [inboxes, setInboxes] = useState<any[]>([]);
     const [labels, setLabels] = useState<string[]>([]);
+    const [contactAttributeDefinitions, setContactAttributeDefinitions] = useState<ChatwootAttributeDefinition[]>([]);
     const [tagSettings, setTagSettings] = useState<TagConfig>(DEFAULT_TAG_CONFIG);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -149,6 +298,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     const conversationsRef = useRef<MinifiedConversation[]>([]);
     const abortControllerRef = useRef<AbortController | null>(null);
     const isFetchingRef = useRef(false);
+    const lastHistoricalDetailRefreshAtRef = useRef(0);
 
     const updateVisualState = async (newData: MinifiedConversation[], persist = true) => {
         conversationsRef.current = newData;
@@ -162,6 +312,28 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             }
         }
     };
+
+    const resolvedConversations = useMemo<ResolvedConversation[]>(() => {
+        const patched = applyLatestLabelState(conversations, labelEvents);
+        return patched.map(conv => {
+            const resolvedAttrs = getLeadAttrs(conv);
+            return {
+                ...conv,
+                resolvedLabels: conv.labels || [],
+                resolvedAttrs,
+                resolvedStage: resolveLeadStage(conv, tagSettings)
+            };
+        });
+    }, [conversations, labelEvents, tagSettings]);
+
+    const effectiveLabels = useMemo(
+        () => collectKnownLabels({
+            catalogLabels: labels,
+            conversations: resolvedConversations,
+            labelEvents
+        }),
+        [labels, resolvedConversations, labelEvents]
+    );
 
     const updateTagSettings = async (newConfig: TagConfig) => {
         const normalizedConfig = normalizeTagConfig(newConfig);
@@ -181,11 +353,13 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         }
 
         try {
-            await supabase
+            const { error: publicError } = await supabase
                 .from('dashboard_tag_settings')
                 .upsert({ account_id: 0, settings: normalizedConfig, updated_at: new Date().toISOString() }, { onConflict: 'account_id' });
+            if (publicError) throw publicError;
         } catch (publicError) {
             console.error('Failed to save dashboard tag settings:', publicError);
+            throw publicError;
         }
     };
 
@@ -265,11 +439,71 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     const fetchLabels = async (signal: AbortSignal) => {
         try {
             const labelsData = await chatwootService.getLabels({ signal });
-            setLabels(Array.isArray(labelsData) ? labelsData.filter(l => typeof l === 'string') : []);
+            const normalizedApiLabels = Array.isArray(labelsData)
+                ? Array.from(new Set(labelsData.filter(l => typeof l === 'string').map(l => l.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+                : [];
+            if (normalizedApiLabels.length > 0) {
+                setLabels(normalizedApiLabels);
+                return;
+            }
         } catch (labelsError: any) {
             if (!isAbortError(labelsError)) {
-                console.error('Failed to fetch labels:', labelsError);
+                console.warn('[Dashboard] Chatwoot labels failed, trying fallback:', labelsError);
             }
+        }
+
+        try {
+            const { data, error: dbError } = await supabase
+                .schema('cw')
+                .from('conversations_current')
+                .select('labels');
+
+            if (dbError) throw dbError;
+
+            const fallbackLabels = Array.from(new Set([
+                ...(data || []).flatMap((row: any) => Array.isArray(row?.labels) ? row.labels : []),
+                ...conversationsRef.current.flatMap((conv) => Array.isArray(conv?.labels) ? conv.labels : [])
+            ].map(label => String(label || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+
+            setLabels(fallbackLabels);
+        } catch (dbError) {
+            console.error('Failed to fetch fallback labels:', dbError);
+            setLabels(Array.from(new Set(
+                conversationsRef.current
+                    .flatMap((conv) => Array.isArray(conv?.labels) ? conv.labels : [])
+                    .map(label => String(label || '').trim())
+                    .filter(Boolean)
+            )).sort((a, b) => a.localeCompare(b)));
+        }
+    };
+
+    const fetchContactAttributeDefinitions = async (signal: AbortSignal) => {
+        try {
+            const apiDefinitions = await chatwootService.getAttributeDefinitions({ signal });
+            const normalizedDefinitions = dedupeAttributeDefinitions(apiDefinitions || []);
+            if (normalizedDefinitions.length > 0) {
+                setContactAttributeDefinitions(normalizedDefinitions);
+                return;
+            }
+        } catch (attributeError: any) {
+            if (!isAbortError(attributeError)) {
+                console.warn('[Dashboard] Chatwoot attribute definitions failed, trying Supabase:', attributeError);
+            }
+        }
+
+        try {
+            const { data, error: dbError } = await supabase
+                .schema('cw')
+                .from('attribute_definitions')
+                .select('*')
+                .eq('attribute_scope', 'contact')
+                .order('attribute_display_name', { ascending: true });
+
+            if (dbError) throw dbError;
+            setContactAttributeDefinitions(dedupeAttributeDefinitions(data || []));
+        } catch (dbError) {
+            console.error('Failed to fetch contact attribute definitions from Supabase:', dbError);
+            setContactAttributeDefinitions([]);
         }
     };
 
@@ -321,9 +555,49 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 return;
             }
 
-            const merged = mergeConversationsPreferApi(historical, live);
-            await updateVisualState(merged);
+            let merged = mergeConversationsPreferApi(historical, live);
+
+            const now = Date.now();
+            const shouldRefreshHistoricalSnapshots = historicalSucceeded && (
+                showLoading ||
+                lastHistoricalDetailRefreshAtRef.current === 0 ||
+                (now - lastHistoricalDetailRefreshAtRef.current) >= HISTORICAL_DETAIL_REFRESH_INTERVAL_MS
+            );
+
+            if (shouldRefreshHistoricalSnapshots) {
+                const liveConversationIds = new Set(live.map((conversation) => Number(conversation.id)));
+                const staleHistoricalIds = historical
+                    .filter((conversation) => !liveConversationIds.has(Number(conversation.id)))
+                    .sort((a, b) => (b.timestamp || b.created_at || 0) - (a.timestamp || a.created_at || 0))
+                    .map((conversation) => Number(conversation.id))
+                    .filter((conversationId) => Number.isFinite(conversationId))
+                    .slice(0, HISTORICAL_DETAIL_REFRESH_LIMIT);
+
+                if (staleHistoricalIds.length > 0) {
+                    try {
+                        const refreshedHistoricalSnapshots = await HybridDashboardService.refreshConversationDetailsById(
+                            staleHistoricalIds,
+                            {
+                                signal,
+                                limit: HISTORICAL_DETAIL_REFRESH_LIMIT
+                            }
+                        );
+
+                        if (!signal.aborted && refreshedHistoricalSnapshots.length > 0) {
+                            merged = mergeConversationsPreferApi(merged, refreshedHistoricalSnapshots);
+                        }
+                    } catch (historicalRefreshError) {
+                        if (!isAbortError(historicalRefreshError)) {
+                            console.warn('[Dashboard] Historical snapshot refresh failed, keeping Supabase fallback:', historicalRefreshError);
+                        }
+                    }
+                }
+
+                lastHistoricalDetailRefreshAtRef.current = now;
+            }
+
             await fetchLabelEvents();
+            await updateVisualState(merged);
 
             if (historicalSucceeded && liveSucceeded) setDataSource('HYBRID');
             else if (liveSucceeded) setDataSource('API_ONLY');
@@ -368,6 +642,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             await Promise.all([
                 fetchInboxes(signal),
                 fetchLabels(signal),
+                fetchContactAttributeDefinitions(signal),
                 fetchLabelEvents(),
                 refreshHybridData(signal, conversationsRef.current.length === 0)
             ]);
@@ -399,10 +674,11 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
 
     return (
         <DashboardDataContext.Provider value={{
-            conversations,
+            conversations: resolvedConversations,
             labelEvents,
             inboxes,
-            labels,
+            labels: effectiveLabels,
+            contactAttributeDefinitions,
             tagSettings,
             loading,
             error,

@@ -33,6 +33,7 @@ export interface MinifiedConversation {
         sender_type?: string;
     };
     source?: 'api' | 'supabase' | 'cache';
+    perfil_url?: string;
 }
 
 const DB_NAME = 'MonteMidasDB';

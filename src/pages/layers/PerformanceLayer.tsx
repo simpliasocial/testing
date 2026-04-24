@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useDashboardContext } from "@/context/DashboardDataContext";
+import { useAuth } from "@/context/AuthContext";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { CalendarCheck2, ArrowRightLeft, DollarSign, Loader2, TrendingUp } from "lucide-react";
 import {
@@ -59,6 +60,7 @@ const PerformanceLayer = () => {
         ...globalFilters,
         ...tagSettings
     });
+    const { role } = useAuth();
 
     const humanFollowupQueueTags = tagSettings.humanFollowupQueueTags || ['seguimiento_humano'];
     const humanAppointmentTargetLabel = tagSettings.humanAppointmentTargetLabel || 'cita_agendada_humano';
@@ -229,44 +231,48 @@ const PerformanceLayer = () => {
                         </div>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                        <div className="rounded-xl border bg-muted/20 p-4">
-                            <div className="grid gap-3 lg:grid-cols-[1fr_auto_1fr] lg:items-end">
-                                <div className="space-y-2">
-                                    <p className="text-xs font-medium text-muted-foreground">Etiqueta inicial</p>
-                                    <Select value={transitionFromLabel} onValueChange={setTransitionFromLabel}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Selecciona etiqueta inicial" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {availableHumanTransitionLabels.map((label) => (
-                                                <SelectItem key={`human-from-${label}`} value={label}>
-                                                    {label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                        {role === 'admin' && (
+                            <div className="rounded-xl border bg-muted/20 p-4">
+                                <div className="grid gap-3 lg:grid-cols-[1fr_auto_1fr] lg:items-end">
+                                    <div className="space-y-2">
+                                        <p className="text-xs font-medium text-muted-foreground">Etiqueta inicial</p>
+                                        <Select value={transitionFromLabel} onValueChange={setTransitionFromLabel}>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Selecciona etiqueta inicial" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {availableHumanTransitionLabels.map((label) => (
+                                                    <SelectItem key={`human-from-${label}`} value={label}>
+                                                        {label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
 
-                                <div className="flex items-center justify-center pb-1 text-muted-foreground">
-                                    <ArrowRightLeft className="h-4 w-4" />
-                                </div>
+                                    <div className="flex items-center justify-center pb-1 text-muted-foreground">
+                                        <ArrowRightLeft className="h-4 w-4" />
+                                    </div>
 
-                                <div className="space-y-2">
-                                    <p className="text-xs font-medium text-muted-foreground">Etiqueta destino</p>
-                                    <Select value={transitionToLabel} onValueChange={setTransitionToLabel}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Selecciona etiqueta destino" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {availableHumanTransitionLabels.map((label) => (
-                                                <SelectItem key={`human-to-${label}`} value={label}>
-                                                    {label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                    <div className="space-y-2">
+                                        <p className="text-xs font-medium text-muted-foreground">Etiqueta destino</p>
+                                        <Select value={transitionToLabel} onValueChange={setTransitionToLabel}>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Selecciona etiqueta destino" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {availableHumanTransitionLabels.map((label) => (
+                                                    <SelectItem key={`human-to-${label}`} value={label}>
+                                                        {label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
                                 </div>
                             </div>
+                        )}
+                        <div>
                             <p className="mt-3 text-xs text-muted-foreground">
                                 Se calcula sobre leads que estaban en <span className="font-medium text-foreground">{transitionFromLabel}</span> y después pasaron a <span className="font-medium text-foreground">{transitionToLabel}</span>, respetando el rango y canal seleccionados.
                             </p>

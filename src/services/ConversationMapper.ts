@@ -45,7 +45,8 @@ export const mapChatwootConversationToMinified = (conv: any): MinifiedConversati
     messages: conv.messages,
     inbox_id: conv.inbox_id,
     last_non_activity_message: conv.last_non_activity_message,
-    source: 'api'
+    source: 'api',
+    perfil_url: conv.perfil_url
 });
 
 export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversation => {
@@ -96,13 +97,13 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
         created_at: parseDateToUnix(row.created_at_chatwoot),
         first_reply_created_at: parseDateToUnix(row.first_reply_created_at_chatwoot),
         meta: {
-        sender: {
-            id: sender.id || row.chatwoot_contact_id,
-            name: sender.name || row.nombre_completo || 'Sin Nombre',
-            email: sender.email || row.correo,
-            phone_number: sender.phone_number || row.celular,
-            identifier: sender.identifier,
-            additional_attributes: sender.additional_attributes || row.raw_payload?.meta?.sender?.additional_attributes || {},
+            sender: {
+                id: sender.id || row.chatwoot_contact_id,
+                name: sender.name || row.nombre_completo || 'Sin Nombre',
+                email: sender.email || row.correo,
+                phone_number: sender.phone_number || row.celular,
+                identifier: sender.identifier,
+                additional_attributes: sender.additional_attributes || row.raw_payload?.meta?.sender?.additional_attributes || {},
                 custom_attributes: {
                     ...(sender.custom_attributes || {}),
                     ...customAttributes
@@ -121,7 +122,8 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
             content: row.last_non_activity_message_preview || lastNonActivity.content,
             created_at: parseDateToUnix(row.last_message_at || lastNonActivity.created_at)
         },
-        source: 'supabase'
+        source: 'supabase',
+        perfil_url: row.perfil_url
     };
 };
 
@@ -144,9 +146,12 @@ export const mapMinifiedToChatwootConversation = (conv: MinifiedConversation): C
         assignee: conv.meta?.assignee
     } as any,
     labels: conv.labels || [],
-    last_non_activity_message: conv.last_non_activity_message || {
-        content: conv.source === 'supabase' ? 'Historial de Supabase' : 'Ver historial',
-        created_at: conv.timestamp
+    last_non_activity_message: {
+        content: conv.last_non_activity_message?.content || (conv.source === 'supabase' ? 'Historial de Supabase' : 'Ver historial'),
+        created_at: conv.last_non_activity_message?.created_at || conv.timestamp,
+        message_type: conv.last_non_activity_message?.message_type,
+        message_direction: conv.last_non_activity_message?.message_direction,
+        sender_type: conv.last_non_activity_message?.sender_type
     },
     timestamp: conv.timestamp,
     created_at: conv.created_at,

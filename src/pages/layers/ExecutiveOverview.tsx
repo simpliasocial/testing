@@ -77,14 +77,14 @@ const ExecutiveOverview = () => {
                     value={kpis.interestedLeads.toLocaleString()}
                     subtitle="Vía etiquetas seleccionadas"
                     icon={Target}
-                    variant="accent"
+                    variant="primary"
                 />
                 <KPICard
                     title="Citas Agendadas"
                     value={kpis.scheduledAppointments.toLocaleString()}
                     subtitle="Suma de etiquetas de cita"
                     icon={CalendarIcon}
-                    variant="accent"
+                    variant="success"
                 />
                 <KPICard
                     title="Cierre / Ventas"

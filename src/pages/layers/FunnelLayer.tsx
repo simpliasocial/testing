@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { startOfMonth, endOfMonth } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { Loader2, ArrowRight, Filter, TrendingDown, Percent, Info } from "lucide-react";
+import { Loader2, ArrowRight, Filter, TrendingDown, Percent, Info, Activity, History, DollarSign } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+    FunnelChart,
+    Funnel,
     BarChart,
     Bar,
     XAxis,
@@ -58,131 +59,164 @@ const FunnelLayer = () => {
         );
     }
 
-    const { kpis } = data;
+    const { kpis, historicalFunnelData } = data;
 
-    // Funnel Data Construction
-    // Stage 1: Total Leads
-    // Stage 2: SQLs (Interested)
-    // Stage 3: Scheduled (Citas)
-    // Stage 4: Won (Ventas)
-    const funnelData = [
-        { name: "Total Leads", value: kpis.totalLeads, color: "#94a3b8" },
-        { name: "SQLs (Calificados)", value: kpis.interestedLeads, color: "#6366f1" },
-        { name: "Citas Agendadas", value: kpis.scheduledAppointments, color: "#10b981" },
-        { name: "Ventas Exitosas", value: kpis.closedSales || 0, color: "#f59e0b" },
-    ];
-
-    // Conversion Calculations
+    // Conversion Calculations (Based on Historical, since that represents the true progress)
     const getConversion = (current: number, previous: number) => {
         if (previous === 0) return 0;
         return Math.round((current / previous) * 100);
     };
 
-    const convTotalToSql = getConversion(funnelData[1].value, funnelData[0].value);
-    const convSqlToAppointment = getConversion(funnelData[2].value, funnelData[1].value);
-    const convAppointmentToSale = getConversion(funnelData[3].value, funnelData[2].value);
+    const historicalSql = historicalFunnelData?.[0]?.value || 0;
+    const historicalAppointment = historicalFunnelData?.[1]?.value || 0;
+    const historicalSale = historicalFunnelData?.[2]?.value || 0;
+
+    const convTotalToSql = getConversion(historicalSql, kpis.totalLeads);
+    const convSqlToAppointment = getConversion(historicalAppointment, historicalSql);
+    const convAppointmentToSale = getConversion(historicalSale, historicalAppointment);
+    const convTotalToAppointment = getConversion(historicalAppointment, kpis.totalLeads);
 
     return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Visual Funnel Chart */}
-                <Card className="lg:col-span-2">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Filter className="h-5 w-5 text-primary" />
-                            Embudo de Ventas (Funnel)
-                        </CardTitle>
-                        <CardDescription>Visualización del proceso comercial desde el primer contacto</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="h-[400px] w-full mt-4">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart
-                                    layout="vertical"
-                                    data={funnelData}
-                                    margin={{ top: 5, right: 80, left: 20, bottom: 5 }}
-                                >
-                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} strokeOpacity={0.1} />
-                                    <XAxis type="number" hide />
-                                    <YAxis
-                                        dataKey="name"
-                                        type="category"
-                                        width={120}
-                                        tick={{ fontSize: 12, fontWeight: 500 }}
-                                    />
-                                    <RechartsTooltip
-                                        cursor={{ fill: 'transparent' }}
-                                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                    />
-                                    <Bar dataKey="value" barSize={45} radius={[0, 4, 4, 0]}>
-                                        {funnelData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={entry.color} />
-                                        ))}
-                                        <LabelList dataKey="value" position="right" offset={10} style={{ fontWeight: 'bold' }} />
-                                    </Bar>
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Conversion Stats */}
-                <div className="space-y-6">
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium flex items-center gap-2">
-                                <Percent className="h-4 w-4 text-indigo-500" />
-                                <MetricInfo text="Este porcentaje representa el total de leads que se vuelven SQLs." />
-                                Tasa de Calificación
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{convTotalToSql}%</div>
-                            <p className="text-xs text-muted-foreground mt-1">Leads que se vuelven SQLs</p>
-                            <div className="w-full bg-secondary h-1.5 rounded-full mt-3 overflow-hidden">
-                                <div className="bg-indigo-500 h-full rounded-full" style={{ width: `${convTotalToSql}%` }} />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium flex items-center gap-2">
-                                <TrendingDown className="h-4 w-4 text-emerald-500" />
-                                <MetricInfo text="Este porcentaje representa el total de SQLs que se convierten en citas." />
-                                Conversión a Cita
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{convSqlToAppointment}%</div>
-                            <p className="text-xs text-muted-foreground mt-1">SQLs que llegan a agendar</p>
-                            <div className="w-full bg-secondary h-1.5 rounded-full mt-3 overflow-hidden">
-                                <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${convSqlToAppointment}%` }} />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                </div>
-            </div>
-
-            {/* Micro-Funnel Detail */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 py-4">
-                {funnelData.slice(0, -1).map((stage, i) => (
-                    <div key={stage.name} className="relative flex flex-col items-center p-4 bg-card border rounded-xl">
-                        <span className="text-xs text-muted-foreground font-medium uppercase">{stage.name}</span>
-                        <span className="text-xl font-bold mt-1 text-foreground">{stage.value}</span>
-                        {i < 2 && (
-                            <div className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 bg-background border rounded-full p-1 shadow-sm hidden md:block">
-                                <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                            </div>
-                        )}
+        <div className="space-y-10">
+            {/* RENDIMIENTO HISTÓRICO (FUNNEL) */}
+            <section className="space-y-4">
+                <div className="flex items-center gap-2 pb-2 border-b">
+                    <History className="h-6 w-6 text-emerald-500" />
+                    <div>
+                        <h2 className="text-xl font-bold tracking-tight">Embudo Orgánico de Conversión (Histórico)</h2>
+                        <p className="text-sm text-muted-foreground">Flujo acumulativo demostrando todos los Leads que probaron alcanzar una etapa en su vida útil, permitiendo conocer las tasas de cierre exactas.</p>
                     </div>
-                ))}
-                <div className="flex flex-col items-center p-4 bg-primary/10 border-primary/20 border rounded-xl">
-                    <span className="text-xs text-primary font-medium uppercase">Win Rate Final</span>
-                    <span className="text-xl font-bold mt-1 text-primary">{convAppointmentToSale}%</span>
                 </div>
-            </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Visual Funnel Chart */}
+                    <Card className="lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <Filter className="h-5 w-5 text-emerald-500" />
+                                Embudo de Conversión
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="h-[400px] w-full">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <FunnelChart>
+                                        <RechartsTooltip
+                                            contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                        />
+                                        <Funnel
+                                            dataKey="value"
+                                            data={
+                                                [
+                                                    { label: "Total Procesados", value: kpis.totalLeads, color: "#64748b" },
+                                                    ...(historicalFunnelData || [])
+                                                ]
+                                            }
+                                            isAnimationActive
+                                        >
+                                            <LabelList position="right" fill="#334155" stroke="none" dataKey="label" offset={10} />
+                                            <LabelList position="center" fill="#fff" stroke="none" dataKey="value" style={{ fontWeight: 'bold' }} />
+                                            {[...Array(4)].map((_, index) => (
+                                                <Cell key={`cell-${index}`} fill={index === 0 ? "#64748b" : historicalFunnelData?.[index - 1]?.color || "#000"} />
+                                            ))}
+                                        </Funnel>
+                                    </FunnelChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Conversion Stats */}
+                    <div className="space-y-6">
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                    <Percent className="h-4 w-4 text-indigo-500" />
+                                    <MetricInfo text="Calculado usando la información histórica de todos los tags. Porcentaje puro de los que logran pasar el filtro de SQL." />
+                                    Tasa Orgánica de Calificación
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">{convTotalToSql}%</div>
+                                <p className="text-xs text-muted-foreground mt-1">Leads que conectan para buscar información</p>
+                                <div className="w-full bg-secondary h-1.5 rounded-full mt-3 overflow-hidden">
+                                    <div className="bg-indigo-500 h-full rounded-full" style={{ width: `${convTotalToSql}%` }} />
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                    <TrendingDown className="h-4 w-4 text-emerald-500" />
+                                    <MetricInfo text="Mide cuántos SQLs orgánicos se transforman en Citas efectivas durante todo el ciclo de maduración del prospecto." />
+                                    Conversión pura a Cita
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">{convSqlToAppointment}%</div>
+                                <p className="text-xs text-muted-foreground mt-1">SQLs que llegan a agenda</p>
+                                <div className="w-full bg-secondary h-1.5 rounded-full mt-3 overflow-hidden">
+                                    <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${convSqlToAppointment}%` }} />
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                    <DollarSign className="h-4 w-4 text-emerald-600" />
+                                    <MetricInfo text="Determina el exito definitivo analizando cuántas Citas registradas se pagaron exitosamente." />
+                                    Conversión Orgánica a Venta
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="text-2xl font-bold">{convAppointmentToSale}%</div>
+                                <p className="text-xs text-muted-foreground mt-1">Citas efectivas finalizadas en venta</p>
+                                <div className="w-full bg-secondary h-1.5 rounded-full mt-3 overflow-hidden">
+                                    <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${convAppointmentToSale}%` }} />
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </div>
+                </div>
+
+                {/* Micro-Funnel Detail */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 py-4">
+                    <div className="relative flex flex-col items-center p-4 bg-card border rounded-xl">
+                        <span className="text-xs text-muted-foreground font-medium uppercase">TOTAL PROCESADOS</span>
+                        <span className="text-2xl font-bold mt-1 text-foreground">{kpis.totalLeads}</span>
+                        <span className="text-xs text-muted-foreground mt-2 opacity-0">.</span>
+                        <div className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 bg-background border rounded-full p-1 shadow-sm hidden md:block">
+                            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                        </div>
+                    </div>
+                    {/* Llegaron a SQL */}
+                    <div className="relative flex flex-col items-center p-4 bg-card border rounded-xl">
+                        <span className="text-xs text-muted-foreground font-medium uppercase">Llegaron a SQL</span>
+                        <span className="text-2xl font-bold mt-1 text-foreground">{historicalSql}</span>
+                        <span className="text-xs text-rose-500 mt-2 font-medium">⬇ {kpis.totalLeads - historicalSql} abandonaron (antes de SQL)</span>
+                        <div className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 bg-background border rounded-full p-1 shadow-sm hidden md:block">
+                            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                        </div>
+                    </div>
+                    {/* Alcanzaron Cita */}
+                    <div className="relative flex flex-col items-center p-4 bg-card border rounded-xl">
+                        <span className="text-xs text-muted-foreground font-medium uppercase">Alcanzaron Cita</span>
+                        <span className="text-2xl font-bold mt-1 text-foreground">{historicalAppointment}</span>
+                        <span className="text-xs text-rose-500 mt-2 font-medium">⬇ {historicalSql - historicalAppointment} se quedaron en SQL</span>
+                        <div className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 bg-background border rounded-full p-1 shadow-sm hidden md:block">
+                            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                        </div>
+                    </div>
+                    {/* Cerraron Venta */}
+                    <div className="relative flex flex-col items-center p-4 bg-primary/10 border-primary/20 border rounded-xl shadow-inner">
+                        <span className="text-xs text-primary font-bold uppercase">Cerraron Venta (WIN)</span>
+                        <span className="text-2xl font-bold mt-1 text-primary">{historicalSale}</span>
+                        <span className="text-xs text-rose-500 mt-2 font-medium">⬇ {historicalAppointment - historicalSale} se cayeron tras Cita</span>
+                    </div>
+                </div>
+            </section>
         </div>
     );
 };

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { useDashboardData } from "@/hooks/useDashboardData";
+import { useDashboardContext, DEFAULT_TAG_CONFIG } from "@/context/DashboardDataContext";
 import {
     Loader2,
     Download,
@@ -28,6 +28,9 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import ReportsPage from "@/pages/ReportsPage";
+import { useAuth } from "@/context/AuthContext";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 
 import { supabase } from "@/lib/supabase";
 
@@ -55,8 +58,9 @@ const DAY_OPTIONS = [
 ];
 
 const ReportingLayer = () => {
-    const [view, setView] = useState<'exports' | 'scheduled'>('exports');
-    const { loading: contextLoading } = useDashboardData();
+    const [view, setView] = useState<'exports' | 'scheduled' | 'config'>('exports');
+    const { loading: contextLoading, tagSettings, updateTagSettings, contactAttributeDefinitions, labels } = useDashboardContext();
+    const { role } = useAuth();
     const [isLoading, setIsLoading] = useState(false);
 
     const [reports, setReports] = useState<ScheduledReport[]>([]);
@@ -225,11 +229,111 @@ const ReportingLayer = () => {
                     <Mail className="w-4 h-4" />
                     Reportes Programados
                 </Button>
+                {role === 'admin' && (
+                    <Button
+                        variant={view === 'config' ? 'secondary' : 'ghost'}
+                        size="sm"
+                        onClick={() => setView('config')}
+                        className="gap-2"
+                    >
+                        <Settings className="w-4 h-4" />
+                        Configuración Excel
+                    </Button>
+                )}
             </div>
 
             {view === 'exports' ? (
                 <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                     <ReportsPage />
+                </div>
+            ) : view === 'config' ? (
+                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <FileSpreadsheet className="w-5 h-5 text-primary" />
+                                Configuración de Columnas Excel
+                            </CardTitle>
+                            <CardDescription>
+                                Selecciona qué campos se incluirán en las exportaciones manuales y automáticas.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                <div className="space-y-4">
+                                    <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Campos Base</h3>
+                                    <div className="space-y-2">
+                                        {["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"].map(field => (
+                                            <div key={field} className="flex items-center space-x-2">
+                                                <Checkbox
+                                                    id={`field-${field}`}
+                                                    checked={tagSettings?.excelExportFields?.includes(field) || false}
+                                                    onCheckedChange={(checked) => {
+                                                        const current = tagSettings?.excelExportFields || [];
+                                                        const next = checked
+                                                            ? [...current, field]
+                                                            : current.filter(f => f !== field);
+                                                        updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
+                                                    }}
+                                                />
+                                                <Label htmlFor={`field-${field}`}>{field}</Label>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Métricas Operativas</h3>
+                                    <div className="space-y-2">
+                                        {["Monto", "Fecha Monto", "Agencia", "Check-in", "Check-out", "Campana", "Ciudad", "Responsable", "URL Red Social"].map(field => (
+                                            <div key={field} className="flex items-center space-x-2">
+                                                <Checkbox
+                                                    id={`field-${field}`}
+                                                    checked={tagSettings?.excelExportFields?.includes(field) || false}
+                                                    onCheckedChange={(checked) => {
+                                                        const current = tagSettings?.excelExportFields || [];
+                                                        const next = checked
+                                                            ? [...current, field]
+                                                            : current.filter(f => f !== field);
+                                                        updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
+                                                    }}
+                                                />
+                                                <Label htmlFor={`field-${field}`}>{field}</Label>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Atributos Técnicos (IDs)</h3>
+                                    <div className="space-y-2">
+                                        {["ID Contacto", "ID Inbox", "ID Cuenta", "Origen Dato"].map(field => (
+                                            <div key={field} className="flex items-center space-x-2">
+                                                <Checkbox
+                                                    id={`field-${field}`}
+                                                    checked={tagSettings?.excelExportFields?.includes(field) || false}
+                                                    onCheckedChange={(checked) => {
+                                                        const current = tagSettings?.excelExportFields || [];
+                                                        const next = checked
+                                                            ? [...current, field]
+                                                            : current.filter(f => f !== field);
+                                                        updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
+                                                    }}
+                                                />
+                                                <Label htmlFor={`field-${field}`}>{field}</Label>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="pt-4 border-t">
+                                <p className="text-xs text-muted-foreground italic">
+                                    Los cambios se guardan automáticamente y afectan a todas las exportaciones del sistema.
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -354,7 +458,8 @@ const ReportingLayer = () => {
                         </Button>
                     </div>
                 </div>
-            )}
+            )
+            }
 
             {/* SHARED DIALOG FOR CREATE/EDIT */}
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -471,7 +576,7 @@ const ReportingLayer = () => {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-        </div>
+        </div >
     );
 };
 

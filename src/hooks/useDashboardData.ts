@@ -35,7 +35,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
     }, [filtersOrMonth]);
 
     const { startDate, endDate, selectedInboxes = [], ...overrideTags } = filters;
-    const { conversations: allConversationsRaw, labelEvents = [], inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error, refetch: contextRefetch } = useDashboardContext();
+    const { conversations: allConversations = [], labelEvents = [], inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error, refetch: contextRefetch } = useDashboardContext();
 
     const sqlTags = overrideTags.sqlTags || globalTagSettings.sqlTags;
     const appointmentTags = overrideTags.appointmentTags || globalTagSettings.appointmentTags;
@@ -60,6 +60,8 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             totalProfit: 0
         },
         funnelData: [] as any[],
+        historicalFunnelData: [] as any[],
+        labelDistribution: [] as any[],
         recentAppointments: [] as any[],
         channelData: [] as any[],
         campaignData: [] as any[],
@@ -119,7 +121,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
     };
 
     const data = useMemo(() => {
-        if (!allConversationsRaw || allConversationsRaw.length === 0) {
+        if (!allConversations || allConversations.length === 0) {
             return emptyData;
         }
 
@@ -175,8 +177,8 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             }
 
             console.log(`[Dashboard] Range: ${globalStart.toLocaleDateString()} -> ${globalEnd.toLocaleDateString()}`);
-            console.log(`[Dashboard] Total conversations in memory: ${allConversationsRaw.length}`);
-            allConversationsRaw.forEach((c, idx) => {
+            console.log(`[Dashboard] Total conversations in memory: ${allConversations.length}`);
+            allConversations.forEach((c, idx) => {
                 if (idx < 5) console.debug(`[Dashboard] Example Conv ${c.id} created: ${getCreatedDate(c).toLocaleString()} activity: ${getActivityDate(c).toLocaleString()}`);
             });
 
@@ -185,15 +187,12 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             let trendEnd = globalEnd;
 
             // Calculate Total Profit - All Time
-            const totalProfitAll = allConversationsRaw.reduce((sum, conv) => {
-                const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                const convAttrs = conv.custom_attributes || {};
-                const montoVal = contactAttrs.monto_operacion || convAttrs.monto_operacion;
-                return sum + parseMonto(montoVal);
+            const totalProfitAll = allConversations.reduce((sum, conv) => {
+                return sum + parseMonto(conv.resolvedAttrs.monto_operacion);
             }, 0);
 
             // Filter Data for KPIs
-            const kpiConversations = allConversationsRaw.filter(conv => {
+            const kpiConversations = allConversations.filter(conv => {
                 // 1. Channel Filter
                 if (selectedInboxes.length > 0 && !selectedInboxes.includes(conv.inbox_id)) {
                     return false;
@@ -212,21 +211,18 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             let monthlyProfit = 0;
             let totalProfit = 0;
 
-            allConversationsRaw.forEach(conv => {
+            allConversations.forEach(conv => {
                 // 1. Channel Filter for Profit too? Usually yes to be consistent
                 if (selectedInboxes.length > 0 && !selectedInboxes.includes(conv.inbox_id)) {
                     return;
                 }
 
-                const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                const convAttrs = conv.custom_attributes || {};
-                const montoVal = contactAttrs.monto_operacion || convAttrs.monto_operacion;
-                const monto = parseMonto(montoVal);
+                const monto = parseMonto(conv.resolvedAttrs.monto_operacion);
 
                 if (monto > 0) {
                     totalProfit += monto;
 
-                    const fechaMontoStr = contactAttrs.fecha_monto_operacion || convAttrs.fecha_monto_operacion;
+                    const fechaMontoStr = conv.resolvedAttrs.fecha_monto_operacion;
                     let fechaMonto: Date;
                     if (fechaMontoStr) {
                         fechaMonto = new Date(fechaMontoStr);
@@ -240,34 +236,79 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             });
 
             const totalLeads = kpiConversations.length;
-            const labelsIncludeAny = (conv: any, labels: string[]) =>
-                Array.isArray(conv?.labels) && labels.some(label => conv.labels.includes(label));
-            const countByLabels = (labels: string[]) =>
-                kpiConversations.filter(c => labelsIncludeAny(c, labels)).length;
 
-            const interestedLeadsCount = countByLabels(sqlTags);
+            const countByPrimaryStage = (stage: string) =>
+                kpiConversations.filter((conv) => conv.resolvedStage === stage).length;
+
+            const interestedLeadsCount = countByPrimaryStage('sql');
+
             // == DYNAMIC DISCOVERY ==
             const allLabelSet = new Set<string>();
             const allAttributeKeys = new Set<string>();
 
-            allConversationsRaw.forEach(conv => {
-                (conv.labels || []).forEach(l => allLabelSet.add(l));
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
-                Object.keys(attrs).forEach(k => allAttributeKeys.add(k));
+            allConversations.forEach(conv => {
+                (conv.resolvedLabels || []).forEach(l => allLabelSet.add(l));
             });
 
             // Count every label found for distribution
             const labelDistribution = Array.from(allLabelSet).map(label => ({
                 label: label.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
                 key: label,
-                value: countByLabels([label])
+                value: kpiConversations.filter(c => c.resolvedLabels.includes(label)).length
             })).sort((a, b) => b.value - a.value);
 
-            // Core KPI Mappings (Standard with Fallbacks)
-            const citaAgendadaCount = countByLabels(appointmentTags);
-            const desinteresadoCount = countByLabels(unqualifiedTags);
-            const ventaExitosaCount = countByLabels(saleTags);
-            const interesadoCount = countByLabels(sqlTags);
+            const hasHistoricalLabel = (conv: any, keys: string[]) => {
+                if (!keys || keys.length === 0) return false;
+                const searchSpace = new Set([
+                    ...(conv.historical_labels || []),
+                    ...(conv.resolvedLabels || []),
+                    ...(conv.labels || [])
+                ]);
+                return keys.some(k => searchSpace.has(k));
+            };
+
+            const _getTagsForStage = (stage: 'sale' | 'appointment' | 'sql' | 'unqualified') => {
+                switch (stage) {
+                    case 'sale':
+                        return [...(filters.saleTags || []), filters.humanSaleTargetLabel || 'venta_exitosa'].filter(Boolean);
+                    case 'appointment':
+                        return [
+                            ...(filters.appointmentTags || []),
+                            ...(filters.humanSalesQueueTags || []),
+                            filters.humanAppointmentTargetLabel || 'cita_agendada_humano'
+                        ].filter(Boolean);
+                    case 'sql':
+                        return filters.sqlTags || [];
+                    case 'unqualified':
+                        return filters.unqualifiedTags || [];
+                    default: return [];
+                }
+            };
+
+            let historicalVentaExitosaCount = 0;
+            let historicalCitaAgendadaCount = 0;
+            let historicalInteresadoCount = 0;
+
+            const saleTags = _getTagsForStage('sale');
+            const apptTags = _getTagsForStage('appointment');
+            const sqlTags = _getTagsForStage('sql');
+
+            kpiConversations.forEach(conv => {
+                // Cascading Funnel Logic: If they reached a deeper stage, they automatically succeeded in the prior stages.
+                const reachedSale = hasHistoricalLabel(conv, saleTags);
+                const reachedAppt = reachedSale || hasHistoricalLabel(conv, apptTags);
+                const reachedSql = reachedAppt || hasHistoricalLabel(conv, sqlTags);
+
+                if (reachedSale) historicalVentaExitosaCount++;
+                if (reachedAppt) historicalCitaAgendadaCount++;
+                if (reachedSql) historicalInteresadoCount++;
+            });
+
+            // Core KPI Mappings (Strict to Current Tags)
+            const interesadoCount = countByPrimaryStage('sql');
+            const citaAgendadaCount = countByPrimaryStage('appointment');
+            const ventaExitosaCount = countByPrimaryStage('sale');
+            const desinteresadoCount = countByPrimaryStage('unqualified');
 
             const schedulingRateVar = totalLeads > 0 ? Math.round((citaAgendadaCount / totalLeads) * 100) : 0;
             const discardRateVar = totalLeads > 0 ? Math.round((desinteresadoCount / totalLeads) * 100) : 0;
@@ -275,18 +316,20 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const responseRateVar = totalLeads > 0 ? Math.round((interactedConversations / totalLeads) * 100) : 0;
 
             const recentAppointments = kpiConversations
-                .filter(c => labelsIncludeAny(c, appointmentTags) || labelsIncludeAny(c, saleTags))
-                .slice(0, 5)
+                .filter(c => {
+                    const stage = c.resolvedStage;
+                    return stage === 'appointment' || stage === 'sale';
+                })
+                .slice(0, 5) // Most recent 5
                 .map(conv => {
-                    const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
                     return {
                         id: conv.id,
-                        name: conv.meta?.sender?.name || attrs.nombre_completo || 'Sin Nombre',
-                        cellphone: conv.meta?.sender?.phone_number || attrs.celular || 'Sin Teléfono',
-                        agency: attrs.agencia || 'Sin Agencia',
-                        date: attrs.fecha_visita || 'Pendiente',
-                        time: attrs.hora_visita || '',
-                        status: (conv.labels.includes('venta_exitosa') || conv.labels.includes('venta')) ? 'Finalizado' : 'Confirmado'
+                        name: conv.meta?.sender?.name || conv.resolvedAttrs.nombre_completo || 'Sin Nombre',
+                        cellphone: conv.meta?.sender?.phone_number || conv.resolvedAttrs.celular || 'Sin Teléfono',
+                        agency: conv.resolvedAttrs.agencia || 'Sin Agencia',
+                        date: conv.resolvedAttrs.fecha_visita || 'Pendiente',
+                        time: conv.resolvedAttrs.hora_visita || '',
+                        status: conv.resolvedStage === 'sale' ? 'Finalizado' : 'Confirmado'
                     };
                 });
 
@@ -294,6 +337,12 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 { label: "Interesado", value: interesadoCount, color: "hsl(200, 70%, 50%)" },
                 { label: "Cita Agendada", value: citaAgendadaCount, color: "hsl(45, 93%, 58%)" },
                 { label: "Venta Exitosa", value: ventaExitosaCount, color: "hsl(262, 83%, 58%)" },
+            ];
+
+            const historicalFunnelData = [
+                { label: "Llegaron a SQL", value: historicalInteresadoCount, color: "hsl(200, 70%, 50%)" },
+                { label: "Alcanzaron Cita", value: historicalCitaAgendadaCount, color: "hsl(45, 93%, 58%)" },
+                { label: "Cerraron Venta", value: historicalVentaExitosaCount, color: "hsl(262, 83%, 58%)" },
             ];
 
             // If the standard funnel is empty, we show the top labels instead
@@ -437,7 +486,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 s.leads++;
                 if (hasUnansweredCustomerMessage(conv)) s.unanswered++;
 
-                const hasAppointment = conv.labels && appointmentTags.some(l => conv.labels.includes(l));
+                const hasAppointment = conv.resolvedStage === 'appointment';
                 if (hasAppointment) s.appointments++;
             });
 
@@ -497,11 +546,11 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 agingData: [],
                 trafficData: trafficData,
                 followUpQueue: kpiConversations
-                    .filter(c => labelsIncludeAny(c, humanFollowupQueueTags))
+                    .filter(c => c.resolvedLabels.some(l => humanFollowupQueueTags.includes(l)))
                     .map(mapQueueLead)
                     .sort((a, b) => b.timestamp - a.timestamp),
                 scheduledAppointmentsQueue: kpiConversations
-                    .filter(c => labelsIncludeAny(c, humanSalesQueueTags))
+                    .filter(c => c.resolvedLabels.some(l => humanSalesQueueTags.includes(l)))
                     .map(mapQueueLead)
                     .sort((a, b) => b.timestamp - a.timestamp),
                 activeLeads: kpiConversations.filter(c => c.status !== 'resolved').slice(0, 10).map(c => ({
@@ -518,7 +567,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const campaignStats = new Map<string, { name: string, leads: number, interacted: number }>();
             kpiConversations.forEach(conv => {
                 const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
-                const campName = attrs.utm_campaign || attrs.campana || attrs.origen || "Orgánico / Directo";
+                const campName = String(attrs.utm_campaign || attrs.campana || attrs.origen || "").trim() || "Sin campaña";
                 if (!campaignStats.has(campName)) campaignStats.set(campName, { name: campName, leads: 0, interacted: 0 });
                 const s = campaignStats.get(campName)!;
                 s.leads++;
@@ -551,22 +600,19 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 }
                 const stat = monthlyTrendMap.get(monthKey)!;
                 stat.leads++;
-                if (conv.labels && sqlTags.some(l => conv.labels.includes(l))) {
-                    stat.sqls++;
-                }
-                if (conv.labels && appointmentTags.some(l => conv.labels.includes(l))) {
-                    stat.appointments++;
-                }
-                if (conv.labels && saleTags.some(l => conv.labels.includes(l))) {
+                const stage = conv.resolvedStage;
+                if (stage === 'sql') stat.sqls++;
+                if (stage === 'appointment') stat.appointments++;
+                if (stage === 'sale') {
                     stat.closedSales = (stat.closedSales || 0) + 1;
                 }
             });
             const monthlyTrend = Array.from(monthlyTrendMap.values()).sort((a, b) => a.timestamp - b.timestamp);
 
             // 7. Human Performance Metrics
-            const conversationById = new Map(allConversationsRaw.map(conv => [Number(conv.id), conv]));
+            const conversationById = new Map(allConversations.map(conv => [Number(conv.id), conv]));
             const labelsInclude = (conv: any, label: string) => Array.isArray(conv.labels) && conv.labels.includes(label);
-            const humanFollowup = kpiConversations.filter(c => labelsIncludeAny(c, humanFollowupQueueTags)).length;
+            const humanFollowup = kpiConversations.filter(c => c.resolvedLabels.some(l => humanFollowupQueueTags.includes(l))).length;
 
             const sortedLabelEvents = [...(labelEvents || [])].sort((a: any, b: any) =>
                 parseTs(a.occurred_at).getTime() - parseTs(b.occurred_at).getTime()
@@ -617,7 +663,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 ? Math.round((humanAppointmentConversions / (humanFollowup + humanAppointmentConversions)) * 100)
                 : 0;
 
-            const humanSales = allConversationsRaw
+            const humanSales = allConversations
                 .filter(conv => {
                     if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return false;
                     if (!labelsInclude(conv, humanSaleTargetLabel)) return false;
@@ -673,22 +719,19 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
 
                 const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
                 const camp = attrs.campana?.toString();
-                if (camp && camp.trim()) {
-                    const cleanCamp = camp.trim();
-                    campaignMap.set(cleanCamp, (campaignMap.get(cleanCamp) || 0) + 1);
-                }
+                const cleanCamp = camp && camp.trim() ? camp.trim() : "Sin campaña";
+                campaignMap.set(cleanCamp, (campaignMap.get(cleanCamp) || 0) + 1);
             });
 
-            allConversationsRaw.forEach(conv => {
+            allConversations.forEach(conv => {
                 if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return;
-                if (!conv.labels?.includes('venta_exitosa')) return;
+                if (conv.resolvedStage !== 'sale') return;
 
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
-                const revenueDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
+                const revenueDate = conv.resolvedAttrs.fecha_monto_operacion ? parseTs(conv.resolvedAttrs.fecha_monto_operacion) : getCreatedDate(conv);
                 if (Number.isNaN(revenueDate.getTime()) || revenueDate < globalStart || revenueDate > globalEnd) return;
 
                 const dateStr = getGuayaquilDateString(revenueDate);
-                const val = parseMonto(attrs.monto_operacion);
+                const val = parseMonto(conv.resolvedAttrs.monto_operacion);
                 const row = revenueByDayMap.get(dateStr) || { date: dateStr, value: 0, sales: 0 };
                 row.value += val;
                 row.sales += 1;
@@ -720,6 +763,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                     totalProfit
                 },
                 funnelData: displayFunnel,
+                historicalFunnelData,
                 labelDistribution,
                 recentAppointments,
                 channelData,
@@ -744,7 +788,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 humanMetrics: emptyData.humanMetrics
             };
         }
-    }, [allConversationsRaw, labelEvents, inboxes, configuredLabels, globalTagSettings, filters]);
+    }, [allConversations, inboxes, configuredLabels, globalTagSettings, filters]);
 
     return { loading, error, data, refetch: contextRefetch };
 };

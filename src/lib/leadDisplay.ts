@@ -338,26 +338,76 @@ const findExternalUrl = (value: unknown, depth = 0, visited = new Set<unknown>()
     return "";
 };
 
+const constructSocialUrl = (channel: string, identifier: string) => {
+    if (!identifier) return "";
+    const cleanId = identifier.toString().trim().replace(/^@/, "");
+
+    switch (channel.toLowerCase()) {
+        case "tiktok":
+            return cleanId.startsWith("http") ? cleanId : `https://www.tiktok.com/@${cleanId}`;
+        case "instagram":
+            return cleanId.startsWith("http") ? cleanId : `https://www.instagram.com/${cleanId}`;
+        case "facebook":
+        case "messenger":
+            return cleanId.startsWith("http") ? cleanId : `https://facebook.com/${cleanId}`;
+        case "telegram":
+            return cleanId.startsWith("http") ? cleanId : `https://t.me/${cleanId}`;
+        default:
+            return "";
+    }
+};
+
 export const getLeadExternalUrl = (lead: Partial<MinifiedConversation> | any, channelOverride = "") => {
+    if (lead?.perfil_url) return lead.perfil_url;
+
     const sender = lead?.meta?.sender || {};
+    const attrs = getAttrs(lead);
+    const channelName = getLeadChannelName(lead);
+    const channelHint = normalize(`${channelOverride} ${lead?.channel_type || ""} ${lead?.channel || ""} ${attrs.canal || ""} ${channelName}`);
+
     const searchable = {
-        custom_attributes: getAttrs(lead),
-        additional_attributes: lead?.additional_attributes || sender.additional_attributes,
+        custom_attributes: attrs,
+        additional_attributes: lead?.additional_attributes || sender.additional_attributes || {},
         sender,
-        meta: lead?.meta,
-        raw_payload: lead?.raw_payload
+        meta: lead?.meta || {},
+        raw_payload: lead?.raw_payload || {}
     };
 
+    // 1. Try to find an explicit URL already in the data
     const explicitUrl = findExternalUrl(searchable);
     if (explicitUrl) return explicitUrl;
 
-    const channelHint = normalize(`${channelOverride} ${lead?.channel_type || ""} ${lead?.channel || ""} ${getAttrs(lead).canal || ""}`);
+    // 2. Constructed URLs based on channel
     if (channelHint.includes("telegram")) {
         const telegramHandle =
             normalizeTelegramHandle(sender.identifier) ||
-            normalizeTelegramHandle(findTextByKeys(searchable, ["telegram", "username", "user_name", "handle", "identifier", "perfil", "profile", "source"]));
+            normalizeTelegramHandle(sender.username) ||
+            normalizeTelegramHandle(findTextByKeys(searchable, ["telegram", "username", "user_name", "handle", "identifier"]));
 
         return telegramHandle ? `https://t.me/${telegramHandle}` : "";
+    }
+
+    if (channelHint.includes("whatsapp") || channelHint.includes("wa.me")) {
+        const phone = getLeadPhone(lead, channelOverride).replace(/\D/g, "");
+        return phone ? `https://wa.me/${phone}` : "";
+    }
+
+    if (channelHint.includes("tiktok")) {
+        const tiktokId = findTextByKeys(searchable, ["tiktok", "screen_name", "identifier", "username"]) || sender.identifier || sender.name;
+        return constructSocialUrl("tiktok", tiktokId);
+    }
+
+    if (channelHint.includes("instagram")) {
+        const instaId = findTextByKeys(searchable, ["instagram", "screen_name", "identifier", "username"]) || sender.identifier || sender.name;
+        return constructSocialUrl("instagram", instaId);
+    }
+
+    if (channelHint.includes("facebook") || channelHint.includes("messenger")) {
+        const fbUrl = findTextByKeys(searchable, ["facebook", "page_link", "profile_link", "perfil", "link", "url"]);
+        if (fbUrl && /^https?:\/\//i.test(fbUrl)) return fbUrl;
+
+        const fbId = findTextByKeys(searchable, ["social_id", "facebook_id", "external_id", "identifier"]) || sender.identifier;
+        if (fbId) return constructSocialUrl("facebook", fbId);
     }
 
     return "";

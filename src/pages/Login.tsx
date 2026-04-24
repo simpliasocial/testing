@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,6 +12,7 @@ const Login = () => {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const { signIn } = useAuth();
     const navigate = useNavigate();
 
     const handleLogin = async (e: React.FormEvent) => {
@@ -20,20 +21,11 @@ const Login = () => {
         setError('');
 
         try {
-            // Supabase authentication - reconnected
-            const { data, error: rpcError } = await supabase.rpc('verify_custom_credentials', {
-                p_username: username,
-                p_password: password
-            });
+            const { error: signInError } = await signIn(username, password);
 
-            if (rpcError) throw rpcError;
+            if (signInError) throw signInError;
 
-            if (data === true) {
-                localStorage.setItem('isAuthenticated', 'true');
-                navigate('/');
-            } else {
-                setError('Credenciales incorrectas');
-            }
+            navigate('/');
         } catch (err: any) {
             console.error('Login error:', err);
             setError(err.message || 'Error al iniciar sesión');

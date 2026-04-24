@@ -5,10 +5,10 @@ import { format } from "date-fns";
 import { useDashboardContext } from "@/context/DashboardDataContext";
 import { config } from "@/config";
 import { toast } from "sonner";
-import { getLeadChannelName } from "@/lib/leadDisplay";
+import { getLeadChannelName, getLeadExternalUrl } from "@/lib/leadDisplay";
 
 export function ExportToExcel() {
-    const { conversations, inboxes } = useDashboardContext();
+    const { conversations, inboxes, tagSettings } = useDashboardContext();
 
     const handleExport = () => {
         if (!conversations || conversations.length === 0) {
@@ -19,19 +19,11 @@ export function ExportToExcel() {
         try {
             const inboxMap = new Map(inboxes.map(i => [i.id, i]));
 
-            // 1. Discover all unique custom attribute keys across both contact and conversation
-            const customAttrKeys = new Set<string>();
-            conversations.forEach(conv => {
-                const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                const convAttrs = conv.custom_attributes || {};
+            const activeFields = tagSettings.excelExportFields && tagSettings.excelExportFields.length > 0
+                ? tagSettings.excelExportFields
+                : ["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"];
 
-                Object.keys(contactAttrs).forEach(k => customAttrKeys.add(k));
-                Object.keys(convAttrs).forEach(k => customAttrKeys.add(k));
-            });
-
-            const sortedKeys = Array.from(customAttrKeys).sort();
-
-            // 2. Map data with dynamic columns
+            // 2. Map data with configured columns
             const dataToExport = conversations.map(conv => {
                 const contactAttrs = conv.meta?.sender?.custom_attributes || {};
                 const convAttrs = conv.custom_attributes || {};
@@ -43,31 +35,35 @@ export function ExportToExcel() {
                 const createdAt = conv.created_at ? new Date(conv.created_at * 1000) : null;
                 const lastActivity = conv.timestamp ? new Date(conv.timestamp * 1000) : null;
 
-                // Base fields
-                const row: any = {
-                    "ID Conversacion": conv.id,
-                    "Nombre del Lead": conv.meta?.sender?.name || allAttrs.nombre_completo || "",
-                    "Telefono/Celular": allAttrs.celular || conv.meta?.sender?.phone_number || "",
-                    "Canal": canal,
-                    "Etiquetas": (conv.labels || []).join(", "),
-                    "Correo": allAttrs.correo || conv.meta?.sender?.email || "",
-                };
+                const row: any = {};
 
-                // Dynamic custom attributes
-                sortedKeys.forEach(key => {
-                    // Format key for header (example: "fecha_visita" -> "Fecha Visita (Attr)")
-                    const header = key
-                        .split("_")
-                        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-                        .join(" ") + " (Attr)";
-
-                    row[header] = allAttrs[key] || "";
+                activeFields.forEach(field => {
+                    switch (field) {
+                        case "ID": row[field] = conv.id; break;
+                        case "Nombre": row[field] = conv.meta?.sender?.name || allAttrs.nombre_completo || ""; break;
+                        case "Telefono": row[field] = allAttrs.celular || conv.meta?.sender?.phone_number || ""; break;
+                        case "Canal": row[field] = canal; break;
+                        case "Etiquetas": row[field] = (conv.labels || []).join(", "); break;
+                        case "Correo": row[field] = allAttrs.correo || conv.meta?.sender?.email || ""; break;
+                        case "Monto": row[field] = allAttrs.monto_operacion || ""; break;
+                        case "Fecha Monto": row[field] = allAttrs.fecha_monto_operacion || ""; break;
+                        case "Agencia": row[field] = allAttrs.agencia || ""; break;
+                        case "Check-in": row[field] = allAttrs.checkincat || ""; break;
+                        case "Check-out": row[field] = allAttrs.checkoutcat || ""; break;
+                        case "Campana": row[field] = allAttrs.campana || ""; break;
+                        case "Ciudad": row[field] = allAttrs.ciudad || ""; break;
+                        case "Responsable": row[field] = allAttrs.responsable || conv.meta?.assignee?.name || ""; break;
+                        case "URL Red Social": row[field] = getLeadExternalUrl(conv, canal); break;
+                        case "Enlace Chatwoot": row[field] = `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conv.id}`; break;
+                        case "Fecha Ingreso": row[field] = createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : ""; break;
+                        case "Ultima Interaccion": row[field] = lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : ""; break;
+                        case "ID Contacto": row[field] = conv.meta?.sender?.id || ""; break;
+                        case "ID Inbox": row[field] = conv.inbox_id || ""; break;
+                        case "ID Cuenta": row[field] = (conv as any).account_id || ""; break;
+                        case "Origen Dato": row[field] = (conv as any).source || ""; break;
+                        default: row[field] = allAttrs[field] || ""; break;
+                    }
                 });
-
-                // Metadata fields
-                row["Enlace Chatwoot"] = `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conv.id}`;
-                row["Fecha ingreso"] = createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : "";
-                row["Ultima Interaccion"] = lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : "";
 
                 return row;
             });

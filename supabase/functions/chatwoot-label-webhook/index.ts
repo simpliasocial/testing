@@ -6,6 +6,16 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-chatwoot-webhook-signature, x-webhook-secret",
 };
 
+const parseNumber = (value: unknown) => {
+    if (value === null || value === undefined || value === "") return null;
+    if (typeof value === "number") return Number.isNaN(value) ? null : value;
+    const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ""));
+    return Number.isNaN(parsed) ? null : parsed;
+};
+
+const compactObject = (obj: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined && value !== null && value !== ""));
+
 const normalizeLabels = (labels: unknown): string[] => {
     if (!Array.isArray(labels)) return [];
     return Array.from(new Set(
@@ -41,6 +51,65 @@ const toIso = (value: unknown) => {
 const firstArray = (...values: unknown[]) =>
     values.find((value) => Array.isArray(value)) as unknown[] | undefined;
 
+const buildConversationUpsertRow = (conversation: Record<string, any>) => {
+    if (!conversation?.id) return null;
+
+    const sender = conversation.meta?.sender || conversation.contact || {};
+    const contactAttrs = sender.custom_attributes || {};
+    const convAttrs = conversation.custom_attributes || {};
+    const attrs = { ...contactAttrs, ...convAttrs };
+    const lastNonActivity = conversation.last_non_activity_message || {};
+
+    return {
+        chatwoot_conversation_id: Number(conversation.id),
+        chatwoot_contact_id: sender.id || conversation.contact_id || null,
+        chatwoot_account_id: conversation.account_id || null,
+        chatwoot_inbox_id: conversation.inbox_id || null,
+        chatwoot_team_id: conversation.team_id || null,
+        assignee_id: conversation.assignee_id || null,
+        uuid: conversation.uuid || null,
+        status: conversation.status || null,
+        priority: conversation.priority || null,
+        can_reply: conversation.can_reply ?? null,
+        muted: conversation.muted ?? null,
+        snoozed_until: toIso(conversation.snoozed_until),
+        unread_count: conversation.unread_count ?? null,
+        labels: normalizeLabels(conversation.labels || []),
+        business_stage_current: attrs.business_stage || null,
+        additional_attributes: conversation.additional_attributes || {},
+        custom_attributes: attrs,
+        meta: conversation.meta || {},
+        applied_sla: conversation.applied_sla || {},
+        sla_events: conversation.sla_events || [],
+        first_reply_created_at_chatwoot: toIso(conversation.first_reply_created_at),
+        waiting_since_chatwoot: toIso(conversation.waiting_since),
+        last_activity_at_chatwoot: toIso(conversation.last_activity_at || conversation.timestamp || conversation.updated_at),
+        created_at_chatwoot: toIso(conversation.created_at || conversation.timestamp),
+        updated_at_chatwoot: toIso(conversation.updated_at || conversation.last_activity_at || conversation.timestamp),
+        last_non_activity_message_id: lastNonActivity.id || null,
+        last_non_activity_message_preview: lastNonActivity.content || null,
+        last_message_at: toIso(lastNonActivity.created_at || conversation.last_activity_at || conversation.timestamp),
+        raw_payload: conversation,
+        ...compactObject({
+            nombre_completo: attrs.nombre_completo,
+            fecha_visita: attrs.fecha_visita,
+            hora_visita: attrs.hora_visita,
+            agencia: attrs.agencia,
+            celular: attrs.celular,
+            correo: attrs.correo,
+            campana: attrs.campana,
+            ciudad: attrs.ciudad,
+            edad: attrs.edad,
+            canal: attrs.canal,
+            agente: attrs.agente === true || attrs.agente === "true",
+            score_interes: parseNumber(attrs.score_interes),
+            monto_operacion: attrs.monto_operacion,
+            fecha_monto_operacion: attrs.fecha_monto_operacion,
+        }),
+        updated_at: new Date().toISOString(),
+    };
+};
+
 serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders });
@@ -70,17 +139,43 @@ serve(async (req) => {
 
         const supabase = createClient(supabaseUrl, serviceRoleKey);
         const body = await req.json();
-        const conversation =
+        const eventName = body.event || body.name || body.event_name || "conversation_label_change";
+
+        let conversation =
             body.conversation ||
             body.current_conversation ||
-            body.data?.conversation ||
-            body.data ||
-            body;
-        const conversationId = Number(conversation.id || body.conversation_id || body.chatwoot_conversation_id);
+            body.data?.conversation;
 
-        if (!conversationId) {
-            throw new Error("Webhook payload does not include a conversation id.");
+        // If it's a contact_updated event, we might not have a conversation object directly
+        if (!conversation && (eventName === "contact_updated" || body.contact)) {
+            const contact = body.contact || body.data?.contact || body;
+            const contactId = contact.id;
+
+            if (contactId) {
+                // Try to find the most recent conversation for this contact to update its attributes
+                const { data: latestConv } = await supabase
+                    .schema("cw")
+                    .from("conversations_current")
+                    .select("chatwoot_conversation_id, raw_payload")
+                    .eq("chatwoot_contact_id", contactId)
+                    .order("last_activity_at_chatwoot", { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+
+                if (latestConv) {
+                    conversation = {
+                        ...(latestConv.raw_payload as Record<string, any>),
+                        id: latestConv.chatwoot_conversation_id,
+                        meta: {
+                            ...(latestConv.raw_payload as Record<string, any>)?.meta,
+                            sender: contact
+                        }
+                    };
+                }
+            }
         }
+
+        const conversationId = conversation ? Number(conversation.id || body.conversation_id || body.chatwoot_conversation_id) : null;
 
         await supabase
             .schema("cw")
@@ -88,11 +183,18 @@ serve(async (req) => {
             .insert({
                 source_type: "webhook",
                 endpoint_name: "chatwoot-label-webhook",
-                event_name: body.event || body.name || body.event_name || "conversation_label_change",
-                entity_type: "conversation",
+                event_name: eventName,
+                entity_type: conversationId ? "conversation" : "other",
                 chatwoot_entity_id: conversationId,
                 payload: body,
             });
+
+        if (!conversationId) {
+            return new Response(JSON.stringify({ success: true, message: "No conversation context found for this event" }), {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+                status: 200,
+            });
+        }
 
         const { data: existingRow, error: existingError } = await supabase
             .schema("cw")
@@ -122,11 +224,11 @@ serve(async (req) => {
         );
 
         const previousLabels = payloadPreviousLabels || existingRow?.labels || [];
-        const nextLabels = payloadNextLabels || [];
+        const nextLabels = payloadNextLabels || (conversation ? normalizeLabels(conversation.labels) : []);
         const delta = labelDelta(previousLabels, nextLabels);
 
         if (delta.added.length > 0 || delta.removed.length > 0) {
-            const occurredAt = toIso(body.event_created_at || body.created_at || body.updated_at || conversation.updated_at || conversation.timestamp);
+            const occurredAt = toIso(body.event_created_at || body.created_at || body.updated_at || conversation?.updated_at || conversation?.timestamp);
             const eventKey = [
                 "webhook",
                 conversationId,
@@ -154,21 +256,21 @@ serve(async (req) => {
             if (eventError) throw eventError;
         }
 
-        if (payloadNextLabels) {
-            await supabase
+        const conversationUpsertRow = buildConversationUpsertRow(conversation);
+
+        if (conversationUpsertRow) {
+            const { error: conversationError } = await supabase
                 .schema("cw")
                 .from("conversations_current")
-                .upsert({
-                    chatwoot_conversation_id: conversationId,
-                    labels: normalizeLabels(payloadNextLabels),
-                    raw_payload: conversation,
-                    updated_at: new Date().toISOString(),
-                }, { onConflict: "chatwoot_conversation_id" });
+                .upsert(conversationUpsertRow, { onConflict: "chatwoot_conversation_id" });
+
+            if (conversationError) throw conversationError;
         }
 
         return new Response(JSON.stringify({
             success: true,
             conversation_id: conversationId,
+            event: eventName,
             added_labels: delta.added,
             removed_labels: delta.removed,
         }), {

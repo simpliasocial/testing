@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useAuth } from "@/context/AuthContext";
+import { Input } from "@/components/ui/input";
 import {
     Select,
     SelectContent,
@@ -11,16 +14,20 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { useDashboardContext } from "@/context/DashboardDataContext";
+import {
+    ChatwootAttributeDefinition,
+    ScoreThresholds,
+    useDashboardContext
+} from "@/context/DashboardDataContext";
 import {
     formatDateTime,
     getAttrs,
     getLeadChannelName,
     getLeadName,
     getLeadPhone,
-    normalize
 } from "@/lib/leadDisplay";
 import { MinifiedConversation } from "@/services/StorageService";
+import { KPICard } from "@/components/dashboard/KPICard";
 import {
     Bar,
     BarChart,
@@ -37,8 +44,8 @@ import {
     BadgeCheck,
     ChevronDown,
     Gauge,
-    Info,
     Loader2,
+    Settings2,
     Target,
     TrendingUp
 } from "lucide-react";
@@ -46,33 +53,35 @@ import {
 type ScoreBucket = "high" | "medium" | "low";
 type ScoreDimension = "label" | "campaign";
 
-interface ScoredLead {
-    lead: MinifiedConversation;
-    score: number;
-    scoreInteres: number | null;
-    scoreSource: "score_interes" | "label_fallback";
-    bucket: ScoreBucket;
+interface ScoreAttributeOption {
+    key: string;
+    label: string;
+    description: string;
+    type: string;
+}
+
+interface PreparedLead {
+    lead: any;
+    score: number | null;
+    bucket: ScoreBucket | null;
     bucketLabel: string;
-    reason: string;
     stage: string;
     channel: string;
     campaign: string;
     owner: string;
-    status: string;
+    attributeKey: string;
+    attributeLabel: string;
 }
 
-interface ScoreLabelRules {
-    high: string[];
-    medium: string[];
-    low: string[];
-}
-
-const SCORE_VERSION = "label-config-v1 / Abril 2026";
 const BUCKET_ORDER: ScoreBucket[] = ["high", "medium", "low"];
 const BUCKET_COPY: Record<ScoreBucket, { label: string; color: string; bg: string }> = {
-    high: { label: "High", color: "#059669", bg: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    medium: { label: "Medium", color: "#d97706", bg: "bg-amber-50 text-amber-700 border-amber-200" },
-    low: { label: "Low", color: "#dc2626", bg: "bg-red-50 text-red-700 border-red-200" }
+    high: { label: "Alta", color: "#059669", bg: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    medium: { label: "Media", color: "#d97706", bg: "bg-amber-50 text-amber-700 border-amber-200" },
+    low: { label: "Baja", color: "#dc2626", bg: "bg-red-50 text-red-700 border-red-200" }
+};
+const DEFAULT_SCORE_THRESHOLDS: ScoreThresholds = {
+    highMin: 20,
+    mediumMin: 10
 };
 
 const unique = (values: string[]) =>
@@ -86,30 +95,82 @@ const parseDate = (value: unknown) => {
     return Number.isNaN(date.getTime()) ? new Date(0) : date;
 };
 
-const scoreAverage = (items: ScoredLead[]) =>
-    items.length > 0 ? Math.round(items.reduce((sum, item) => sum + item.score, 0) / items.length) : 0;
+const parseNumericScore = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === "") return null;
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+
+    const normalized = String(value)
+        .trim()
+        .replace(",", ".")
+        .replace(/[^0-9.-]/g, "");
+    if (!normalized) return null;
+
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const scoreAverage = (items: PreparedLead[]) =>
+    items.length > 0 ? Math.round((items.reduce((sum, item) => sum + (item.score || 0), 0) / items.length) * 10) / 10 : 0;
 
 const percent = (count: number, total: number) =>
     total > 0 ? Math.round((count / total) * 100) : 0;
 
-const labelsIncludeAny = (lead: MinifiedConversation, labels: string[]) =>
-    (lead.labels || []).some(label => labels.includes(label));
+const normalizeThresholds = (thresholds?: Partial<ScoreThresholds> | null): ScoreThresholds => {
+    const parsedHigh = Number(thresholds?.highMin);
+    const parsedMedium = Number(thresholds?.mediumMin);
+    const highMin = Number.isFinite(parsedHigh) ? parsedHigh : DEFAULT_SCORE_THRESHOLDS.highMin;
+    const mediumMin = Number.isFinite(parsedMedium) ? parsedMedium : DEFAULT_SCORE_THRESHOLDS.mediumMin;
 
-const parseScoreInteres = (value: unknown): number | null => {
-    if (value === null || value === undefined || value === "") return null;
-    const parsed = Number(String(value).replace(",", "."));
-    if (!Number.isFinite(parsed)) return null;
-    return Math.max(0, Math.min(100, Math.round(parsed)));
+    if (highMin <= mediumMin) {
+        return DEFAULT_SCORE_THRESHOLDS;
+    }
+
+    return { highMin, mediumMin };
 };
 
-const rangeBucketFromScore = (score: number): ScoreBucket => {
-    if (score >= 70) return "high";
-    if (score >= 40) return "medium";
+const bucketFromScore = (score: number, thresholds: ScoreThresholds): ScoreBucket => {
+    if (score >= thresholds.highMin) return "high";
+    if (score >= thresholds.mediumMin) return "medium";
     return "low";
 };
 
+const formatThresholdValue = (value: number) => Number.isInteger(value) ? String(value) : value.toString();
+
+const getBucketRangeLabel = (bucket: ScoreBucket, thresholds: ScoreThresholds) => {
+    if (bucket === "high") return `Desde ${formatThresholdValue(thresholds.highMin)}`;
+    if (bucket === "medium") return `Desde ${formatThresholdValue(thresholds.mediumMin)} y antes de ${formatThresholdValue(thresholds.highMin)}`;
+    return `Menor a ${formatThresholdValue(thresholds.mediumMin)}`;
+};
+
+const isNumericAttributeDefinition = (definition: ChatwootAttributeDefinition) => {
+    const type = String(definition.attribute_display_type || "").trim().toLowerCase();
+    return ["number", "integer", "decimal", "float"].some(token => type.includes(token));
+};
+
+const toAttributeOption = (definition: ChatwootAttributeDefinition): ScoreAttributeOption | null => {
+    const key = String(definition.attribute_key || "").trim();
+    if (!key) return null;
+
+    return {
+        key,
+        label: String(definition.attribute_display_name || key).trim() || key,
+        description: String(definition.attribute_description || "").trim(),
+        type: String(definition.attribute_display_type || "number").trim()
+    };
+};
+
+const STAGE_LABELS: Record<string, string> = {
+    'sale': 'Venta',
+    'appointment': 'Cita',
+    'followup': 'Seguimiento humano',
+    'sql': 'SQL',
+    'unqualified': 'Descalificado',
+    'other': 'Sin etapa'
+};
+
+
 const EmptyState = ({ text }: { text: string }) => (
-    <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+    <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed px-4 text-center text-sm text-muted-foreground">
         {text}
     </div>
 );
@@ -122,18 +183,24 @@ const LeadScoringLayer = () => {
         tagSettings,
         updateTagSettings,
         labels: configuredLabels,
+        contactAttributeDefinitions,
         loading
     } = useDashboardContext();
+    const { role } = useAuth();
 
     const [campaignFilter, setCampaignFilter] = useState("all");
     const [labelFilter, setLabelFilter] = useState("all");
     const [ownerFilter, setOwnerFilter] = useState("all");
-    const [statusFilter, setStatusFilter] = useState("all");
     const [stageFilter, setStageFilter] = useState("all");
     const [bucketFilter, setBucketFilter] = useState("all");
     const [scoreDimension, setScoreDimension] = useState<ScoreDimension>("label");
-    const [labelRules, setLabelRules] = useState<ScoreLabelRules | null>(null);
-    const [rulesDirty, setRulesDirty] = useState(false);
+    const [configOpen, setConfigOpen] = useState(() => !tagSettings.scoreAttributeKey);
+    const [settingsDirty, setSettingsDirty] = useState(false);
+    const [savingSettings, setSavingSettings] = useState(false);
+    const [scoreAttributeKeyDraft, setScoreAttributeKeyDraft] = useState("");
+    const [appointmentLabelsDraft, setAppointmentLabelsDraft] = useState<string[]>([]);
+    const [thresholdHighDraft, setThresholdHighDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.highMin));
+    const [thresholdMediumDraft, setThresholdMediumDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.mediumMin));
 
     const inboxMap = useMemo(
         () => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])),
@@ -145,157 +212,231 @@ const LeadScoringLayer = () => {
         [configuredLabels]
     );
 
-    const filterActualLabels = (labels: string[]) => {
-        const actualSet = new Set(actualLabels);
-        return unique(labels.filter(label => actualSet.has(label)));
-    };
+    const effectiveScoreThresholds = useMemo(
+        () => normalizeThresholds(tagSettings.scoreThresholds),
+        [tagSettings.scoreThresholds]
+    );
 
-    const suggestedRules = useMemo<ScoreLabelRules>(() => ({
-        high: filterActualLabels([...(tagSettings.saleTags || []), ...(tagSettings.appointmentTags || []), "venta_exitosa", "cita_agendada_humano", "cita_agendada"]),
-        medium: filterActualLabels([...(tagSettings.sqlTags || []), "seguimiento_humano", "interesado", "crear_confianza", "crear_urgencia"]),
-        low: filterActualLabels([...(tagSettings.unqualifiedTags || []), "desinteresado"])
-    }), [tagSettings, actualLabels]);
+    const scoreAttributeOptions = useMemo(() => {
+        const byKey = new Map<string, ScoreAttributeOption>();
 
-    const configuredScoreRules = useMemo<ScoreLabelRules | null>(() => {
-        const high = filterActualLabels(tagSettings.scoreHighTags || []);
-        const medium = filterActualLabels(tagSettings.scoreMediumTags || []);
-        const low = filterActualLabels(tagSettings.scoreLowTags || []);
+        contactAttributeDefinitions
+            .filter(isNumericAttributeDefinition)
+            .forEach((definition) => {
+                const option = toAttributeOption(definition);
+                if (!option) return;
+                byKey.set(option.key, option);
+            });
 
-        return high.length || medium.length || low.length ? { high, medium, low } : null;
-    }, [tagSettings.scoreHighTags, tagSettings.scoreMediumTags, tagSettings.scoreLowTags, actualLabels]);
+        return Array.from(byKey.values()).sort((a, b) => {
+            if (a.key === "score_interes") return -1;
+            if (b.key === "score_interes") return 1;
+            return a.label.localeCompare(b.label);
+        });
+    }, [contactAttributeDefinitions]);
+
+    const defaultScoreAttributeKey = useMemo(
+        () => scoreAttributeOptions.find(option => option.key === "score_interes")?.key || scoreAttributeOptions[0]?.key || "",
+        [scoreAttributeOptions]
+    );
+
+    const effectiveScoreAttributeKey = useMemo(() => {
+        if (tagSettings.scoreAttributeKey && scoreAttributeOptions.some(option => option.key === tagSettings.scoreAttributeKey)) {
+            return tagSettings.scoreAttributeKey;
+        }
+        return defaultScoreAttributeKey;
+    }, [tagSettings.scoreAttributeKey, scoreAttributeOptions, defaultScoreAttributeKey]);
+
+    const defaultAppointmentLabels = useMemo(
+        () => unique([...(tagSettings.appointmentTags || []), tagSettings.humanAppointmentTargetLabel || ""].filter(Boolean)),
+        [tagSettings.appointmentTags, tagSettings.humanAppointmentTargetLabel]
+    );
+
+    const effectiveAppointmentLabels = useMemo(() => {
+        const configuredAppointmentLabels = unique((tagSettings.scoreAppointmentLabels || []).filter(label => actualLabels.includes(label)));
+        return configuredAppointmentLabels.length > 0 ? configuredAppointmentLabels : defaultAppointmentLabels;
+    }, [tagSettings.scoreAppointmentLabels, actualLabels, defaultAppointmentLabels]);
 
     useEffect(() => {
-        if (!rulesDirty) {
-            setLabelRules(configuredScoreRules || suggestedRules);
+        if (!settingsDirty) {
+            setScoreAttributeKeyDraft(effectiveScoreAttributeKey);
+            setAppointmentLabelsDraft(effectiveAppointmentLabels);
+            setThresholdHighDraft(String(effectiveScoreThresholds.highMin));
+            setThresholdMediumDraft(String(effectiveScoreThresholds.mediumMin));
         }
-    }, [configuredScoreRules, suggestedRules, rulesDirty]);
+    }, [effectiveScoreAttributeKey, effectiveAppointmentLabels, effectiveScoreThresholds, settingsDirty]);
 
-    const effectiveRules = labelRules || configuredScoreRules || suggestedRules;
+    const activeScoreAttributeKey = (settingsDirty ? scoreAttributeKeyDraft : effectiveScoreAttributeKey) || "";
+    const activeAppointmentLabels = useMemo(
+        () => unique((settingsDirty ? appointmentLabelsDraft : effectiveAppointmentLabels).filter(label => actualLabels.includes(label))),
+        [appointmentLabelsDraft, effectiveAppointmentLabels, settingsDirty, actualLabels]
+    );
+    const activeScoreThresholds = useMemo(
+        () => normalizeThresholds({
+            highMin: Number(settingsDirty ? thresholdHighDraft : effectiveScoreThresholds.highMin),
+            mediumMin: Number(settingsDirty ? thresholdMediumDraft : effectiveScoreThresholds.mediumMin)
+        }),
+        [settingsDirty, thresholdHighDraft, thresholdMediumDraft, effectiveScoreThresholds]
+    );
 
-    const availableLabels = actualLabels;
+    const thresholdValidationError = useMemo(() => {
+        const parsedHigh = Number(thresholdHighDraft);
+        const parsedMedium = Number(thresholdMediumDraft);
 
-    const toggleRuleTag = (bucket: ScoreBucket, label: string) => {
-        setRulesDirty(true);
-        setLabelRules((current) => {
-            const base = current || effectiveRules;
-            const wasSelected = base[bucket].includes(label);
-            const next: ScoreLabelRules = {
-                high: base.high.filter(item => item !== label),
-                medium: base.medium.filter(item => item !== label),
-                low: base.low.filter(item => item !== label)
-            };
+        if (!Number.isFinite(parsedHigh) || !Number.isFinite(parsedMedium)) {
+            return "Ingresa valores numéricos válidos para Alta y Media.";
+        }
 
-            if (!wasSelected) {
-                next[bucket] = unique([...next[bucket], label]);
-            }
+        if (parsedHigh <= parsedMedium) {
+            return "El valor de Alta debe ser mayor que el valor de Media.";
+        }
 
-            return next;
-        });
+        return null;
+    }, [thresholdHighDraft, thresholdMediumDraft]);
+
+    const selectedScoreAttribute = useMemo(
+        () => scoreAttributeOptions.find(option => option.key === activeScoreAttributeKey) || null,
+        [scoreAttributeOptions, activeScoreAttributeKey]
+    );
+
+    const saveScoringConfig = async () => {
+        if (!scoreAttributeKeyDraft) {
+            toast.error("Selecciona un atributo numérico para calcular el score.");
+            return;
+        }
+        if (thresholdValidationError) {
+            toast.error(thresholdValidationError);
+            return;
+        }
+
+        setSavingSettings(true);
+        try {
+            await updateTagSettings({
+                ...tagSettings,
+                scoreAttributeKey: scoreAttributeKeyDraft,
+                scoreAppointmentLabels: unique(appointmentLabelsDraft.filter(label => actualLabels.includes(label))),
+                scoreThresholds: {
+                    highMin: Number(thresholdHighDraft),
+                    mediumMin: Number(thresholdMediumDraft)
+                }
+            });
+            setSettingsDirty(false);
+            setConfigOpen(false);
+            toast.success("La configuración de scoring quedó guardada.");
+        } catch (saveError) {
+            console.error("Error saving scoring config:", saveError);
+            toast.error("No se pudo guardar la configuración de scoring.");
+        } finally {
+            setSavingSettings(false);
+        }
     };
 
-    const saveRules = () => {
-        updateTagSettings({
-            ...tagSettings,
-            scoreHighTags: filterActualLabels(effectiveRules.high),
-            scoreMediumTags: filterActualLabels(effectiveRules.medium),
-            scoreLowTags: filterActualLabels(effectiveRules.low)
-        });
-        setRulesDirty(false);
+    const restoreDefaultConfig = () => {
+        setSettingsDirty(true);
+        setScoreAttributeKeyDraft(defaultScoreAttributeKey);
+        setAppointmentLabelsDraft(defaultAppointmentLabels);
+        setThresholdHighDraft(String(DEFAULT_SCORE_THRESHOLDS.highMin));
+        setThresholdMediumDraft(String(DEFAULT_SCORE_THRESHOLDS.mediumMin));
     };
 
-    const restoreSuggestedRules = () => {
-        setLabelRules(suggestedRules);
-        setRulesDirty(true);
+    const toggleAppointmentLabel = (label: string) => {
+        setSettingsDirty(true);
+        setAppointmentLabelsDraft((current) =>
+            current.includes(label)
+                ? current.filter(item => item !== label)
+                : unique([...current, label])
+        );
     };
 
-    const scoredLeads = useMemo<ScoredLead[]>(() => {
+    const dateFilteredLeads = useMemo(() => {
         const start = globalFilters.startDate ? new Date(globalFilters.startDate) : new Date(2024, 0, 1);
         start.setHours(0, 0, 0, 0);
         const end = globalFilters.endDate ? new Date(globalFilters.endDate) : new Date(2030, 0, 1);
         end.setHours(23, 59, 59, 999);
         const selectedInboxes = globalFilters.selectedInboxes || [];
 
-        return conversations
-            .filter((lead) => {
-                if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(lead.inbox_id))) return false;
-                const createdAt = parseDate(lead.created_at || lead.timestamp);
-                return createdAt >= start && createdAt <= end;
-            })
-            .map((lead) => {
-                const inbox = lead.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
-                const attrs = getAttrs(lead);
-                const channel = getLeadChannelName(lead, inbox);
-                const campaign = String(attrs.campana || "").trim() || "Sin campana";
-                const owner = String(attrs.responsable || lead.meta?.assignee?.name || "").trim() || "Sin responsable";
-                const status = String(lead.status || "Sin estado");
-                const scoreInteres = parseScoreInteres(attrs.score_interes);
+        return conversations.filter((lead) => {
+            if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(lead.inbox_id))) return false;
+            const createdAt = parseDate(lead.created_at || lead.timestamp);
+            return createdAt >= start && createdAt <= end;
+        });
+    }, [conversations, globalFilters.startDate, globalFilters.endDate, globalFilters.selectedInboxes]);
 
-                let score = scoreInteres ?? 35;
-                let scoreSource: "score_interes" | "label_fallback" = scoreInteres === null ? "label_fallback" : "score_interes";
-                let bucket: ScoreBucket = "low";
-                let reason = "Sin regla activa";
-                let stage = "Sin etapa";
+    const preparedLeads = useMemo<PreparedLead[]>(() => {
+        const selectedAttributeLabel = selectedScoreAttribute?.label || activeScoreAttributeKey || "Sin atributo";
 
-                if (labelsIncludeAny(lead, effectiveRules.high)) {
-                    score = scoreInteres ?? 90;
-                    bucket = "high";
-                    reason = "Etiqueta configurada como High";
-                    stage = labelsIncludeAny(lead, tagSettings.saleTags || []) || (lead.labels || []).includes("venta_exitosa") ? "Venta" : "Cita";
-                } else if (labelsIncludeAny(lead, effectiveRules.medium)) {
-                    score = scoreInteres ?? 60;
-                    bucket = "medium";
-                    reason = "Etiqueta configurada como Medium";
-                    stage = (lead.labels || []).includes("seguimiento_humano") ? "Seguimiento humano" : "SQL";
-                } else if (labelsIncludeAny(lead, effectiveRules.low)) {
-                    score = scoreInteres ?? 20;
-                    bucket = "low";
-                    reason = "Etiqueta configurada como Low";
-                    stage = "Descalificado";
-                } else if (scoreInteres !== null) {
-                    bucket = rangeBucketFromScore(scoreInteres);
-                    reason = "Fallback por score_interes";
-                    stage = "Score interes";
-                }
+        return dateFilteredLeads.map((lead: any) => {
+            const inbox = lead.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
+            const score = activeScoreAttributeKey ? parseNumericScore(lead.resolvedAttrs[activeScoreAttributeKey]) : null;
+            const bucket = score === null ? null : bucketFromScore(score, activeScoreThresholds);
 
-                return {
-                    lead,
-                    score,
-                    scoreInteres,
-                    scoreSource,
-                    bucket,
-                    bucketLabel: BUCKET_COPY[bucket].label,
-                    reason,
-                    stage,
-                    channel,
-                    campaign,
-                    owner,
-                    status
-                };
-            });
-    }, [conversations, globalFilters.startDate, globalFilters.endDate, globalFilters.selectedInboxes, inboxMap, effectiveRules, tagSettings.saleTags]);
+            return {
+                lead,
+                score,
+                bucket,
+                bucketLabel: bucket ? BUCKET_COPY[bucket].label : "Sin score",
+                stage: STAGE_LABELS[lead.resolvedStage] || "Sin etapa",
+                channel: getLeadChannelName(lead, inbox),
+                campaign: String(lead.resolvedAttrs.campana || lead.resolvedAttrs.utm_campaign || "").trim() || "Sin campaña",
+                owner: String(lead.resolvedAttrs.responsable || lead.meta?.assignee?.name || "").trim() || "Sin responsable",
+                attributeKey: activeScoreAttributeKey,
+                attributeLabel: selectedAttributeLabel
+            };
+        });
+    }, [dateFilteredLeads, inboxMap, activeScoreAttributeKey, activeScoreThresholds, selectedScoreAttribute]);
+
+    const scorablePreparedLeads = useMemo(
+        () => preparedLeads.filter((item): item is PreparedLead & { score: number; bucket: ScoreBucket } => item.score !== null && item.bucket !== null),
+        [preparedLeads]
+    );
+
+    const scoreVisibleLabels = useMemo(
+        () => unique(scorablePreparedLeads.flatMap(item => item.lead.resolvedLabels || [])),
+        [scorablePreparedLeads]
+    );
 
     const filterOptions = useMemo(() => ({
-        campaigns: unique(conversations.map(lead => String(getAttrs(lead).campana || "").trim() || "Sin campana")),
-        labels: availableLabels,
-        owners: unique(conversations.map(lead => {
-            const attrs = getAttrs(lead);
-            return String(attrs.responsable || lead.meta?.assignee?.name || "").trim() || "Sin responsable";
-        })),
-        statuses: unique(conversations.map(lead => String(lead.status || "Sin estado"))),
-        stages: unique(scoredLeads.map(item => item.stage))
-    }), [conversations, scoredLeads, availableLabels]);
+        campaigns: unique(scorablePreparedLeads.map(item => item.campaign)),
+        labels: scoreVisibleLabels,
+        owners: unique(scorablePreparedLeads.map(item => item.owner)),
+        stages: unique(scorablePreparedLeads.map(item => item.stage))
+    }), [scorablePreparedLeads, scoreVisibleLabels]);
 
-    const filteredLeads = useMemo(() => {
-        return scoredLeads.filter(item => {
+    useEffect(() => {
+        if (campaignFilter !== "all" && !filterOptions.campaigns.includes(campaignFilter)) setCampaignFilter("all");
+        if (labelFilter !== "all" && !filterOptions.labels.includes(labelFilter)) setLabelFilter("all");
+        if (ownerFilter !== "all" && !filterOptions.owners.includes(ownerFilter)) setOwnerFilter("all");
+        if (stageFilter !== "all" && !filterOptions.stages.includes(stageFilter)) setStageFilter("all");
+    }, [campaignFilter, labelFilter, ownerFilter, stageFilter, filterOptions]);
+
+    const visiblePreparedLeads = useMemo(() => {
+        return preparedLeads.filter(item => {
             if (campaignFilter !== "all" && item.campaign !== campaignFilter) return false;
-            if (labelFilter !== "all" && !(item.lead.labels || []).includes(labelFilter)) return false;
+            if (labelFilter !== "all" && !(item.lead.resolvedLabels || []).includes(labelFilter)) return false;
             if (ownerFilter !== "all" && item.owner !== ownerFilter) return false;
-            if (statusFilter !== "all" && item.status !== statusFilter) return false;
             if (stageFilter !== "all" && item.stage !== stageFilter) return false;
-            if (bucketFilter !== "all" && item.bucket !== bucketFilter) return false;
             return true;
         });
-    }, [scoredLeads, campaignFilter, labelFilter, ownerFilter, statusFilter, stageFilter, bucketFilter]);
+    }, [preparedLeads, campaignFilter, labelFilter, ownerFilter, stageFilter]);
+
+    const missingScoreCount = visiblePreparedLeads.filter(item => item.score === null).length;
+
+    const filteredLeads = useMemo(
+        () => visiblePreparedLeads.filter((item): item is PreparedLead & { score: number; bucket: ScoreBucket } => {
+            if (item.score === null || !item.bucket) return false;
+            if (bucketFilter !== "all" && item.bucket !== bucketFilter) return false;
+            return true;
+        }),
+        [visiblePreparedLeads, bucketFilter]
+    );
+
+    const scoredLeadCount = filteredLeads.length;
+
+    const isAppointmentLead = (lead: any) => {
+        const hasAppointmentLabel = activeAppointmentLabels.length > 0 && lead.resolvedLabels.some((l: string) => activeAppointmentLabels.includes(l));
+        const hasSale = lead.resolvedStage === 'sale';
+        return hasAppointmentLabel || hasSale;
+    };
 
     const bucketDistribution = BUCKET_ORDER.map(bucket => ({
         bucket,
@@ -304,19 +445,9 @@ const LeadScoringLayer = () => {
         fill: BUCKET_COPY[bucket].color
     }));
 
-    const isAppointmentOrSale = (item: ScoredLead) =>
-        labelsIncludeAny(item.lead, tagSettings.appointmentTags || []) ||
-        labelsIncludeAny(item.lead, tagSettings.saleTags || []) ||
-        (item.lead.labels || []).includes("venta_exitosa") ||
-        (item.lead.labels || []).includes("venta") ||
-        (item.lead.labels || []).includes("cita") ||
-        (item.lead.labels || []).includes("cita_agendada") ||
-        (item.lead.labels || []).includes("cita_agendada_humano");
-
     const highLeads = filteredLeads.filter(item => item.bucket === "high");
     const lowLeads = filteredLeads.filter(item => item.bucket === "low");
-    const scoreInteresCount = filteredLeads.filter(item => item.scoreInteres !== null).length;
-    const highAppointments = highLeads.filter(isAppointmentOrSale).length;
+    const highAppointments = highLeads.filter(item => isAppointmentLead(item.lead)).length;
 
     const averageByChannel = Array.from(
         filteredLeads.reduce((map, item) => {
@@ -328,19 +459,19 @@ const LeadScoringLayer = () => {
         }, new Map<string, { name: string; total: number; count: number }>())
     ).map(([, row]) => ({
         name: row.name,
-        score: Math.round(row.total / row.count),
+        score: Math.round((row.total / row.count) * 10) / 10,
         leads: row.count
     })).sort((a, b) => b.score - a.score || b.leads - a.leads);
 
     const averageByDimension = Array.from(
         filteredLeads.reduce((map, item) => {
             const keys = scoreDimension === "campaign"
-                ? [item.campaign]
-                : (item.lead.labels || []).filter(label => actualLabels.includes(label)).length > 0
-                    ? (item.lead.labels || []).filter(label => actualLabels.includes(label))
-                    : ["Sin etiqueta"];
+                ? (item.campaign !== "Sin campaña" ? [item.campaign] : [])
+                : (item.lead.labels || []).filter(label => scoreVisibleLabels.includes(label)).length > 0
+                    ? (item.lead.labels || []).filter(label => scoreVisibleLabels.includes(label))
+                    : ["Sin etiqueta actual"];
 
-            keys.forEach(key => {
+            keys.forEach((key) => {
                 const row = map.get(key) || { name: key, total: 0, count: 0 };
                 row.total += item.score;
                 row.count += 1;
@@ -351,13 +482,37 @@ const LeadScoringLayer = () => {
         }, new Map<string, { name: string; total: number; count: number }>())
     ).map(([, row]) => ({
         name: row.name,
-        score: Math.round(row.total / row.count),
+        score: Math.round((row.total / row.count) * 10) / 10,
         leads: row.count
     })).sort((a, b) => b.score - a.score || b.leads - a.leads).slice(0, 8);
 
+    const dimensionCardTitle = scoreDimension === "label"
+        ? "Score promedio según etiqueta actual"
+        : "Score promedio según campaña";
+    const dimensionCardDescription = scoreDimension === "label"
+        ? "Muestra el score promedio de los leads que hoy tienen cada etiqueta visible."
+        : "Muestra el score promedio de los leads con score y con una campaña asignada.";
+
+    const scoreDomain = useMemo(() => {
+        const values = [
+            ...filteredLeads.map(item => item.score),
+            ...averageByChannel.map(item => item.score),
+            ...averageByDimension.map(item => item.score)
+        ].filter((value): value is number => Number.isFinite(value));
+
+        if (values.length === 0) return [-5, 25];
+
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const spread = max - min;
+        const padding = Math.max(2, Math.ceil((spread || Math.max(Math.abs(max), 10)) * 0.1));
+
+        return [Math.min(0, min - padding), max + padding];
+    }, [filteredLeads, averageByChannel, averageByDimension]);
+
     const conversionByBucket = BUCKET_ORDER.map(bucket => {
         const bucketLeads = filteredLeads.filter(item => item.bucket === bucket);
-        const converted = bucketLeads.filter(isAppointmentOrSale).length;
+        const converted = bucketLeads.filter(item => isAppointmentLead(item.lead)).length;
 
         return {
             bucket,
@@ -380,9 +535,11 @@ const LeadScoringLayer = () => {
         .sort((a, b) => b.score - a.score || (b.lead.timestamp || 0) - (a.lead.timestamp || 0))
         .slice(0, 10);
 
+    const noScoringAttributeAvailable = scoreAttributeOptions.length === 0;
+
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-96">
+            <div className="flex h-96 items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
         );
@@ -391,11 +548,200 @@ const LeadScoringLayer = () => {
     return (
         <div className="space-y-6">
             <div className="flex flex-col gap-2">
-                <h2 className="text-2xl font-bold tracking-tight">Lead Scoring</h2>
+                <h2 className="text-2xl font-bold tracking-tight">Scores</h2>
                 <p className="text-sm text-muted-foreground">
-                    Calidad de leads por bucket High, Medium y Low usando etiquetas reales de Chatwoot y score_interes cuando existe. La data viene del flujo hibrido: hoy/ayer API y el resto Supabase.
+                    La calidad del lead se calcula con un solo contact attribute numerico de Chatwoot. El dashboard lee ese valor desde la capa hibrida: hoy y ayer API, el resto Supabase.
                 </p>
             </div>
+
+            <Card>
+                {role === 'admin' && (
+                    <Collapsible open={configOpen} onOpenChange={setConfigOpen}>
+                        <CardHeader className="pb-3">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div className="space-y-1">
+                                    <CardTitle className="flex items-center gap-2 text-base">
+                                        <Settings2 className="h-5 w-5 text-primary" />
+                                        Configurar scoring
+                                    </CardTitle>
+                                    <CardDescription>
+                                        Elige el atributo numerico oficial del score y define que etiquetas cuentan como cita para validar la calidad alta.
+                                    </CardDescription>
+                                </div>
+                                <CollapsibleTrigger asChild>
+                                    <Button variant="outline" size="sm" className="gap-2 self-start">
+                                        {configOpen ? "Ocultar configuración" : "Abrir configuración"}
+                                        <ChevronDown className={`h-4 w-4 transition-transform ${configOpen ? "rotate-180" : ""}`} />
+                                    </Button>
+                                </CollapsibleTrigger>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr_1fr]">
+                                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                                    <div className="font-semibold">Fuente actual del score</div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        {selectedScoreAttribute
+                                            ? `${selectedScoreAttribute.label} (${selectedScoreAttribute.key})`
+                                            : "Sin atributo numérico disponible"}
+                                    </div>
+                                    <div className="mt-2 text-xs text-muted-foreground">
+                                        El dashboard no suma palabras ni scripts. Solo consume el valor final que n8n o Chatwoot escriban en ese campo.
+                                    </div>
+                                </div>
+
+                                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                                    <div className="font-semibold">Niveles del score</div>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        {BUCKET_ORDER.map((bucket) => (
+                                            <button
+                                                key={bucket}
+                                                type="button"
+                                                onClick={() => setConfigOpen(true)}
+                                                className={`rounded-full border px-3 py-1 text-xs font-medium transition hover:bg-muted/40 ${BUCKET_COPY[bucket].bg}`}
+                                            >
+                                                {BUCKET_COPY[bucket].label}: {getBucketRangeLabel(bucket, activeScoreThresholds)}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="mt-2 text-xs text-muted-foreground">
+                                        Pulsa cualquier nivel para cambiar los rangos.
+                                    </div>
+                                </div>
+                            </div>
+                        </CardHeader>
+
+                        <CollapsibleContent>
+                            <CardContent className="space-y-4 pt-0">
+                                {noScoringAttributeAvailable ? (
+                                    <EmptyState text="No se detectaron contact attributes numéricos en Chatwoot. Crea o sincroniza uno para activar esta pestaña." />
+                                ) : (
+                                    <>
+                                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_1fr]">
+                                            <div className="space-y-2">
+                                                <label className="text-sm font-semibold">Atributo numérico del score</label>
+                                                <Select
+                                                    value={scoreAttributeKeyDraft || ""}
+                                                    onValueChange={(value) => {
+                                                        setSettingsDirty(true);
+                                                        setScoreAttributeKeyDraft(value);
+                                                    }}
+                                                >
+                                                    <SelectTrigger className="h-10">
+                                                        <SelectValue placeholder="Selecciona un atributo numérico" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {scoreAttributeOptions.map((option) => (
+                                                            <SelectItem key={option.key} value={option.key}>
+                                                                {option.label}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Solo aparecen contact attributes de tipo number. Si existe <span className="font-medium">score_interes</span>, se usa como default.
+                                                </p>
+                                                {scoreAttributeOptions.find(option => option.key === scoreAttributeKeyDraft)?.description ? (
+                                                    <p className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                                                        {scoreAttributeOptions.find(option => option.key === scoreAttributeKeyDraft)?.description}
+                                                    </p>
+                                                ) : null}
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <label className="text-sm font-semibold">Etiquetas que contarán como cita</label>
+                                                <div className="rounded-lg border">
+                                                    <div className="border-b bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                                                        Selecciona las etiquetas que cuentan como cita o avance comercial para medir qué porcentaje de leads de nivel alto ya llegó a ese punto.
+                                                    </div>
+                                                    <div className="max-h-[220px] space-y-2 overflow-y-auto p-3">
+                                                        {actualLabels.length === 0 ? (
+                                                            <p className="py-4 text-center text-xs text-muted-foreground">No se detectaron etiquetas en Chatwoot.</p>
+                                                        ) : (
+                                                            actualLabels.map((label) => (
+                                                                <label key={`score-appointment-${label}`} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/20">
+                                                                    <Checkbox
+                                                                        checked={appointmentLabelsDraft.includes(label)}
+                                                                        onCheckedChange={() => toggleAppointmentLabel(label)}
+                                                                    />
+                                                                    <span className="truncate text-sm">{label}</span>
+                                                                </label>
+                                                            ))
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-lg border bg-muted/10 p-4">
+                                            <div className="mb-3 flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="text-sm font-semibold">Rangos para Alta, Media y Baja</div>
+                                                    <p className="text-xs text-muted-foreground">
+                                                        El dashboard clasificará el score según estos cortes.
+                                                    </p>
+                                                </div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {BUCKET_ORDER.map((bucket) => (
+                                                        <Badge key={`preview-${bucket}`} variant="outline" className={BUCKET_COPY[bucket].bg}>
+                                                            {BUCKET_COPY[bucket].label}: {getBucketRangeLabel(bucket, activeScoreThresholds)}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                <div className="space-y-2">
+                                                    <label className="text-sm font-semibold">Desde Alta</label>
+                                                    <Input
+                                                        type="number"
+                                                        inputMode="decimal"
+                                                        value={thresholdHighDraft}
+                                                        onChange={(event) => {
+                                                            setSettingsDirty(true);
+                                                            setThresholdHighDraft(event.target.value);
+                                                        }}
+                                                        placeholder="20"
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <label className="text-sm font-semibold">Desde Media</label>
+                                                    <Input
+                                                        type="number"
+                                                        inputMode="decimal"
+                                                        value={thresholdMediumDraft}
+                                                        onChange={(event) => {
+                                                            setSettingsDirty(true);
+                                                            setThresholdMediumDraft(event.target.value);
+                                                        }}
+                                                        placeholder="10"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {thresholdValidationError ? (
+                                                <p className="mt-3 text-xs font-medium text-red-600">{thresholdValidationError}</p>
+                                            ) : null}
+                                        </div>
+
+                                        <div className="rounded-lg border bg-muted/15 p-3 text-xs text-muted-foreground">
+                                            Recomendación para n8n: escribe el score final en el atributo seleccionado. Luego el dashboard lo clasificará usando los rangos que configures aquí.
+                                        </div>
+
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                            <Button variant="outline" size="sm" onClick={restoreDefaultConfig} disabled={savingSettings}>
+                                                Restaurar default
+                                            </Button>
+                                            <Button size="sm" onClick={saveScoringConfig} disabled={!settingsDirty || savingSettings}>
+                                                {savingSettings ? "Guardando..." : "Guardar configuración"}
+                                            </Button>
+                                        </div>
+                                    </>
+                                )}
+                            </CardContent>
+                        </CollapsibleContent>
+                    </Collapsible>
+                )}
+            </Card>
 
             <Card>
                 <CardHeader className="pb-3">
@@ -404,18 +750,17 @@ const LeadScoringLayer = () => {
                         Filtros de scoring
                     </CardTitle>
                     <CardDescription>
-                        Fecha y canal se controlan arriba; estos filtros refinan campana, etiqueta, responsable, estado, etapa y bucket.
+                        Fecha y canal se controlan arriba. Aquí refinamos campaña, etiqueta, responsable, etapa y nivel.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
-                        <FilterSelect label="Campana" value={campaignFilter} onChange={setCampaignFilter} options={filterOptions.campaigns} />
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                        <FilterSelect label="Campaña" value={campaignFilter} onChange={setCampaignFilter} options={filterOptions.campaigns} />
                         <FilterSelect label="Etiqueta" value={labelFilter} onChange={setLabelFilter} options={filterOptions.labels} />
                         <FilterSelect label="Responsable" value={ownerFilter} onChange={setOwnerFilter} options={filterOptions.owners} />
-                        <FilterSelect label="Estado" value={statusFilter} onChange={setStatusFilter} options={filterOptions.statuses} />
                         <FilterSelect label="Etapa" value={stageFilter} onChange={setStageFilter} options={filterOptions.stages} />
                         <FilterSelect
-                            label="Bucket"
+                            label="Nivel"
                             value={bucketFilter}
                             onChange={setBucketFilter}
                             options={BUCKET_ORDER}
@@ -425,195 +770,206 @@ const LeadScoringLayer = () => {
                 </CardContent>
             </Card>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <KpiCard icon={Gauge} title="Lead score promedio" value={`${kpis.averageScore}`} description={`${filteredLeads.length} leads evaluados - ${scoreInteresCount} con score_interes`} />
-                <KpiCard icon={BadgeCheck} title="% high quality" value={`${kpis.highPercentage}%`} description={`${highLeads.length} leads high`} />
-                <KpiCard icon={TrendingUp} title="Citas de high quality" value={`${kpis.highAppointmentConversion}%`} description={`${highAppointments} de ${highLeads.length} high llegan a cita/venta`} />
-                <KpiCard icon={Activity} title="% low quality" value={`${kpis.lowPercentage}%`} description={`${lowLeads.length} leads low`} />
-            </div>
+            {noScoringAttributeAvailable ? null : (
+                <>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                        <KPICard
+                            icon={Gauge}
+                            title="Lead score promedio"
+                            value={`${kpis.averageScore}`}
+                            subtitle={`${scoredLeadCount} leads con score - ${missingScoreCount} sin score`}
+                            variant="primary"
+                        />
+                        <KPICard
+                            icon={BadgeCheck}
+                            title="% leads de alta calidad"
+                            value={`${kpis.highPercentage}%`}
+                            subtitle={`${highLeads.length} leads en nivel alto`}
+                            variant="success"
+                        />
+                        <KPICard
+                            icon={TrendingUp}
+                            title="Leads altos que llegan a cita"
+                            value={`${kpis.highAppointmentConversion}%`}
+                            subtitle={activeAppointmentLabels.length === 0
+                                ? "Primero configura qué etiquetas cuentan como cita."
+                                : `${highAppointments} de ${highLeads.length} leads altos ya llegaron a cita`}
+                            variant="success"
+                        />
+                        <KPICard
+                            icon={Activity}
+                            title="% leads de baja calidad"
+                            value={`${kpis.lowPercentage}%`}
+                            subtitle={`${lowLeads.length} leads en nivel bajo`}
+                            variant="destructive"
+                        />
+                    </div>
 
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <ChartCard title="Distribucion por bucket" description="Reparte los leads entre Low, Medium y High quality.">
-                    {filteredLeads.length === 0 ? (
-                        <EmptyState text="No hay leads con estos filtros." />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={300}>
-                            <BarChart data={bucketDistribution} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
-                                <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                                <YAxis allowDecimals={false} />
-                                <Tooltip cursor={{ fill: "transparent" }} formatter={(value: number) => [`${value} leads`, "Bucket"]} />
-                                <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                                    {bucketDistribution.map(row => <Cell key={row.bucket} fill={row.fill} />)}
-                                    <LabelList dataKey="value" position="top" style={{ fontWeight: 700 }} />
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </ChartCard>
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                        <ChartCard title="Distribución por nivel de score" description="Reparte los leads con score entre baja, media y alta calidad.">
+                            {filteredLeads.length === 0 ? (
+                                <EmptyState text={missingScoreCount > 0 ? "Los leads visibles no tienen score en el atributo seleccionado." : "No hay leads con estos filtros."} />
+                            ) : (
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <BarChart data={bucketDistribution} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
+                                        <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                                        <YAxis allowDecimals={false} />
+                                        <Tooltip cursor={{ fill: "transparent" }} formatter={(value: number) => [`${value} leads`, "Nivel"]} />
+                                        <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                                            {bucketDistribution.map(row => <Cell key={row.bucket} fill={row.fill} />)}
+                                            <LabelList dataKey="value" position="top" style={{ fontWeight: 700 }} />
+                                        </Bar>
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            )}
+                        </ChartCard>
 
-                <ChartCard title="Score promedio por canal" description="Compara que canal trae mejor calidad promedio.">
-                    {averageByChannel.length === 0 ? (
-                        <EmptyState text="No hay canales para mostrar." />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={300}>
-                            <BarChart data={averageByChannel.slice(0, 8)} layout="vertical" margin={{ top: 12, right: 30, left: 28, bottom: 10 }}>
-                                <CartesianGrid strokeDasharray="3 3" horizontal vertical={false} strokeOpacity={0.12} />
-                                <XAxis type="number" domain={[0, 100]} />
-                                <YAxis dataKey="name" type="category" width={108} axisLine={false} tickLine={false} />
-                                <Tooltip formatter={(value: number, name: string, item: any) => [`${value}/100`, `${item?.payload?.leads || 0} leads`]} />
-                                <Bar dataKey="score" fill="#243d90" radius={[0, 6, 6, 0]}>
-                                    <LabelList dataKey="score" position="right" style={{ fontWeight: 700 }} />
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </ChartCard>
+                        <ChartCard title="Score promedio por canal" description="Compara qué red social trae mejor calidad promedio.">
+                            {averageByChannel.length === 0 ? (
+                                <EmptyState text="No hay canales con score para mostrar." />
+                            ) : (
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <BarChart data={averageByChannel.slice(0, 8)} layout="vertical" margin={{ top: 12, right: 30, left: 28, bottom: 10 }}>
+                                        <CartesianGrid strokeDasharray="3 3" horizontal vertical={false} strokeOpacity={0.12} />
+                                        <XAxis type="number" domain={scoreDomain} />
+                                        <YAxis dataKey="name" type="category" width={108} axisLine={false} tickLine={false} />
+                                        <Tooltip formatter={(value: number, _name: string, item: any) => [`${value}`, `${item?.payload?.leads || 0} leads`]} />
+                                        <Bar dataKey="score" fill="#243d90" radius={[0, 6, 6, 0]}>
+                                            <LabelList dataKey="score" position="right" style={{ fontWeight: 700 }} />
+                                        </Bar>
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            )}
+                        </ChartCard>
 
-                <ChartCard
-                    title={scoreDimension === "label" ? "Score promedio por etiqueta" : "Score promedio por campana"}
-                    description="Detecta etiquetas o campanas con leads mas valiosos."
-                    action={(
-                        <Select value={scoreDimension} onValueChange={(value: ScoreDimension) => setScoreDimension(value)}>
-                            <SelectTrigger className="h-8 w-[132px] text-xs">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="label">Etiqueta</SelectItem>
-                                <SelectItem value="campaign">Campana</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    )}
-                >
-                    {averageByDimension.length === 0 ? (
-                        <EmptyState text="No hay datos para esta dimension." />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={300}>
-                            <BarChart data={averageByDimension} layout="vertical" margin={{ top: 12, right: 30, left: 48, bottom: 10 }}>
-                                <CartesianGrid strokeDasharray="3 3" horizontal vertical={false} strokeOpacity={0.12} />
-                                <XAxis type="number" domain={[0, 100]} />
-                                <YAxis dataKey="name" type="category" width={128} axisLine={false} tickLine={false} />
-                                <Tooltip formatter={(value: number, name: string, item: any) => [`${value}/100`, `${item?.payload?.leads || 0} leads`]} />
-                                <Bar dataKey="score" fill="#7c3aed" radius={[0, 6, 6, 0]}>
-                                    <LabelList dataKey="score" position="right" style={{ fontWeight: 700 }} />
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </ChartCard>
+                        <ChartCard
+                            title={dimensionCardTitle}
+                            description={dimensionCardDescription}
+                            action={(
+                                <Select value={scoreDimension} onValueChange={(value: ScoreDimension) => setScoreDimension(value)}>
+                                    <SelectTrigger className="h-8 w-[132px] text-xs">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="label">Etiqueta actual</SelectItem>
+                                        <SelectItem value="campaign">Campaña</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            )}
+                        >
+                            {averageByDimension.length === 0 ? (
+                                <EmptyState text={scoreDimension === "campaign"
+                                    ? "No hay leads con score y con campaña para esta vista."
+                                    : "No hay leads con score para esta vista y estos filtros."} />
+                            ) : (
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <BarChart data={averageByDimension} layout="vertical" margin={{ top: 12, right: 30, left: 48, bottom: 10 }}>
+                                        <CartesianGrid strokeDasharray="3 3" horizontal vertical={false} strokeOpacity={0.12} />
+                                        <XAxis type="number" domain={scoreDomain} />
+                                        <YAxis dataKey="name" type="category" width={128} axisLine={false} tickLine={false} />
+                                        <Tooltip formatter={(value: number, _name: string, item: any) => [`${value}`, `${item?.payload?.leads || 0} leads`]} />
+                                        <Bar dataKey="score" fill="#0f9d76" radius={[0, 6, 6, 0]}>
+                                            <LabelList dataKey="score" position="right" style={{ fontWeight: 700 }} />
+                                        </Bar>
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            )}
+                        </ChartCard>
 
-                <ChartCard title="Conversion a cita por bucket" description="Valida si el scoring predice avance comercial.">
-                    {filteredLeads.length === 0 ? (
-                        <EmptyState text="No hay conversiones para mostrar." />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={300}>
-                            <BarChart data={conversionByBucket} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
-                                <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                                <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-                                <Tooltip formatter={(value: number, name: string, item: any) => [`${value}%`, `${item?.payload?.converted || 0} de ${item?.payload?.total || 0}`]} />
-                                <Bar dataKey="conversion" radius={[6, 6, 0, 0]}>
-                                    {conversionByBucket.map(row => <Cell key={row.bucket} fill={row.fill} />)}
-                                    <LabelList dataKey="conversion" position="top" formatter={(value: number) => `${value}%`} style={{ fontWeight: 700 }} />
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </ChartCard>
-            </div>
+                        <ChartCard
+                            title="Leads con cita según nivel de score"
+                            description="Muestra qué porcentaje de leads con score alto, medio o bajo ya llegó a las etiquetas de cita configuradas."
+                        >
+                            {activeAppointmentLabels.length === 0 ? (
+                                <EmptyState text="Primero configura qué etiquetas cuentan como cita." />
+                            ) : filteredLeads.length === 0 ? (
+                                <EmptyState text="No hay leads con score para esta vista y estos filtros." />
+                            ) : (
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <BarChart data={conversionByBucket} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
+                                        <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                                        <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                                        <Tooltip formatter={(value: number, _name: string, item: any) => [`${value}%`, `${item?.payload?.converted || 0} de ${item?.payload?.total || 0}`]} />
+                                        <Bar dataKey="conversion" radius={[6, 6, 0, 0]}>
+                                            {conversionByBucket.map(row => <Cell key={row.bucket} fill={row.fill} />)}
+                                            <LabelList dataKey="conversion" position="top" formatter={(value: number) => `${value}%`} style={{ fontWeight: 700 }} />
+                                        </Bar>
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            )}
+                        </ChartCard>
+                    </div>
 
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-                <Card className="xl:col-span-1">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2 text-base">
-                            <Info className="h-5 w-5 text-primary" />
-                            Reglas activas
-                        </CardTitle>
-                        <CardDescription>
-                            Selecciona que etiquetas caen en High, Medium o Low. Version {SCORE_VERSION}.
-                            {rulesDirty ? " Hay cambios sin guardar." : ""}
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                        <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
-                            Solo se muestran etiquetas existentes en Chatwoot. Si una etiqueta no esta configurada y el lead tiene score_interes, se usa fallback por rango: High 70-100, Medium 40-69, Low 0-39.
-                        </div>
-                        <RuleConfigBucket bucket="high" labels={availableLabels} selected={effectiveRules.high} onToggle={toggleRuleTag} />
-                        <RuleConfigBucket bucket="medium" labels={availableLabels} selected={effectiveRules.medium} onToggle={toggleRuleTag} />
-                        <RuleConfigBucket bucket="low" labels={availableLabels} selected={effectiveRules.low} onToggle={toggleRuleTag} />
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                            <Button variant="outline" size="sm" onClick={restoreSuggestedRules}>
-                                Restaurar sugeridas
-                            </Button>
-                            <Button size="sm" onClick={saveRules}>
-                                Guardar reglas
-                            </Button>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                <Card className="xl:col-span-2">
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2 text-base">
-                            <Target className="h-5 w-5 text-primary" />
-                            Leads evaluados
-                        </CardTitle>
-                        <CardDescription>Top 10 por score dentro de los filtros seleccionados.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="overflow-x-auto rounded-xl border">
-                            <table className="w-full min-w-[780px] text-left text-sm">
-                                <thead className="border-b bg-muted/30 text-[10px] uppercase tracking-wider text-muted-foreground">
-                                    <tr>
-                                        <th className="px-4 py-3">Lead</th>
-                                        <th className="px-4 py-3">Bucket</th>
-                                        <th className="px-4 py-3">Score</th>
-                                        <th className="px-4 py-3">Canal</th>
-                                        <th className="px-4 py-3">Campana</th>
-                                        <th className="px-4 py-3">Motivo</th>
-                                        <th className="px-4 py-3">Fecha</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y">
-                                    {detailRows.length === 0 ? (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2 text-base">
+                                <Target className="h-5 w-5 text-primary" />
+                                Leads evaluados
+                            </CardTitle>
+                            <CardDescription>
+                                Top 10 por score dentro de los filtros seleccionados. El score sale de {selectedScoreAttribute?.label || activeScoreAttributeKey || "ningún atributo"}.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="overflow-x-auto rounded-xl border">
+                                <table className="w-full min-w-[820px] text-left text-sm">
+                                    <thead className="border-b bg-muted/30 text-[10px] uppercase tracking-wider text-muted-foreground">
                                         <tr>
-                                            <td className="px-4 py-12 text-center text-muted-foreground" colSpan={7}>
-                                                No hay leads para mostrar.
-                                            </td>
+                                            <th className="px-4 py-3">Lead</th>
+                                            <th className="px-4 py-3">Nivel</th>
+                                            <th className="px-4 py-3">Score</th>
+                                            <th className="px-4 py-3">Canal</th>
+                                            <th className="px-4 py-3">Campaña</th>
+                                            <th className="px-4 py-3">Atributo usado</th>
+                                            <th className="px-4 py-3">Fecha</th>
                                         </tr>
-                                    ) : (
-                                        detailRows.map(item => (
-                                            <tr key={item.lead.id} className="hover:bg-muted/20">
-                                                <td className="px-4 py-3">
-                                                    <div className="font-semibold">{getLeadName(item.lead)}</div>
-                                                    <div className="text-[10px] text-muted-foreground">
-                                                        ID {item.lead.id} - {getLeadPhone(item.lead, item.channel) || "Sin numero"}
-                                                    </div>
+                                    </thead>
+                                    <tbody className="divide-y">
+                                        {detailRows.length === 0 ? (
+                                            <tr>
+                                                <td className="px-4 py-12 text-center text-muted-foreground" colSpan={7}>
+                                                    No hay leads con score para mostrar.
                                                 </td>
-                                                <td className="px-4 py-3">
-                                                    <Badge variant="outline" className={BUCKET_COPY[item.bucket].bg}>{item.bucketLabel}</Badge>
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <div className="font-bold">{item.score}</div>
-                                                    <div className="text-[10px] text-muted-foreground">
-                                                        {item.scoreSource === "score_interes" ? "score_interes" : "fallback etiqueta"}
-                                                    </div>
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <div className="font-medium">{item.channel}</div>
-                                                </td>
-                                                <td className="px-4 py-3">{item.campaign}</td>
-                                                <td className="px-4 py-3">{item.reason}</td>
-                                                <td className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(item.lead.created_at || item.lead.timestamp)}</td>
                                             </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
+                                        ) : (
+                                            detailRows.map(item => (
+                                                <tr key={item.lead.id} className="hover:bg-muted/20">
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-semibold">{getLeadName(item.lead)}</div>
+                                                        <div className="text-[10px] text-muted-foreground">
+                                                            ID {item.lead.id} - {getLeadPhone(item.lead, item.channel) || "Sin número"}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <Badge variant="outline" className={BUCKET_COPY[item.bucket].bg}>{item.bucketLabel}</Badge>
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-bold">{item.score}</div>
+                                                        <div className="text-[10px] text-muted-foreground">
+                                                            {item.bucket === "high" ? "Alta calidad" : item.bucket === "medium" ? "Calidad media" : "Baja calidad"}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-medium">{item.channel}</div>
+                                                    </td>
+                                                    <td className="px-4 py-3">{item.campaign}</td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-medium">{item.attributeLabel}</div>
+                                                        <div className="text-[10px] text-muted-foreground">{item.attributeKey}</div>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(item.lead.created_at || item.lead.timestamp)}</td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </>
+            )}
         </div>
     );
 };
@@ -647,18 +1003,7 @@ const FilterSelect = ({
     </div>
 );
 
-const KpiCard = ({ icon: Icon, title, value, description }: any) => (
-    <Card>
-        <CardContent className="p-5">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
-                <Icon className="h-4 w-4 text-primary" />
-                {title}
-            </div>
-            <p className="text-3xl font-bold">{value}</p>
-            <p className="mt-2 text-xs text-muted-foreground">{description}</p>
-        </CardContent>
-    </Card>
-);
+
 
 const ChartCard = ({ title, description, children, action }: any) => (
     <Card>
@@ -673,53 +1018,6 @@ const ChartCard = ({ title, description, children, action }: any) => (
         </CardHeader>
         <CardContent>{children}</CardContent>
     </Card>
-);
-
-const RuleConfigBucket = ({
-    bucket,
-    labels,
-    selected,
-    onToggle
-}: {
-    bucket: ScoreBucket;
-    labels: string[];
-    selected: string[];
-    onToggle: (bucket: ScoreBucket, label: string) => void;
-}) => (
-    <Collapsible className="rounded-lg border">
-        <CollapsibleTrigger className="group flex w-full items-center justify-between gap-3 p-3 text-left">
-            <div className="flex min-w-0 items-center gap-2">
-                <Badge variant="outline" className={BUCKET_COPY[bucket].bg}>{BUCKET_COPY[bucket].label}</Badge>
-                <span className="truncate text-xs text-muted-foreground">
-                    {selected.length > 0 ? selected.slice(0, 2).join(", ") : "Sin etiquetas"}
-                    {selected.length > 2 ? ` +${selected.length - 2}` : ""}
-                </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-                <span className="text-xs font-bold text-muted-foreground">{selected.length}</span>
-                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
-            </div>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-            <div className="border-t bg-muted/10 p-3">
-                <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
-                    {labels.length === 0 ? (
-                        <p className="py-4 text-center text-xs text-muted-foreground">No se detectaron etiquetas.</p>
-                    ) : (
-                        labels.map(label => (
-                            <label key={`${bucket}-${label}`} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 hover:bg-background">
-                                <Checkbox
-                                    checked={selected.includes(label)}
-                                    onCheckedChange={() => onToggle(bucket, label)}
-                                />
-                                <span className="truncate text-xs font-medium">{label}</span>
-                            </label>
-                        ))
-                    )}
-                </div>
-            </div>
-        </CollapsibleContent>
-    </Collapsible>
 );
 
 export default LeadScoringLayer;

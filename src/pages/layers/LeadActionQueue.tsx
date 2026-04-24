@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import {
@@ -29,6 +29,7 @@ import {
     TagConfig,
     useDashboardContext
 } from "@/context/DashboardDataContext";
+import { useAuth } from "@/context/AuthContext";
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker";
 import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
 import { ExportToExcel } from "@/components/dashboard/ExportToExcel";
@@ -68,7 +69,8 @@ import {
     DialogHeader,
     DialogTitle,
     DialogDescription,
-    DialogFooter
+    DialogFooter,
+    DialogTrigger
 } from "@/components/ui/dialog";
 import {
     AlertDialog,
@@ -501,6 +503,7 @@ const LeadActionQueue = () => {
         ...globalFilters,
         ...tagSettings
     });
+    const { role } = useAuth();
 
     const savedHumanConfig = useMemo(() => getHumanFlowConfig(tagSettings), [tagSettings]);
     const [humanConfig, setHumanConfig] = useState<HumanFlowConfigState>(savedHumanConfig);
@@ -522,7 +525,9 @@ const LeadActionQueue = () => {
     const [isTagConfirmOpen, setIsTagConfirmOpen] = useState(false);
     const [newTag, setNewTag] = useState<string>("");
 
-    const [operationSearch, setOperationSearch] = useState("");
+    const [followUpSearch, setFollowUpSearch] = useState("");
+    const [scheduledSearch, setScheduledSearch] = useState("");
+
     const [operationLead, setOperationLead] = useState<QueueLead | null>(null);
     const [operationAmount, setOperationAmount] = useState("");
     const [operationDate, setOperationDate] = useState(getGuayaquilDateString());
@@ -540,20 +545,60 @@ const LeadActionQueue = () => {
     const [salesEndDate, setSalesEndDate] = useState("");
     const [salesSearch, setSalesSearch] = useState("");
 
-    const followUpQueue = useMemo(() => data.operationalMetrics?.followUpQueue || [], [data]);
-    const scheduledAppointmentsQueue = useMemo(() => data.operationalMetrics?.scheduledAppointmentsQueue || [], [data]);
+    const inboxMap = useMemo(() => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])), [inboxes]);
+
+    const getChannelName = useCallback((lead: Partial<MinifiedConversation> | any) => {
+        const inbox = lead?.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
+        return getLeadChannelName(lead, inbox);
+    }, [inboxMap]);
+
+    const followUpQueue = useMemo(() => {
+        const queue = data.operationalMetrics?.followUpQueue || [];
+        const query = normalize(followUpSearch);
+        if (!query) return queue;
+
+        return queue.filter((lead: QueueLead) => {
+            const attrs = getAttrs(lead);
+            const haystack = [
+                lead.id,
+                getLeadName(lead),
+                getLeadPhone(lead, getChannelName(lead)),
+                getRawLeadPhone(lead),
+                getLeadEmail(lead),
+                attrs.celular,
+                attrs.nombre_completo
+            ].map(normalize).join(" ");
+
+            return haystack.includes(query);
+        });
+    }, [data, followUpSearch, getChannelName]);
+
+    const scheduledAppointmentsQueue = useMemo(() => {
+        const queue = data.operationalMetrics?.scheduledAppointmentsQueue || [];
+        const query = normalize(scheduledSearch);
+        if (!query) return queue;
+
+        return queue.filter((lead: QueueLead) => {
+            const attrs = getAttrs(lead);
+            const haystack = [
+                lead.id,
+                getLeadName(lead),
+                getLeadPhone(lead, getChannelName(lead)),
+                getRawLeadPhone(lead),
+                getLeadEmail(lead),
+                attrs.celular,
+                attrs.nombre_completo
+            ].map(normalize).join(" ");
+
+            return haystack.includes(query);
+        });
+    }, [data, scheduledSearch, getChannelName]);
 
     const humanFollowupQueueTags = savedHumanConfig.humanFollowupQueueTags;
     const humanAppointmentTargetLabel = savedHumanConfig.humanAppointmentTargetLabel;
     const humanSalesQueueTags = savedHumanConfig.humanSalesQueueTags;
     const humanSaleTargetLabel = savedHumanConfig.humanSaleTargetLabel;
 
-    const inboxMap = useMemo(() => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])), [inboxes]);
-
-    const getChannelName = (lead: Partial<MinifiedConversation> | any) => {
-        const inbox = lead?.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
-        return getLeadChannelName(lead, inbox);
-    };
 
     const mergedLabels = useMemo(
         () =>
@@ -591,8 +636,8 @@ const LeadActionQueue = () => {
                     key,
                     label: key.replace(/_/g, " "),
                     displayType: "text",
-                    valueType: "text",
-                    options: []
+                    valueType: "text" as const,
+                    options: [] as string[]
                 };
             }),
         [attributeDefinitionMap, savedHumanConfig.humanAppointmentFieldKeys]
@@ -684,28 +729,7 @@ const LeadActionQueue = () => {
         }
     };
 
-    const operationResults = useMemo(() => {
-        const query = normalize(operationSearch);
-        if (!query) return [];
 
-        return scheduledAppointmentsQueue
-            .filter((lead: QueueLead) => {
-                const attrs = getAttrs(lead);
-                const haystack = [
-                    lead.id,
-                    getLeadName(lead),
-                    getLeadPhone(lead, getChannelName(lead)),
-                    getRawLeadPhone(lead),
-                    getLeadEmail(lead),
-                    attrs.celular,
-                    attrs.nombre_completo
-                ].map(normalize).join(" ");
-
-                return haystack.includes(query);
-            })
-            .sort((a: QueueLead, b: QueueLead) => (b.timestamp || 0) - (a.timestamp || 0))
-            .slice(0, 8);
-    }, [scheduledAppointmentsQueue, operationSearch]);
 
     const salesRows = useMemo(() => {
         const query = normalize(salesSearch);
@@ -930,7 +954,6 @@ const LeadActionQueue = () => {
             setIsOperationConfirmOpen(false);
             setIsOperationDialogOpen(false);
             setOperationLead(null);
-            setOperationSearch("");
         } catch (operationError) {
             console.error("Error confirming operation:", operationError);
             toast.error("No se pudo confirmar la operacion en Chatwoot");
@@ -945,31 +968,50 @@ const LeadActionQueue = () => {
             return;
         }
 
+        const activeFields = tagSettings?.excelExportFields && tagSettings.excelExportFields.length > 0
+            ? tagSettings.excelExportFields
+            : ["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"];
+
         const detailRows = salesRows.map((lead) => {
             const attrs = getAttrs(lead);
             const createdAt = lead.created_at ? new Date(lead.created_at * 1000) : null;
             const lastActivity = lead.timestamp ? new Date(lead.timestamp * 1000) : null;
+            const canal = getChannelName(lead);
 
-            return {
-                "ID Conversacion": lead.id,
-                "Nombre Lead": getLeadName(lead),
-                "Telefono": getLeadPhone(lead, getChannelName(lead)),
-                "Correo": getLeadEmail(lead),
-                "Canal": getChannelName(lead),
-                "Etiquetas": (lead.labels || []).join(" | "),
-                "Monto Operacion": attrs.monto_operacion || "",
-                "Monto Numerico": parseAmount(attrs.monto_operacion),
-                "Fecha Monto Operacion": getLeadOperationDate(lead),
-                "Responsable": attrs.responsable || lead.meta?.assignee?.name || "",
-                "Agencia": attrs.agencia || "",
-                "Campana": attrs.campana || "",
-                "Ciudad": attrs.ciudad || "",
-                "Fecha Ingreso": createdAt ? createdAt.toLocaleString() : "",
-                "Ultima Interaccion": lastActivity ? lastActivity.toLocaleString() : "",
-                "Origen Dato": lead.source || "",
-                "URL Red Social": getLeadExternalUrl(lead, getChannelName(lead)),
-                "Enlace Chatwoot": getChatwootUrl(lead.id)
-            };
+            const row: any = {};
+
+            activeFields.forEach(field => {
+                switch (field) {
+                    case "ID": row[field] = lead.id; break;
+                    case "Nombre": row[field] = getLeadName(lead); break;
+                    case "Telefono": row[field] = getLeadPhone(lead, canal); break;
+                    case "Canal": row[field] = canal; break;
+                    case "Etiquetas": row[field] = (lead.labels || []).join(", "); break;
+                    case "Correo": row[field] = getLeadEmail(lead); break;
+                    case "Monto": row[field] = attrs.monto_operacion || ""; break;
+                    case "Fecha Monto": row[field] = getLeadOperationDate(lead); break;
+                    case "Agencia": row[field] = attrs.agencia || ""; break;
+                    case "Check-in": row[field] = attrs.checkincat || ""; break;
+                    case "Check-out": row[field] = attrs.checkoutcat || ""; break;
+                    case "Campana": row[field] = attrs.campana || ""; break;
+                    case "Ciudad": row[field] = attrs.ciudad || ""; break;
+                    case "Responsable": row[field] = attrs.responsable || lead.meta?.assignee?.name || ""; break;
+                    case "URL Red Social": row[field] = getLeadExternalUrl(lead, canal); break;
+                    case "Enlace Chatwoot": row[field] = getChatwootUrl(lead.id); break;
+                    case "Fecha Ingreso": row[field] = createdAt ? formatDateTime(createdAt.getTime()) : ""; break;
+                    case "Ultima Interaccion": row[field] = lastActivity ? formatDateTime(lastActivity.getTime()) : ""; break;
+                    case "ID Contacto": row[field] = lead.meta?.sender?.id || ""; break;
+                    case "ID Inbox": row[field] = lead.inbox_id || ""; break;
+                    case "ID Cuenta": row[field] = (lead as any).account_id || ""; break;
+                    case "Origen Dato": row[field] = lead.source || ""; break;
+                    default: row[field] = attrs[field] || ""; break;
+                }
+            });
+
+            // Siempre incluimos Monto Numerico internamente por si acaso, aunque xlsx.utils lo tomara
+            // Para mantener compatibilidad con reportes agregados lo usaremos (el dashboard lo calculaba abajo)
+            row["Monto Numerico"] = parseAmount(attrs.monto_operacion);
+            return row;
         });
 
         const byChannel = new Map<string, { canal: string; ventas: number; monto: number }>();
@@ -1158,7 +1200,7 @@ const LeadActionQueue = () => {
                     {commonLabel}
                     <Textarea
                         id={`appointment-field-${field.key}`}
-                        value={value}
+                        value={String(value)}
                         onChange={(event) => handleAppointmentValueChange(field.key, event.target.value)}
                         placeholder={exampleText || `Ingresa ${field.label.toLowerCase()}`}
                     />
@@ -1169,16 +1211,16 @@ const LeadActionQueue = () => {
         return (
             <div key={field.key} className="space-y-2">
                 {commonLabel}
-                    <Input
-                        id={`appointment-field-${field.key}`}
-                        type={field.valueType === "number" ? "number" : "text"}
-                        step={field.valueType === "number" ? "any" : undefined}
-                        value={String(value || "")}
-                        onChange={(event) => handleAppointmentValueChange(field.key, event.target.value)}
-                        placeholder={exampleText || `Ingresa ${field.label.toLowerCase()}`}
-                    />
-                </div>
-            );
+                <Input
+                    id={`appointment-field-${field.key}`}
+                    type={field.valueType === "number" ? "number" : "text"}
+                    step={field.valueType === "number" ? "any" : undefined}
+                    value={String(value || "")}
+                    onChange={(event) => handleAppointmentValueChange(field.key, event.target.value)}
+                    placeholder={exampleText || `Ingresa ${field.label.toLowerCase()}`}
+                />
+            </div>
+        );
     };
 
     const renderQueueTable = ({
@@ -1189,7 +1231,9 @@ const LeadActionQueue = () => {
         primaryActionLabel,
         primaryActionIcon,
         primaryActionClassName,
-        onPrimaryAction
+        onPrimaryAction,
+        searchValue,
+        onSearchChange
     }: {
         title: string;
         description: string;
@@ -1199,6 +1243,8 @@ const LeadActionQueue = () => {
         primaryActionIcon: typeof DollarSign;
         primaryActionClassName: string;
         onPrimaryAction: (lead: QueueLead) => void;
+        searchValue: string;
+        onSearchChange: (value: string) => void;
     }) => (
         <Card className="border-primary/20 shadow-sm">
             <CardHeader className="pb-4">
@@ -1223,8 +1269,19 @@ const LeadActionQueue = () => {
                             </span>
                         </CardDescription>
                     </div>
-                    <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                        {leads.length} lead{leads.length === 1 ? "" : "s"} en esta tabla
+                    <div className="flex flex-col gap-3 items-end w-full lg:w-auto">
+                        <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground w-fit">
+                            {leads.length} lead{leads.length === 1 ? "" : "s"} filtrados
+                        </div>
+                        <div className="relative w-full sm:w-64 lg:w-80">
+                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                className="pl-9 h-9 text-sm"
+                                placeholder={`Buscar en ${title.toLowerCase()}...`}
+                                value={searchValue}
+                                onChange={(e) => onSearchChange(e.target.value)}
+                            />
+                        </div>
                     </div>
                 </div>
             </CardHeader>
@@ -1398,349 +1455,232 @@ const LeadActionQueue = () => {
                 </div>
             </div>
 
-            <Collapsible open={isHumanConfigOpen} onOpenChange={setIsHumanConfigOpen}>
-                <Card className="border-primary/20 shadow-sm">
-                    <CardHeader className="pb-4">
-                        <CollapsibleTrigger asChild>
-                            <button
-                                type="button"
-                                className="w-full text-left"
-                                aria-label={isHumanConfigOpen ? "Ocultar configuracion del flujo humano" : "Abrir configuracion del flujo humano"}
-                            >
-                                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                                    <div>
-                                        <CardTitle className="flex items-center gap-2 text-xl">
-                                            <Settings2 className="h-6 w-6 text-primary" />
-                                            Configurar flujo humano
-                                        </CardTitle>
-                                        <CardDescription className="mt-2">
-                                            Define qué etiquetas entran a cada cola y qué contact attributes se pedirán al marcar una cita agendada humana.
-                                        </CardDescription>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-                                        <Badge variant="outline">{humanConfig.humanFollowupQueueTags.length} etiquetas en seguimiento</Badge>
-                                        <Badge variant="outline">{humanConfig.humanSalesQueueTags.length} etiquetas en citas agendadas</Badge>
-                                        <Badge variant="outline">{humanConfig.humanAppointmentFieldKeys.length} campos para cita</Badge>
-                                        <Badge variant="secondary" className="gap-1.5 px-3 py-1">
-                                            {isHumanConfigOpen ? (
-                                                <ChevronUp className="h-3.5 w-3.5" />
-                                            ) : (
-                                                <ChevronDown className="h-3.5 w-3.5" />
-                                            )}
-                                            {isHumanConfigOpen ? "Ocultar" : "Abrir"}
-                                        </Badge>
-                                    </div>
-                                </div>
-                            </button>
-                        </CollapsibleTrigger>
-                    </CardHeader>
-                    <CollapsibleContent>
-                        <CardContent className="space-y-5">
-                    <div className="grid gap-4 xl:grid-cols-2">
-                        <div className="grid gap-4 sm:grid-cols-2">
-                            <div className="space-y-2">
-                                <Label>Etiqueta destino de cita humana</Label>
-                                <Select
-                                    value={humanConfig.humanAppointmentTargetLabel}
-                                    onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanAppointmentTargetLabel: value }))}
+            {role === 'admin' && (
+                <Collapsible open={isHumanConfigOpen} onOpenChange={setIsHumanConfigOpen}>
+                    <Card className="border-primary/20 shadow-sm">
+                        <CardHeader className="pb-4">
+                            <CollapsibleTrigger asChild>
+                                <button
+                                    type="button"
+                                    className="w-full text-left"
+                                    aria-label={isHumanConfigOpen ? "Ocultar configuracion del flujo humano" : "Abrir configuracion del flujo humano"}
                                 >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Selecciona etiqueta" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {mergedLabels.map((label) => (
-                                            <SelectItem key={`appointment-target-${label}`} value={label}>
-                                                {label}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label>Etiqueta destino de venta</Label>
-                                <Select
-                                    value={humanConfig.humanSaleTargetLabel}
-                                    onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanSaleTargetLabel: value }))}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Selecciona etiqueta" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {mergedLabels.map((label) => (
-                                            <SelectItem key={`sale-target-${label}`} value={label}>
-                                                {label}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        </div>
-
-                        <div className="rounded-xl border bg-muted/20 p-4 text-sm">
-                            <p className="font-semibold text-foreground">Resumen activo</p>
-                            <div className="mt-3 space-y-2 text-muted-foreground">
-                                <p>
-                                    Seguimiento humano:{" "}
-                                    <span className="font-medium text-foreground">
-                                        {humanConfig.humanFollowupQueueTags.join(", ") || "Sin etiquetas"}
-                                    </span>
-                                </p>
-                                <p>
-                                    Cita humana destino:{" "}
-                                    <span className="font-medium text-foreground">
-                                        {humanConfig.humanAppointmentTargetLabel || "Sin configurar"}
-                                    </span>
-                                </p>
-                                <p>
-                                    Cola de ventas:{" "}
-                                    <span className="font-medium text-foreground">
-                                        {humanConfig.humanSalesQueueTags.join(", ") || "Sin etiquetas"}
-                                    </span>
-                                </p>
-                                <p>
-                                    Venta destino:{" "}
-                                    <span className="font-medium text-foreground">
-                                        {humanConfig.humanSaleTargetLabel || "Sin configurar"}
-                                    </span>
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <Accordion type="multiple" className="w-full rounded-xl border px-4">
-                        <AccordionItem value="followup-tags">
-                            <AccordionTrigger className="text-sm">
-                                Etiquetas que entran en Cola de Trabajo Diaria
-                            </AccordionTrigger>
-                            <AccordionContent>
-                                <ScrollArea className="h-[220px] rounded-lg border p-4">
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                        {mergedLabels.map((label) => (
-                                            <div key={`followup-label-${label}`} className="flex items-center space-x-2">
-                                                <Checkbox
-                                                    id={`followup-label-${label}`}
-                                                    checked={humanConfig.humanFollowupQueueTags.includes(label)}
-                                                    onCheckedChange={() => updateHumanConfigList("humanFollowupQueueTags", label)}
-                                                />
-                                                <Label htmlFor={`followup-label-${label}`} className="text-sm font-medium">
-                                                    {label}
-                                                </Label>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </ScrollArea>
-                            </AccordionContent>
-                        </AccordionItem>
-
-                        <AccordionItem value="sales-tags">
-                            <AccordionTrigger className="text-sm">
-                                Etiquetas que entran en Citas Agendadas
-                            </AccordionTrigger>
-                            <AccordionContent>
-                                <ScrollArea className="h-[220px] rounded-lg border p-4">
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                        {mergedLabels.map((label) => (
-                                            <div key={`sales-label-${label}`} className="flex items-center space-x-2">
-                                                <Checkbox
-                                                    id={`sales-label-${label}`}
-                                                    checked={humanConfig.humanSalesQueueTags.includes(label)}
-                                                    onCheckedChange={() => updateHumanConfigList("humanSalesQueueTags", label)}
-                                                />
-                                                <Label htmlFor={`sales-label-${label}`} className="text-sm font-medium">
-                                                    {label}
-                                                </Label>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </ScrollArea>
-                            </AccordionContent>
-                        </AccordionItem>
-
-                        <AccordionItem value="appointment-fields">
-                            <AccordionTrigger className="text-sm">
-                                Campos que se pedirán al marcar Cita agendada
-                            </AccordionTrigger>
-                            <AccordionContent>
-                                {loadingAttributeDefinitions ? (
-                                    <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                        Cargando contact attributes desde Chatwoot...
-                                    </div>
-                                ) : attributeDefinitions.length === 0 ? (
-                                    <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                        No se detectaron contact attributes disponibles en Chatwoot ni en Supabase.
-                                    </div>
-                                ) : (
-                                    <ScrollArea className="h-[260px] rounded-lg border p-4">
-                                        <div className="grid gap-3 sm:grid-cols-2">
-                                            {attributeDefinitions.map((definition) => (
-                                                <div key={definition.key} className="flex items-start space-x-2">
-                                                    <Checkbox
-                                                        id={`appointment-field-${definition.key}`}
-                                                        checked={humanConfig.humanAppointmentFieldKeys.includes(definition.key)}
-                                                        onCheckedChange={() => updateHumanConfigList("humanAppointmentFieldKeys", definition.key)}
-                                                    />
-                                                    <Label htmlFor={`appointment-field-${definition.key}`} className="text-sm font-medium leading-tight">
-                                                        <span className="flex flex-wrap items-center gap-2">
-                                                            <span>{definition.label}</span>
-                                                            <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
-                                                                {getFieldTypeLabel(definition)}
-                                                            </Badge>
-                                                        </span>
-                                                        <span className="block text-[11px] text-muted-foreground">{definition.key}</span>
-                                                        {definition.description && (
-                                                            <span className="block text-[11px] text-muted-foreground">
-                                                                {definition.description}
-                                                            </span>
-                                                        )}
-                                                    </Label>
-                                                </div>
-                                            ))}
+                                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                                        <div>
+                                            <CardTitle className="flex items-center gap-2 text-xl">
+                                                <Settings2 className="h-6 w-6 text-primary" />
+                                                Configurar flujo humano
+                                            </CardTitle>
+                                            <CardDescription className="mt-2">
+                                                Define qué etiquetas entran a cada cola y qué contact attributes se pedirán al marcar una cita agendada humana.
+                                            </CardDescription>
                                         </div>
-                                    </ScrollArea>
-                                )}
-                            </AccordionContent>
-                        </AccordionItem>
-                    </Accordion>
-
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border bg-amber-50/60 px-4 py-3 text-sm text-amber-900">
-                        <p>
-                            Si no dejas campos configurados para cita agendada, el boton de la cola mostrará un aviso para configurar primero el flujo.
-                        </p>
-                        <Button
-                            onClick={saveHumanConfig}
-                            disabled={!hasHumanConfigChanges}
-                            className="sm:w-auto"
-                        >
-                            Guardar configuracion
-                        </Button>
-                    </div>
-                        </CardContent>
-                    </CollapsibleContent>
-                </Card>
-            </Collapsible>
-
-            <Card className="border-emerald-200 shadow-sm">
-                <CardHeader className="pb-4">
-                    <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
-                        <div>
-                            <CardTitle className="flex items-center gap-2 text-xl">
-                                <DollarSign className="h-6 w-6 text-emerald-600" />
-                                Confirmar operacion
-                            </CardTitle>
-                            <CardDescription>
-                                Busca dentro de la cola de Citas Agendadas para confirmar ventas usando datos live de Chatwoot para hoy/ayer y Supabase para historico.
-                            </CardDescription>
-                        </div>
-                        <div className="flex items-center gap-2 rounded-lg border bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                            <CheckCircle2 className="h-4 w-4" />
-                            {salesRows.length} ventas filtradas - {money(salesTotal)}
-                        </div>
-                    </div>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                    <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
-                        <div className="xl:col-span-3 space-y-3">
-                            <div className="relative">
-                                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    className="pl-9"
-                                    placeholder="Buscar lead de citas por ID, nombre o numero..."
-                                    value={operationSearch}
-                                    onChange={(e) => setOperationSearch(e.target.value)}
-                                />
-                            </div>
-
-                            <div className="rounded-xl border overflow-hidden bg-background">
-                                {operationSearch.trim() && operationResults.length === 0 ? (
-                                    <div className="px-4 py-8 text-sm text-muted-foreground text-center">
-                                        No se encontraron leads de citas agendadas con esa busqueda.
+                                        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                                            <Badge variant="outline">{humanConfig.humanFollowupQueueTags.length} etiquetas en seguimiento</Badge>
+                                            <Badge variant="outline">{humanConfig.humanSalesQueueTags.length} etiquetas en citas agendadas</Badge>
+                                            <Badge variant="outline">{humanConfig.humanAppointmentFieldKeys.length} campos para cita</Badge>
+                                            <Badge variant="secondary" className="gap-1.5 px-3 py-1">
+                                                {isHumanConfigOpen ? (
+                                                    <ChevronUp className="h-3.5 w-3.5" />
+                                                ) : (
+                                                    <ChevronDown className="h-3.5 w-3.5" />
+                                                )}
+                                                {isHumanConfigOpen ? "Ocultar" : "Abrir"}
+                                            </Badge>
+                                        </div>
                                     </div>
-                                ) : !operationSearch.trim() ? (
-                                    <div className="px-4 py-8 text-sm text-muted-foreground text-center">
-                                        Escribe un ID, nombre o numero para buscar dentro de Citas Agendadas.
+                                </button>
+                            </CollapsibleTrigger>
+                        </CardHeader>
+                        <CollapsibleContent>
+                            <CardContent className="space-y-5">
+                                <div className="grid gap-4 xl:grid-cols-2">
+                                    <div className="grid gap-4 sm:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label>Etiqueta destino de cita humana</Label>
+                                            <Select
+                                                value={humanConfig.humanAppointmentTargetLabel}
+                                                onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanAppointmentTargetLabel: value }))}
+                                            >
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Selecciona etiqueta" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {mergedLabels.map((label) => (
+                                                        <SelectItem key={`appointment-target-${label}`} value={label}>
+                                                            {label}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <Label>Etiqueta destino de venta</Label>
+                                            <Select
+                                                value={humanConfig.humanSaleTargetLabel}
+                                                onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanSaleTargetLabel: value }))}
+                                            >
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Selecciona etiqueta" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {mergedLabels.map((label) => (
+                                                        <SelectItem key={`sale-target-${label}`} value={label}>
+                                                            {label}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
                                     </div>
-                                ) : (
-                                    <div className="divide-y">
-                                        {operationResults.map((lead) => {
-                                            const attrs = getAttrs(lead);
-                                            return (
-                                                <div key={`operation-search-${lead.id}`} className="flex flex-col gap-3 p-4 hover:bg-muted/30 md:flex-row md:items-center md:justify-between">
-                                                    <div className="min-w-0">
-                                                        <div className="flex flex-wrap items-center gap-2">
-                                                            <span className="font-semibold truncate">{getLeadName(lead)}</span>
-                                                            <Badge variant="outline">ID {lead.id}</Badge>
-                                                            {(lead.labels || []).map((label: string) => (
-                                                                <Badge key={`search-label-${lead.id}-${label}`} variant="outline">
-                                                                    {label}
-                                                                </Badge>
-                                                            ))}
+
+                                    <div className="rounded-xl border bg-muted/20 p-4 text-sm">
+                                        <p className="font-semibold text-foreground">Resumen activo</p>
+                                        <div className="mt-3 space-y-2 text-muted-foreground">
+                                            <p>
+                                                Seguimiento humano:{" "}
+                                                <span className="font-medium text-foreground">
+                                                    {humanConfig.humanFollowupQueueTags.join(", ") || "Sin etiquetas"}
+                                                </span>
+                                            </p>
+                                            <p>
+                                                Cita humana destino:{" "}
+                                                <span className="font-medium text-foreground">
+                                                    {humanConfig.humanAppointmentTargetLabel || "Sin configurar"}
+                                                </span>
+                                            </p>
+                                            <p>
+                                                Cola de ventas:{" "}
+                                                <span className="font-medium text-foreground">
+                                                    {humanConfig.humanSalesQueueTags.join(", ") || "Sin etiquetas"}
+                                                </span>
+                                            </p>
+                                            <p>
+                                                Venta destino:{" "}
+                                                <span className="font-medium text-foreground">
+                                                    {humanConfig.humanSaleTargetLabel || "Sin configurar"}
+                                                </span>
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <Accordion type="multiple" className="w-full rounded-xl border px-4">
+                                    <AccordionItem value="followup-tags">
+                                        <AccordionTrigger className="text-sm">
+                                            Etiquetas que entran en Cola de Trabajo Diaria
+                                        </AccordionTrigger>
+                                        <AccordionContent>
+                                            <ScrollArea className="h-[220px] rounded-lg border p-4">
+                                                <div className="grid gap-3 sm:grid-cols-2">
+                                                    {mergedLabels.map((label) => (
+                                                        <div key={`followup-label-${label}`} className="flex items-center space-x-2">
+                                                            <Checkbox
+                                                                id={`followup-label-${label}`}
+                                                                checked={humanConfig.humanFollowupQueueTags.includes(label)}
+                                                                onCheckedChange={() => updateHumanConfigList("humanFollowupQueueTags", label)}
+                                                            />
+                                                            <Label htmlFor={`followup-label-${label}`} className="text-sm font-medium">
+                                                                {label}
+                                                            </Label>
                                                         </div>
-                                                        <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
-                                                            <span>{getLeadPhone(lead, getChannelName(lead)) || "Sin telefono"}</span>
-                                                            <span>{getChannelName(lead)}</span>
-                                                            {attrs.monto_operacion && <span>{money(parseAmount(attrs.monto_operacion))}</span>}
-                                                            {getLeadOperationDate(lead) && <span>{getLeadOperationDate(lead)}</span>}
-                                                        </div>
-                                                    </div>
-                                                    <Button
-                                                        size="sm"
-                                                        className="gap-2 bg-emerald-600 hover:bg-emerald-700"
-                                                        onClick={() => openOperationDialog(lead)}
-                                                    >
-                                                        <Check className="h-4 w-4" />
-                                                        Confirmar operacion
-                                                    </Button>
+                                                    ))}
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+                                            </ScrollArea>
+                                        </AccordionContent>
+                                    </AccordionItem>
 
-                        <div className="xl:col-span-2 space-y-3 rounded-xl border bg-slate-50/50 p-4">
-                            <div className="flex items-center gap-2 font-semibold">
-                                <FileSpreadsheet className="h-4 w-4 text-primary" />
-                                Reporte de ventas exitosas
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div className="space-y-1">
-                                    <label className="text-xs font-medium text-muted-foreground">Desde</label>
-                                    <Input type="date" value={salesStartDate} onChange={(e) => setSalesStartDate(e.target.value)} />
+                                    <AccordionItem value="sales-tags">
+                                        <AccordionTrigger className="text-sm">
+                                            Etiquetas que entran en Citas Agendadas
+                                        </AccordionTrigger>
+                                        <AccordionContent>
+                                            <ScrollArea className="h-[220px] rounded-lg border p-4">
+                                                <div className="grid gap-3 sm:grid-cols-2">
+                                                    {mergedLabels.map((label) => (
+                                                        <div key={`sales-label-${label}`} className="flex items-center space-x-2">
+                                                            <Checkbox
+                                                                id={`sales-label-${label}`}
+                                                                checked={humanConfig.humanSalesQueueTags.includes(label)}
+                                                                onCheckedChange={() => updateHumanConfigList("humanSalesQueueTags", label)}
+                                                            />
+                                                            <Label htmlFor={`sales-label-${label}`} className="text-sm font-medium">
+                                                                {label}
+                                                            </Label>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </ScrollArea>
+                                        </AccordionContent>
+                                    </AccordionItem>
+
+                                    <AccordionItem value="appointment-fields">
+                                        <AccordionTrigger className="text-sm">
+                                            Campos que se pedirán al marcar Cita agendada
+                                        </AccordionTrigger>
+                                        <AccordionContent>
+                                            {loadingAttributeDefinitions ? (
+                                                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    Cargando contact attributes desde Chatwoot...
+                                                </div>
+                                            ) : attributeDefinitions.length === 0 ? (
+                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                                    No se detectaron contact attributes disponibles en Chatwoot ni en Supabase.
+                                                </div>
+                                            ) : (
+                                                <ScrollArea className="h-[260px] rounded-lg border p-4">
+                                                    <div className="grid gap-3 sm:grid-cols-2">
+                                                        {attributeDefinitions.map((definition) => (
+                                                            <div key={definition.key} className="flex items-start space-x-2">
+                                                                <Checkbox
+                                                                    id={`appointment-field-${definition.key}`}
+                                                                    checked={humanConfig.humanAppointmentFieldKeys.includes(definition.key)}
+                                                                    onCheckedChange={() => updateHumanConfigList("humanAppointmentFieldKeys", definition.key)}
+                                                                />
+                                                                <Label htmlFor={`appointment-field-${definition.key}`} className="text-sm font-medium leading-tight">
+                                                                    <span className="flex flex-wrap items-center gap-2">
+                                                                        <span>{definition.label}</span>
+                                                                        <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                                                                            {getFieldTypeLabel(definition)}
+                                                                        </Badge>
+                                                                    </span>
+                                                                    <span className="block text-[11px] text-muted-foreground">{definition.key}</span>
+                                                                    {definition.description && (
+                                                                        <span className="block text-[11px] text-muted-foreground">
+                                                                            {definition.description}
+                                                                        </span>
+                                                                    )}
+                                                                </Label>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </ScrollArea>
+                                            )}
+                                        </AccordionContent>
+                                    </AccordionItem>
+                                </Accordion>
+
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border bg-amber-50/60 px-4 py-3 text-sm text-amber-900">
+                                    <p>
+                                        Si no dejas campos configurados para cita agendada, el boton de la cola mostrará un aviso para configurar primero el flujo.
+                                    </p>
+                                    <Button
+                                        onClick={saveHumanConfig}
+                                        disabled={!hasHumanConfigChanges}
+                                        className="sm:w-auto"
+                                    >
+                                        Guardar configuracion
+                                    </Button>
                                 </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-medium text-muted-foreground">Hasta</label>
-                                    <Input type="date" value={salesEndDate} onChange={(e) => setSalesEndDate(e.target.value)} />
-                                </div>
-                            </div>
-                            <div className="space-y-1">
-                                <label className="text-xs font-medium text-muted-foreground">Buscar en ventas</label>
-                                <Input
-                                    placeholder="Nombre, telefono, ID o canal"
-                                    value={salesSearch}
-                                    onChange={(e) => setSalesSearch(e.target.value)}
-                                />
-                            </div>
-                            <Button variant="outline" className="w-full gap-2" onClick={exportSalesReport}>
-                                <FileSpreadsheet className="h-4 w-4" />
-                                Exportar Excel completo
-                            </Button>
-                            <div className="grid grid-cols-2 gap-2 pt-1">
-                                <div className="rounded-lg bg-background border p-3">
-                                    <p className="text-[10px] uppercase text-muted-foreground font-bold">Ventas</p>
-                                    <p className="text-lg font-bold">{salesRows.length}</p>
-                                </div>
-                                <div className="rounded-lg bg-background border p-3">
-                                    <p className="text-[10px] uppercase text-muted-foreground font-bold">Total</p>
-                                    <p className="text-lg font-bold">{money(salesTotal)}</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </CardContent>
-            </Card>
+                            </CardContent>
+                        </CollapsibleContent>
+                    </Card>
+                </Collapsible>
+            )}
+
+
 
             {renderQueueTable({
                 title: "Cola de Trabajo Diaria",
@@ -1750,7 +1690,9 @@ const LeadActionQueue = () => {
                 primaryActionLabel: "Cita agendada",
                 primaryActionIcon: CalendarDays,
                 primaryActionClassName: "border-violet-300 text-violet-700 hover:bg-violet-50",
-                onPrimaryAction: openAppointmentDialog
+                onPrimaryAction: openAppointmentDialog,
+                searchValue: followUpSearch,
+                onSearchChange: setFollowUpSearch
             })}
 
             {renderQueueTable({
@@ -1761,8 +1703,148 @@ const LeadActionQueue = () => {
                 primaryActionLabel: "Venta exitosa",
                 primaryActionIcon: DollarSign,
                 primaryActionClassName: "border-emerald-300 text-emerald-700 hover:bg-emerald-50",
-                onPrimaryAction: openOperationDialog
+                onPrimaryAction: openOperationDialog,
+                searchValue: scheduledSearch,
+                onSearchChange: setScheduledSearch
             })}
+
+            <Card className="border-primary/20 shadow-sm max-w-4xl mx-auto w-full">
+                <CardHeader>
+                    <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                        <div>
+                            <CardTitle className="flex items-center gap-2 text-xl">
+                                <FileSpreadsheet className="h-6 w-6 text-primary" />
+                                Reporte de ventas exitosas
+                            </CardTitle>
+                            <CardDescription>
+                                Filtra y exporta las ventas y operaciones que han sido marcadas como exitosas.
+                            </CardDescription>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-lg border bg-primary/10 px-3 py-2 text-sm text-primary">
+                            <CheckCircle2 className="h-4 w-4" />
+                            {salesRows.length} ventas filtradas - {money(salesTotal)}
+                        </div>
+                    </div>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                            <label className="text-xs font-medium text-muted-foreground">Desde</label>
+                            <Input type="date" value={salesStartDate} onChange={(e) => setSalesStartDate(e.target.value)} />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-xs font-medium text-muted-foreground">Hasta</label>
+                            <Input type="date" value={salesEndDate} onChange={(e) => setSalesEndDate(e.target.value)} />
+                        </div>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-medium text-muted-foreground">Buscar en ventas</label>
+                        <Input
+                            placeholder="Nombre, telefono, ID o canal"
+                            value={salesSearch}
+                            onChange={(e) => setSalesSearch(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex gap-2">
+                        <Button variant="outline" className="flex-1 gap-2 border-primary text-primary hover:bg-primary/5" onClick={exportSalesReport}>
+                            <FileSpreadsheet className="h-4 w-4" />
+                            Exportar Excel completo
+                        </Button>
+                        {role === 'admin' && (
+                            <Dialog>
+                                <DialogTrigger asChild>
+                                    <Button variant="outline" className="gap-2 border-primary text-primary hover:bg-primary/5" title="Configurar Columnas">
+                                        <Settings2 className="h-4 w-4" />
+                                    </Button>
+                                </DialogTrigger>
+                                <DialogContent className="max-w-3xl">
+                                    <DialogHeader>
+                                        <DialogTitle className="flex items-center gap-2">
+                                            <FileSpreadsheet className="w-5 h-5 text-primary" />
+                                            Configuración de Columnas Excel
+                                        </DialogTitle>
+                                        <DialogDescription>
+                                            Selecciona qué campos se incluirán en la exportación de ventas.
+                                        </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="space-y-6 pt-4 max-h-[60vh] overflow-y-auto pr-2">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div className="space-y-4">
+                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Campos Base</h3>
+                                                <div className="space-y-2">
+                                                    {["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"].map(field => (
+                                                        <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
+                                                            <Checkbox
+                                                                id={`ventas-field-${field}`}
+                                                                checked={tagSettings?.excelExportFields?.includes(field) || false}
+                                                                onCheckedChange={(checked) => {
+                                                                    const current = tagSettings?.excelExportFields || [];
+                                                                    const next = checked
+                                                                        ? [...current, field]
+                                                                        : current.filter(f => f !== field);
+                                                                    updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
+                                                                }}
+                                                            />
+                                                            <Label htmlFor={`ventas-field-${field}`}>{field}</Label>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div className="space-y-4">
+                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Métricas Operativas</h3>
+                                                <div className="space-y-2">
+                                                    {["Monto", "Fecha Monto", "Agencia", "Check-in", "Check-out", "Campana", "Ciudad", "Responsable", "URL Red Social"].map(field => (
+                                                        <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
+                                                            <Checkbox
+                                                                id={`ventas-field-${field}`}
+                                                                checked={tagSettings?.excelExportFields?.includes(field) || false}
+                                                                onCheckedChange={(checked) => {
+                                                                    const current = tagSettings?.excelExportFields || [];
+                                                                    const next = checked
+                                                                        ? [...current, field]
+                                                                        : current.filter(f => f !== field);
+                                                                    updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
+                                                                }}
+                                                            />
+                                                            <Label htmlFor={`ventas-field-${field}`}>{field}</Label>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div className="space-y-4">
+                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Atributos Técnicos (IDs)</h3>
+                                                <div className="space-y-2">
+                                                    {["ID Contacto", "ID Inbox", "ID Cuenta", "Origen Dato"].map(field => (
+                                                        <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
+                                                            <Checkbox
+                                                                id={`ventas-field-${field}`}
+                                                                checked={tagSettings?.excelExportFields?.includes(field) || false}
+                                                                onCheckedChange={(checked) => {
+                                                                    const current = tagSettings?.excelExportFields || [];
+                                                                    const next = checked
+                                                                        ? [...current, field]
+                                                                        : current.filter(f => f !== field);
+                                                                    updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
+                                                                }}
+                                                            />
+                                                            <Label htmlFor={`ventas-field-${field}`}>{field}</Label>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <DialogFooter className="mt-4">
+                                        <DialogTrigger asChild>
+                                            <Button variant="outline">Cerrar</Button>
+                                        </DialogTrigger>
+                                    </DialogFooter>
+                                </DialogContent>
+                            </Dialog>
+                        )}
+                    </div>
+                </CardContent>
+            </Card>
 
             <Dialog open={isAppointmentDialogOpen} onOpenChange={setIsAppointmentDialogOpen}>
                 <DialogContent className="max-w-2xl">

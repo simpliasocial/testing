@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { KPICard } from "@/components/dashboard/KPICard";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useDashboardData } from "@/hooks/useDashboardData";
@@ -13,23 +14,19 @@ import {
 import {
     AlertCircle,
     Clock,
-    Info,
     Loader2,
     MessageCircle,
     UserCheck,
     Users
 } from "lucide-react";
+
 import {
-    Bar,
-    BarChart,
-    CartesianGrid,
-    Line,
-    LineChart,
-    ResponsiveContainer,
-    Tooltip,
-    XAxis,
-    YAxis
-} from "recharts";
+    Tooltip as ShadcnTooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger
+} from "@/components/ui/tooltip";
+import { parseISO, getDay } from "date-fns";
 
 const formatDuration = (seconds: number) => {
     if (!seconds) return "0 s";
@@ -43,7 +40,7 @@ const formatDuration = (seconds: number) => {
 
 const formatDateFilter = (date?: Date) => date ? getGuayaquilDateString(date) : "Sin fecha";
 
-type TrafficDetailView = "peaks" | "days" | "hours";
+
 
 const sourceLabel = (events: IncomingMessageTrafficEvent[]) => {
     const hasApi = events.some((event) => event.source === "api");
@@ -69,8 +66,7 @@ const OperationalEfficiency = () => {
     const [trafficEvents, setTrafficEvents] = useState<IncomingMessageTrafficEvent[]>([]);
     const [trafficLoading, setTrafficLoading] = useState(false);
     const [trafficError, setTrafficError] = useState<string | null>(null);
-    const [trafficDetailView, setTrafficDetailView] = useState<TrafficDetailView>("peaks");
-    const [selectedTrafficDate, setSelectedTrafficDate] = useState<string | null>(null);
+
 
     useEffect(() => {
         if (!globalFilters.startDate) return;
@@ -107,116 +103,44 @@ const OperationalEfficiency = () => {
         lastLiveFetchAt?.getTime()
     ]);
 
-    const operational = data.operationalMetrics || {};
+    const operational = (data.operationalMetrics || {}) as any;
     const ownerRows = data.ownerPerformance || [];
 
-    const trafficByHour = useMemo(() => {
-        const counts = new Array(24).fill(0);
-        trafficEvents.forEach((event) => {
-            if (event.hour >= 0 && event.hour <= 23) counts[event.hour] += 1;
-        });
 
-        return counts.map((count, hour) => ({
-            hour: `${hour.toString().padStart(2, "0")}:00`,
-            count
-        }));
-    }, [trafficEvents]);
-
-    const trafficByDateHour = useMemo(() => {
-        const grouped = new Map<string, { date: string; hour: string; count: number; sources: Set<string> }>();
-        trafficEvents.forEach((event) => {
-            const key = `${event.date}|${event.hourLabel}`;
-            const row = grouped.get(key) || {
-                date: event.date,
-                hour: event.hourLabel,
-                count: 0,
-                sources: new Set<string>()
-            };
-            row.count += 1;
-            row.sources.add(event.source);
-            grouped.set(key, row);
-        });
-
-        return Array.from(grouped.values())
-            .sort((a, b) => b.count - a.count || b.date.localeCompare(a.date) || a.hour.localeCompare(b.hour));
-    }, [trafficEvents]);
-
-    const trafficByDate = useMemo(() => {
-        const grouped = new Map<string, number>();
-        trafficEvents.forEach((event) => {
-            grouped.set(event.date, (grouped.get(event.date) || 0) + 1);
-        });
-
-        return Array.from(grouped.entries())
-            .map(([date, count]) => ({ date, count }))
-            .sort((a, b) => a.date.localeCompare(b.date));
-    }, [trafficEvents]);
-
-    const trafficHourRows = useMemo(() => {
-        return trafficByHour
-            .filter((row) => row.count > 0)
-            .sort((a, b) => b.count - a.count || a.hour.localeCompare(b.hour));
-    }, [trafficByHour]);
-
-    const selectedDateTrafficByHour = useMemo(() => {
-        const counts = new Array(24).fill(0);
-        if (!selectedTrafficDate) {
-            return counts.map((count, hour) => ({
-                hour: `${hour.toString().padStart(2, "0")}:00`,
-                count
-            }));
+    const heatmapData = useMemo(() => {
+        const data: Record<number, Record<number, number>> = {};
+        // Initialize: 1=Mon ... 6=Sat, 0=Sun
+        for (let d = 0; d < 7; d++) {
+            data[d] = {};
+            for (let h = 0; h < 24; h++) {
+                data[d][h] = 0;
+            }
         }
 
         trafficEvents.forEach((event) => {
-            if (event.date === selectedTrafficDate && event.hour >= 0 && event.hour <= 23) {
-                counts[event.hour] += 1;
+            // event.date is YYYY-MM-DD
+            // We use parseISO and getDay. getDay is 0 (Sun) to 6 (Sat).
+            const date = parseISO(event.date);
+            const day = getDay(date);
+            const hour = event.hour;
+            if (day >= 0 && day <= 6 && hour >= 0 && hour <= 23) {
+                data[day][hour] += 1;
             }
         });
+        return data;
+    }, [trafficEvents]);
 
-        return counts.map((count, hour) => ({
-            hour: `${hour.toString().padStart(2, "0")}:00`,
-            count
-        }));
-    }, [selectedTrafficDate, trafficEvents]);
+    const maxHeatmapValue = useMemo(() => {
+        let max = 0;
+        Object.values(heatmapData).forEach(dayRow => {
+            Object.values(dayRow).forEach(count => {
+                if (count > max) max = count;
+            });
+        });
+        return max || 1;
+    }, [heatmapData]);
 
-    const selectedDateHourRows = useMemo(() => {
-        return selectedDateTrafficByHour
-            .filter((row) => row.count > 0)
-            .sort((a, b) => b.count - a.count || a.hour.localeCompare(b.hour));
-    }, [selectedDateTrafficByHour]);
 
-    const topTrafficHours = trafficByDateHour.slice(0, 12);
-    const peakChartData = topTrafficHours.map((row) => ({
-        label: `${row.date} ${row.hour}`,
-        date: row.date,
-        hour: row.hour,
-        count: row.count
-    }));
-    const totalIncomingMessages = trafficEvents.length;
-    const peakDay = trafficByDate.reduce<{ date: string; count: number } | undefined>(
-        (peak, row) => !peak || row.count > peak.count ? row : peak,
-        undefined
-    );
-    const selectedTrafficEvents = selectedTrafficDate
-        ? trafficEvents.filter((event) => event.date === selectedTrafficDate)
-        : trafficEvents;
-    const selectedTrafficDateSummary = selectedTrafficDate
-        ? trafficByDate.find((row) => row.date === selectedTrafficDate)
-        : null;
-    const activeTrafficByHour = selectedTrafficDate ? selectedDateTrafficByHour : trafficByHour;
-    const activeTrafficByDateHour = selectedTrafficDate
-        ? trafficByDateHour.filter((row) => row.date === selectedTrafficDate)
-        : trafficByDateHour;
-    const activeIncomingMessages = selectedTrafficDate ? selectedTrafficEvents.length : totalIncomingMessages;
-    const activePeakAggregatedHour = activeTrafficByHour.reduce((peak, row) => row.count > peak.count ? row : peak, activeTrafficByHour[0] || { hour: "00:00", count: 0 });
-    const activePeakExact = activeTrafficByDateHour[0];
-    const activePeakDay = selectedTrafficDate ? selectedTrafficDateSummary : peakDay;
-
-    useEffect(() => {
-        if (!selectedTrafficDate) return;
-        const selectedDateStillExists = trafficByDate.some((row) => row.date === selectedTrafficDate);
-        if (!selectedDateStillExists) setSelectedTrafficDate(null);
-    }, [selectedTrafficDate, trafficByDate]);
 
     const selectedChannelLabel = useMemo(() => {
         const selectedInboxes = globalFilters.selectedInboxes || [];
@@ -262,451 +186,223 @@ const OperationalEfficiency = () => {
         return "Agente asignado";
     };
 
-    const changeTrafficView = (view: TrafficDetailView) => {
-        setTrafficDetailView(view);
-        setSelectedTrafficDate(null);
-    };
 
-    const selectTrafficDate = (date: string) => {
-        setTrafficDetailView("days");
-        setSelectedTrafficDate(date);
-    };
-
-    const trafficChartTitle = selectedTrafficDate
-        ? `Horas del dia ${selectedTrafficDate}`
-        : trafficDetailView === "days"
-            ? "Mensajes por dia"
-            : trafficDetailView === "peaks"
-                ? "Picos exactos por fecha y hora"
-                : "Mensajes por hora";
-
-    const trafficChartDescription = selectedTrafficDate
-        ? "Detalle por hora del dia seleccionado."
-        : trafficDetailView === "days"
-            ? "Haz clic en una barra o fila para abrir sus horas."
-            : trafficDetailView === "peaks"
-                ? "Muestra las combinaciones de fecha y hora con mas mensajes entrantes."
-                : "Suma todos los mensajes entrantes del rango y los agrupa por hora local de Guayaquil.";
 
     return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium flex items-center gap-2">
-                            <Clock className="w-4 h-4 text-blue-500" />
-                            Tiempo promedio de respuesta
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{formatDuration(averageResponse)}</div>
-                        <p className="text-xs text-muted-foreground mt-1">
-                            Se descuentan los primeros {formatDuration(responseGraceSeconds)} de espera operativa.
-                        </p>
-                        <p className="text-[11px] text-muted-foreground mt-1">
-                            Despues de esa ventana se mide la demora real de respuesta.
-                        </p>
-                        <p className="text-[11px] text-muted-foreground mt-1">
-                            Bruto oficial promedio: {formatDuration(rawAverageResponse)}. Muestra ajustada sobre {responseSamples} conversaciones.
-                        </p>
-                    </CardContent>
-                </Card>
+        <TooltipProvider>
+            <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <KPICard
+                        title="Tiempo promedio de respuesta"
+                        value={formatDuration(averageResponse)}
+                        subtitle={`Descontados ${formatDuration(responseGraceSeconds)} gracia. Bruto: ${formatDuration(rawAverageResponse)}`}
+                        icon={Clock}
+                        variant="warning"
+                    />
 
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4 text-red-500" />
-                            Leads sin respuesta
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{leadsWithoutResponse}</div>
-                        <p className="text-xs text-muted-foreground mt-1">
-                            Ultima interaccion del cliente sin respuesta posterior.
-                        </p>
-                    </CardContent>
-                </Card>
+                    <KPICard
+                        title="Leads sin respuesta"
+                        value={leadsWithoutResponse}
+                        subtitle="Interacción del cliente sin respuesta posterior"
+                        icon={AlertCircle}
+                        variant="destructive"
+                    />
 
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm font-medium flex items-center gap-2">
-                            <UserCheck className="w-4 h-4 text-emerald-500" />
-                            Leads con responsable
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="flex items-end justify-between gap-3">
-                            <div>
-                                <div className="text-2xl font-bold">{leadsWithOwnerPercentage}%</div>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                    {leadsWithOwner} de {totalLeads} leads asignados.
-                                </p>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                <UserCheck className="w-4 h-4 text-emerald-500" />
+                                Leads con responsable
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex items-end justify-between gap-3">
+                                <div>
+                                    <div className="text-2xl font-bold">{leadsWithOwnerPercentage}%</div>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        {leadsWithOwner} de {totalLeads} leads asignados.
+                                    </p>
+                                </div>
+                                <Badge variant="outline">responsable &gt; agente</Badge>
                             </div>
-                            <Badge variant="outline">responsable &gt; agente</Badge>
+                            <Progress value={leadsWithOwnerPercentage} className="h-1.5 mt-4" />
+                        </CardContent>
+                    </Card>
+                </div>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-base">
+                            <Users className="h-5 w-5 text-primary" />
+                            Desempeno por Responsable
+                        </CardTitle>
+                        <CardDescription>
+                            El atributo de contacto responsable tiene prioridad sobre el agente asignado en Chatwoot.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="overflow-x-auto border rounded-xl">
+                            <table className="w-full text-sm">
+                                <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left">Responsable</th>
+                                        <th className="px-4 py-3 text-left">Fuente</th>
+                                        <th className="px-4 py-3 text-right">Leads</th>
+                                        <th className="px-4 py-3 text-right">Sin respuesta</th>
+                                        <th className="px-4 py-3 text-right">Citas</th>
+                                        <th className="px-4 py-3 text-right">Conversion</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                    {ownerRows.map((owner: any) => (
+                                        <tr key={owner.name} className="hover:bg-muted/20">
+                                            <td className="px-4 py-3 font-medium">{owner.name}</td>
+                                            <td className="px-4 py-3">
+                                                <Badge variant={owner.source === "responsable" ? "default" : owner.source === "sin_asignar" ? "outline" : "secondary"}>
+                                                    {ownerSourceLabel(owner.source)}
+                                                </Badge>
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-semibold">{owner.leads}</td>
+                                            <td className="px-4 py-3 text-right">{owner.unanswered || 0}</td>
+                                            <td className="px-4 py-3 text-right">{owner.appointments}</td>
+                                            <td className="px-4 py-3 text-right font-semibold">{owner.winRate}%</td>
+                                        </tr>
+                                    ))}
+                                    {ownerRows.length === 0 && (
+                                        <tr>
+                                            <td colSpan={6} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                                                No hay leads en este periodo.
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
-                        <Progress value={leadsWithOwnerPercentage} className="h-1.5 mt-4" />
+                        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            <span className="font-semibold">{unassignedLeads} leads sin responsable.</span>{" "}
+                            Son leads sin agente asignado en Chatwoot y sin valor en el atributo responsable.
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-4">
+                            <div>
+                                <CardTitle className="flex items-center gap-2 text-base">
+                                    <MessageCircle className="h-5 w-5 text-primary" />
+                                    Horas pico de trafico
+                                </CardTitle>
+                                <CardDescription className="mt-1 max-w-3xl">
+                                    Intensidad de mensajes entrantes por día de la semana y hora (Hora local Guayaquil).
+                                </CardDescription>
+                            </div>
+                            <div className="flex flex-wrap gap-2 text-xs">
+                                <Badge variant="outline">Rango: {startLabel} - {endLabel}</Badge>
+                                <Badge variant="outline">Canal: {selectedChannelLabel}</Badge>
+                                <Badge variant="secondary">{GUAYAQUIL_TIMEZONE}</Badge>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                        {trafficLoading ? (
+                            <div className="flex flex-col items-center justify-center py-20 gap-3">
+                                <Loader2 className="h-8 w-8 animate-spin text-primary/40" />
+                                <p className="text-sm text-muted-foreground">Calculando mapa de calor...</p>
+                            </div>
+                        ) : trafficError ? (
+                            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                <AlertCircle className="h-4 w-4" />
+                                {trafficError}
+                            </div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <div className="min-w-[900px] pb-2 pt-2">
+                                    <div className="flex">
+                                        {/* Day labels */}
+                                        <div className="flex flex-col justify-between py-1 pr-6 w-16 text-[11px] font-bold text-muted-foreground uppercase">
+                                            {[1, 2, 3, 4, 5, 6, 0].map(dayIdx => (
+                                                <div key={dayIdx} className="h-9 flex items-center">
+                                                    {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][dayIdx]}
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        <div className="flex-1">
+                                            {/* Heat grid */}
+                                            <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(24, 1fr)' }}>
+                                                {[1, 2, 3, 4, 5, 6, 0].map(dayIdx => (
+                                                    <div key={`row-${dayIdx}`} className="contents">
+                                                        {Array.from({ length: 24 }).map((_, hour) => {
+                                                            const val = heatmapData[dayIdx][hour];
+                                                            const intensity = val > 0 ? (val / maxHeatmapValue) : 0;
+                                                            return (
+                                                                <ShadcnTooltip key={`cell-${dayIdx}-${hour}`}>
+                                                                    <TooltipTrigger asChild>
+                                                                        <div
+                                                                            className="h-9 rounded-sm transition-all hover:ring-2 hover:ring-orange-500/40 hover:z-10 cursor-default"
+                                                                            style={{
+                                                                                backgroundColor: val === 0
+                                                                                    ? 'rgba(241, 245, 249, 0.4)'
+                                                                                    : `rgba(245, 158, 11, ${0.15 + intensity * 0.85})` // Amber/Orange gradient matching "Fire" heatmap
+                                                                            }}
+                                                                        />
+                                                                    </TooltipTrigger>
+                                                                    <TooltipContent className="bg-popover border-border animate-in zoom-in-95 duration-100">
+                                                                        <p className="text-[10px] font-bold uppercase text-muted-foreground">
+                                                                            {['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][dayIdx]}
+                                                                        </p>
+                                                                        <p className="text-sm font-semibold">
+                                                                            {hour.toString().padStart(2, '0')}:00 — {intensity > 0.7 ? 'Alto tráfico' : intensity > 0.3 ? 'Tráfico medio' : val > 0 ? 'Tráfico bajo' : 'Sin actividad'}
+                                                                        </p>
+                                                                    </TooltipContent>
+                                                                </ShadcnTooltip>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            {/* Hour labels X axis */}
+                                            <div className="grid gap-1.5 mt-3" style={{ gridTemplateColumns: 'repeat(24, 1fr)' }}>
+                                                {Array.from({ length: 24 }).map((_, hour) => (
+                                                    <div key={`hour-${hour}`} className="text-[10px] text-muted-foreground text-center font-bold">
+                                                        {hour % 2 === 0 ? (hour === 0 ? '12' : hour === 12 ? '12' : hour > 12 ? `${hour - 12}` : `${hour}`) : ''}
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            {/* AM/PM */}
+                                            <div className="flex mt-2 items-center text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em]">
+                                                <div className="flex-1 flex justify-center border-t border-muted-foreground/20 pt-2 mr-0.5">AM</div>
+                                                <div className="flex-1 flex justify-center border-t border-muted-foreground/20 pt-2 ml-0.5">PM</div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Leyenda */}
+                                    <div className="flex justify-center pt-8">
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Menor tráfico</span>
+                                            <div className="flex gap-1.5 h-3">
+                                                {[0.2, 0.4, 0.6, 0.8, 1].map((lvl) => (
+                                                    <div
+                                                        key={lvl}
+                                                        className="w-12 rounded-full"
+                                                        style={{ backgroundColor: `rgba(245, 158, 11, ${0.15 + lvl * 0.85})` }}
+                                                    />
+                                                ))}
+                                            </div>
+                                            <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Mayor tráfico</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
             </div>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-base">
-                        <Users className="h-5 w-5 text-primary" />
-                        Desempeno por Responsable
-                    </CardTitle>
-                    <CardDescription>
-                        El atributo de contacto responsable tiene prioridad sobre el agente asignado en Chatwoot.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="overflow-x-auto border rounded-xl">
-                        <table className="w-full text-sm">
-                            <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
-                                <tr>
-                                    <th className="px-4 py-3 text-left">Responsable</th>
-                                    <th className="px-4 py-3 text-left">Fuente</th>
-                                    <th className="px-4 py-3 text-right">Leads</th>
-                                    <th className="px-4 py-3 text-right">Sin respuesta</th>
-                                    <th className="px-4 py-3 text-right">Citas</th>
-                                    <th className="px-4 py-3 text-right">Conversion</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y">
-                                {ownerRows.map((owner: any) => (
-                                    <tr key={owner.name} className="hover:bg-muted/20">
-                                        <td className="px-4 py-3 font-medium">{owner.name}</td>
-                                        <td className="px-4 py-3">
-                                            <Badge variant={owner.source === "responsable" ? "default" : owner.source === "sin_asignar" ? "outline" : "secondary"}>
-                                                {ownerSourceLabel(owner.source)}
-                                            </Badge>
-                                        </td>
-                                        <td className="px-4 py-3 text-right font-semibold">{owner.leads}</td>
-                                        <td className="px-4 py-3 text-right">{owner.unanswered || 0}</td>
-                                        <td className="px-4 py-3 text-right">{owner.appointments}</td>
-                                        <td className="px-4 py-3 text-right font-semibold">{owner.winRate}%</td>
-                                    </tr>
-                                ))}
-                                {ownerRows.length === 0 && (
-                                    <tr>
-                                        <td colSpan={6} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                                            No hay leads en este periodo.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        <span className="font-semibold">{unassignedLeads} leads sin responsable.</span>{" "}
-                        Son leads sin agente asignado en Chatwoot y sin valor en el atributo responsable.
-                    </div>
-                </CardContent>
-            </Card>
-
-            <Card>
-                <CardHeader>
-                    <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-4">
-                        <div>
-                            <CardTitle className="flex items-center gap-2 text-base">
-                                <MessageCircle className="h-5 w-5 text-primary" />
-                                Horas pico de trafico
-                            </CardTitle>
-                            <CardDescription className="mt-1 max-w-3xl">
-                                Se mide por mensajes entrantes escritos por clientes dentro del rango seleccionado,
-                                agrupados por hora local de Guayaquil.
-                            </CardDescription>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                            <Badge variant="outline">Rango: {startLabel} - {endLabel}</Badge>
-                            <Badge variant="outline">Canal: {selectedChannelLabel}</Badge>
-                            <Badge variant="outline">Fuente: {sourceLabel(trafficEvents)}</Badge>
-                            <Badge variant="secondary">{GUAYAQUIL_TIMEZONE}</Badge>
-                        </div>
-                    </div>
-                    {trafficError && (
-                        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                            {trafficError}
-                        </div>
-                    )}
-                </CardHeader>
-                <CardContent className="space-y-6">
-                    <div className="rounded-xl border bg-muted/20 p-3 text-sm text-muted-foreground flex items-start gap-2">
-                        <Info className="h-4 w-4 mt-0.5 text-primary" />
-                        <span>
-                            {selectedTrafficDate
-                                ? "El grafico muestra las horas del dia seleccionado. Usa Ver todos los dias para regresar al rango completo."
-                                : trafficDetailView === "days"
-                                    ? "El grafico muestra el total por dia del rango filtrado. Haz clic en un dia para abrir sus horas."
-                                    : trafficDetailView === "peaks"
-                                        ? "El grafico muestra los picos exactos por fecha y hora. La tabla repite el detalle ordenado."
-                                        : "El grafico suma todos los mensajes entrantes del rango y los agrupa por hora local de Guayaquil."}
-                        </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                        <div className="rounded-xl border bg-background p-4">
-                            <p className="text-xs uppercase text-muted-foreground font-semibold">Mensajes entrantes</p>
-                            <p className="text-2xl font-bold mt-1">{activeIncomingMessages}</p>
-                            <p className="text-xs text-muted-foreground mt-1">
-                                {selectedTrafficDate ? `Clientes del ${selectedTrafficDate}.` : "Clientes dentro del rango filtrado."}
-                            </p>
-                        </div>
-                        <div className="rounded-xl border bg-background p-4">
-                            <p className="text-xs uppercase text-muted-foreground font-semibold">Dia con mas trafico</p>
-                            <p className="text-xl font-bold mt-1">{activePeakDay ? activePeakDay.date : "Sin datos"}</p>
-                            <p className="text-xs text-muted-foreground mt-1">{activePeakDay ? `${activePeakDay.count} mensajes entrantes` : "No hay mensajes."}</p>
-                        </div>
-                        <div className="rounded-xl border bg-background p-4">
-                            <p className="text-xs uppercase text-muted-foreground font-semibold">Hora pico agregada</p>
-                            <p className="text-xl font-bold mt-1">{activeIncomingMessages > 0 ? activePeakAggregatedHour.hour : "Sin datos"}</p>
-                            <p className="text-xs text-muted-foreground mt-1">
-                                {activeIncomingMessages > 0 ? `${activePeakAggregatedHour.count} mensajes ${selectedTrafficDate ? "en el dia" : "en el rango"}` : "No hay mensajes."}
-                            </p>
-                        </div>
-                        <div className="rounded-xl border bg-background p-4">
-                            <p className="text-xs uppercase text-muted-foreground font-semibold">Pico exacto</p>
-                            <p className="text-xl font-bold mt-1">{activePeakExact ? `${activePeakExact.date} ${activePeakExact.hour}` : "Sin datos"}</p>
-                            <p className="text-xs text-muted-foreground mt-1">{activePeakExact ? `${activePeakExact.count} mensajes entrantes` : "No hay mensajes."}</p>
-                        </div>
-                    </div>
-
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                        <div>
-                            <h3 className="font-semibold text-sm">{trafficChartTitle}</h3>
-                            <p className="text-xs text-muted-foreground">{trafficChartDescription}</p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                            {trafficLoading && (
-                                <Badge variant="secondary" className="gap-2">
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                    Actualizando
-                                </Badge>
-                            )}
-                            {selectedTrafficDate && (
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedTrafficDate(null)}
-                                    className="rounded-md border px-3 py-1.5 text-xs font-medium bg-background text-muted-foreground hover:bg-muted"
-                                >
-                                    Ver todos los dias
-                                </button>
-                            )}
-                            <button
-                                type="button"
-                                onClick={() => changeTrafficView("peaks")}
-                                className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trafficDetailView === "peaks" ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground"}`}
-                            >
-                                Picos exactos
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => changeTrafficView("days")}
-                                className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trafficDetailView === "days" ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground"}`}
-                            >
-                                Por dia
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => changeTrafficView("hours")}
-                                className={`rounded-md border px-3 py-1.5 text-xs font-medium ${trafficDetailView === "hours" ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground"}`}
-                            >
-                                Por hora
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="h-[380px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                            {trafficDetailView === "peaks" ? (
-                                <BarChart data={peakChartData} margin={{ top: 10, right: 24, left: 0, bottom: 42 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
-                                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} interval={0} angle={-18} textAnchor="end" height={56} />
-                                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} fontSize={11} />
-                                    <Tooltip
-                                        cursor={{ fill: "hsl(var(--muted))" }}
-                                        contentStyle={{ borderRadius: "8px", border: "none", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
-                                    />
-                                    <Bar dataKey="count" name="Mensajes entrantes" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
-                                </BarChart>
-                            ) : trafficDetailView === "days" && !selectedTrafficDate ? (
-                                <BarChart
-                                    data={trafficByDate}
-                                    margin={{ top: 10, right: 24, left: 0, bottom: 24 }}
-                                    onClick={(chart: any) => {
-                                        const date = chart?.activePayload?.[0]?.payload?.date;
-                                        if (date) selectTrafficDate(date);
-                                    }}
-                                >
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
-                                    <XAxis dataKey="date" tickLine={false} axisLine={false} fontSize={11} interval={0} angle={-12} textAnchor="end" height={44} />
-                                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} fontSize={11} />
-                                    <Tooltip
-                                        cursor={{ fill: "hsl(var(--muted))" }}
-                                        contentStyle={{ borderRadius: "8px", border: "none", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
-                                    />
-                                    <Bar dataKey="count" name="Mensajes entrantes" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} cursor="pointer" />
-                                </BarChart>
-                            ) : (
-                                <LineChart data={trafficDetailView === "days" ? selectedDateTrafficByHour : trafficByHour} margin={{ top: 10, right: 24, left: 0, bottom: 8 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
-                                    <XAxis dataKey="hour" tickLine={false} axisLine={false} fontSize={11} interval={1} />
-                                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} fontSize={11} />
-                                    <Tooltip
-                                        cursor={{ stroke: "hsl(var(--primary))", strokeDasharray: "3 3" }}
-                                        contentStyle={{ borderRadius: "8px", border: "none", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
-                                    />
-                                    <Line
-                                        type="monotone"
-                                        dataKey="count"
-                                        name="Mensajes entrantes"
-                                        stroke="hsl(var(--primary))"
-                                        strokeWidth={3}
-                                        dot={{ r: 3 }}
-                                        activeDot={{ r: 5 }}
-                                    />
-                                </LineChart>
-                            )}
-                        </ResponsiveContainer>
-                    </div>
-
-                    <div className="space-y-3">
-                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                            <div>
-                                <h3 className="font-semibold text-sm">Detalle de trafico</h3>
-                                <p className="text-xs text-muted-foreground">
-                                    {selectedTrafficDate
-                                        ? `Mostrando horas del ${selectedTrafficDate}.`
-                                        : trafficDetailView === "days"
-                                            ? "Selecciona un dia para abrir el detalle por horas."
-                                            : trafficDetailView === "peaks"
-                                                ? "Fechas y horas con mayor cantidad de mensajes entrantes."
-                                                : "Horas agregadas del rango seleccionado."}
-                                </p>
-                            </div>
-                        </div>
-
-                        {trafficDetailView === "peaks" && (
-                            <div className="rounded-xl border overflow-hidden">
-                                <table className="w-full text-sm">
-                                    <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
-                                        <tr>
-                                            <th className="px-4 py-3 text-left">Fecha</th>
-                                            <th className="px-4 py-3 text-left">Hora</th>
-                                            <th className="px-4 py-3 text-right">Mensajes entrantes</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y">
-                                        {topTrafficHours.map((row) => (
-                                            <tr key={`${row.date}_${row.hour}`}>
-                                                <td className="px-4 py-3 font-medium">{row.date}</td>
-                                                <td className="px-4 py-3">{row.hour}</td>
-                                                <td className="px-4 py-3 text-right font-semibold">{row.count}</td>
-                                            </tr>
-                                        ))}
-                                        {!trafficLoading && topTrafficHours.length === 0 && (
-                                            <tr>
-                                                <td colSpan={3} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                                                    No hay mensajes entrantes de clientes en este rango.
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-
-                        {trafficDetailView === "days" && selectedTrafficDate && (
-                            <div className="rounded-xl border overflow-hidden">
-                                <table className="w-full text-sm">
-                                    <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
-                                        <tr>
-                                            <th className="px-4 py-3 text-left">Hora local</th>
-                                            <th className="px-4 py-3 text-right">Mensajes entrantes</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y">
-                                        {selectedDateHourRows.map((row) => (
-                                            <tr key={row.hour}>
-                                                <td className="px-4 py-3 font-medium">{row.hour}</td>
-                                                <td className="px-4 py-3 text-right font-semibold">{row.count}</td>
-                                            </tr>
-                                        ))}
-                                        {!trafficLoading && selectedDateHourRows.length === 0 && (
-                                            <tr>
-                                                <td colSpan={2} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                                                    No hay mensajes entrantes de clientes en este dia.
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-
-                        {trafficDetailView === "days" && !selectedTrafficDate && (
-                            <div className="rounded-xl border overflow-hidden">
-                                <table className="w-full text-sm">
-                                    <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
-                                        <tr>
-                                            <th className="px-4 py-3 text-left">Fecha</th>
-                                            <th className="px-4 py-3 text-right">Mensajes entrantes</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y">
-                                        {trafficByDate.map((row) => (
-                                            <tr
-                                                key={row.date}
-                                                className="cursor-pointer hover:bg-muted/30"
-                                                onClick={() => selectTrafficDate(row.date)}
-                                            >
-                                                <td className="px-4 py-3 font-medium">{row.date}</td>
-                                                <td className="px-4 py-3 text-right font-semibold">{row.count}</td>
-                                            </tr>
-                                        ))}
-                                        {!trafficLoading && trafficByDate.length === 0 && (
-                                            <tr>
-                                                <td colSpan={2} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                                                    No hay mensajes entrantes de clientes en este rango.
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-
-                        {trafficDetailView === "hours" && (
-                            <div className="rounded-xl border overflow-hidden">
-                                <table className="w-full text-sm">
-                                    <thead className="bg-muted/40 text-[10px] uppercase text-muted-foreground">
-                                        <tr>
-                                            <th className="px-4 py-3 text-left">Hora local</th>
-                                            <th className="px-4 py-3 text-right">Mensajes entrantes</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y">
-                                        {trafficHourRows.map((row) => (
-                                            <tr key={row.hour}>
-                                                <td className="px-4 py-3 font-medium">{row.hour}</td>
-                                                <td className="px-4 py-3 text-right font-semibold">{row.count}</td>
-                                            </tr>
-                                        ))}
-                                        {!trafficLoading && trafficHourRows.length === 0 && (
-                                            <tr>
-                                                <td colSpan={2} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                                                    No hay mensajes entrantes de clientes en este rango.
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
+        </TooltipProvider>
     );
 };
 

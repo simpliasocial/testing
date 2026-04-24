@@ -18,6 +18,7 @@ import { MinifiedConversation } from './StorageService';
 const CHATWOOT_PAGE_SIZE = 15;
 const MAX_CHATWOOT_PAGES = 200;
 const SUPABASE_PAGE_SIZE = 1000;
+const DETAIL_REFRESH_BATCH_SIZE = 5;
 
 export interface IncomingMessageTrafficEvent {
     id: string;
@@ -110,6 +111,9 @@ const runInBatches = async <T, R>(items: T[], batchSize: number, worker: (item: 
     return results;
 };
 
+const uniqueIds = (values: number[]) =>
+    Array.from(new Set(values.filter((value) => Number.isFinite(value) && value > 0)));
+
 export const mergeConversationsPreferApi = (
     historical: MinifiedConversation[],
     live: MinifiedConversation[]
@@ -194,6 +198,26 @@ export const HybridDashboardService = {
             untilUnix: liveWindow.nowUnix,
             signal
         });
+    },
+
+    async refreshConversationDetailsById(
+        conversationIds: number[],
+        params: { signal?: AbortSignal; limit?: number } = {}
+    ): Promise<MinifiedConversation[]> {
+        const ids = uniqueIds(conversationIds);
+        if (ids.length === 0) return [];
+
+        const limitedIds = typeof params.limit === 'number' && params.limit > 0
+            ? ids.slice(0, params.limit)
+            : ids;
+
+        const refreshed = await runInBatches(limitedIds, DETAIL_REFRESH_BATCH_SIZE, async (conversationId) => {
+            const detail = await chatwootService.getConversationDetails(conversationId, { signal: params.signal });
+            if (!detail) return null;
+            return mapChatwootConversationToMinified(detail);
+        });
+
+        return uniqueById(refreshed.filter((conversation): conversation is MinifiedConversation => Boolean(conversation)));
     },
 
     async fetchTodayConversations(params: {

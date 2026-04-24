@@ -19,7 +19,7 @@ import { TagConfig } from "@/context/DashboardDataContext";
 interface TagConfigDialogProps {
     availableLabels: string[];
     config: TagConfig;
-    onSave: (config: TagConfig) => void;
+    onSave: (config: TagConfig) => Promise<void> | void;
 }
 
 export function TagConfigDialog({
@@ -29,6 +29,7 @@ export function TagConfigDialog({
 }: TagConfigDialogProps) {
     const [open, setOpen] = React.useState(false);
     const [tempConfig, setTempConfig] = React.useState<TagConfig>(config);
+    const [saving, setSaving] = React.useState(false);
 
     // Sync temp state with prop when dialog opens
     React.useEffect(() => {
@@ -46,9 +47,14 @@ export function TagConfigDialog({
         }));
     };
 
-    const handleSave = () => {
-        onSave(tempConfig);
-        setOpen(false);
+    const handleSave = async () => {
+        try {
+            setSaving(true);
+            await onSave(tempConfig);
+            setOpen(false);
+        } finally {
+            setSaving(false);
+        }
     };
 
     return (
@@ -114,7 +120,9 @@ export function TagConfigDialog({
                 </Tabs>
 
                 <DialogFooter>
-                    <Button onClick={handleSave}>Aplicar Cambios</Button>
+                    <Button onClick={handleSave} disabled={saving}>
+                        {saving ? "Guardando..." : "Aplicar Cambios"}
+                    </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>

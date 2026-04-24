@@ -32,6 +32,7 @@ import { TagConfigDialog } from '@/components/dashboard/TagConfigDialog';
 import { ExportToExcel } from '@/components/dashboard/ExportToExcel';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { DateRange } from 'react-day-picker';
+import { useAuth } from '@/context/AuthContext';
 
 const DashboardLayout = () => {
     const [activeTab, setActiveTab] = useState('overview');
@@ -46,6 +47,7 @@ const DashboardLayout = () => {
         lastLiveFetchAt,
         liveError
     } = useDashboardContext();
+    const { role, signOut } = useAuth();
 
     useEffect(() => {
         if (!globalFilters.startDate) {
@@ -65,8 +67,8 @@ const DashboardLayout = () => {
         setGlobalFilters(prev => ({ ...prev, selectedInboxes: inboxes }));
     };
 
-    const handleLogout = () => {
-        localStorage.removeItem('isAuthenticated');
+    const handleLogout = async () => {
+        await signOut();
         window.location.href = '/login';
     };
 
@@ -174,7 +176,7 @@ const DashboardLayout = () => {
                                     value={{ from: globalFilters.startDate, to: globalFilters.endDate }}
                                     onChange={handleDateRangeChange}
                                 />
-                                {activeTab === 'overview' && (
+                                {activeTab === 'overview' && role === 'admin' && (
                                     <>
                                         <div className="h-8 w-px bg-border mx-1 hidden sm:block" />
                                         <TagConfigDialog
