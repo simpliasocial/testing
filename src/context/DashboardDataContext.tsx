@@ -306,7 +306,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
 
         if (persist && newData.length > 0) {
             try {
-                await StorageService.saveConversations(newData);
+                await StorageService.saveConversations(newData, { replaceAll: true });
             } catch (storageError) {
                 console.warn('[Dashboard] IndexedDB cache write failed:', storageError);
             }

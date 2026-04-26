@@ -18,4 +18,4 @@ jobs:
           curl -fsS -X POST "$SUPABASE_URL/functions/v1/chatwoot-sync" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"window_hours":48}'
+            -d '{"mode":"full","window_hours":72,"sync_messages":"recent"}'

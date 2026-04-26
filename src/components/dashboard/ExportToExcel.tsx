@@ -5,7 +5,7 @@ import { format } from "date-fns";
 import { useDashboardContext } from "@/context/DashboardDataContext";
 import { config } from "@/config";
 import { toast } from "sonner";
-import { getLeadChannelName, getLeadExternalUrl } from "@/lib/leadDisplay";
+import { getAttrs, getLeadChannelName, getLeadExternalUrl } from "@/lib/leadDisplay";
 
 export function ExportToExcel() {
     const { conversations, inboxes, tagSettings } = useDashboardContext();
@@ -25,9 +25,7 @@ export function ExportToExcel() {
 
             // 2. Map data with configured columns
             const dataToExport = conversations.map(conv => {
-                const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                const convAttrs = conv.custom_attributes || {};
-                const allAttrs = { ...convAttrs, ...contactAttrs };
+                const allAttrs = getAttrs(conv);
 
                 const inbox = conv.inbox_id ? inboxMap.get(conv.inbox_id) : undefined;
                 const canal = getLeadChannelName(conv, inbox);

@@ -19,11 +19,20 @@ export const parseDateToUnix = (dateInput: any): number => {
 const compactObject = (obj: Record<string, any>) =>
     Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined && value !== null && value !== ''));
 
+const isObject = (value: unknown): value is Record<string, any> =>
+    Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const asObject = (value: unknown): Record<string, any> =>
+    isObject(value) ? value : {};
+
+const maxDateToUnix = (...values: any[]) =>
+    Math.max(0, ...values.map(parseDateToUnix).filter((value) => Number.isFinite(value)));
+
 export const mapChatwootConversationToMinified = (conv: any): MinifiedConversation => ({
     id: conv.id,
     status: conv.status || 'open',
     labels: conv.labels || [],
-    timestamp: parseDateToUnix(conv.timestamp || conv.last_activity_at || conv.updated_at || conv.created_at),
+    timestamp: maxDateToUnix(conv.updated_at, conv.last_activity_at, conv.timestamp, conv.created_at),
     created_at: parseDateToUnix(conv.created_at || conv.created_at_chatwoot || conv.timestamp),
     first_reply_created_at: parseDateToUnix(conv.first_reply_created_at),
     meta: {
@@ -42,6 +51,8 @@ export const mapChatwootConversationToMinified = (conv: any): MinifiedConversati
         }
     },
     custom_attributes: conv.custom_attributes || {},
+    conversation_custom_attributes: conv.custom_attributes || {},
+    contact_custom_attributes: conv.meta?.sender?.custom_attributes || {},
     messages: conv.messages,
     inbox_id: conv.inbox_id,
     last_non_activity_message: conv.last_non_activity_message,
@@ -67,11 +78,6 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
         fecha_monto_operacion: row.fecha_monto_operacion
     });
 
-    const customAttributes = {
-        ...(row.custom_attributes || {}),
-        ...mappedAttrs
-    };
-
     const meta = {
         ...(row.raw_payload?.meta || {}),
         ...(row.meta || {})
@@ -81,6 +87,14 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
         ...(meta.sender || {})
     };
     const assignee = meta.assignee || {};
+    const contactCustomAttributes = asObject(row.contact_custom_attributes || sender.custom_attributes);
+    const conversationCustomAttributes = asObject(row.conversation_custom_attributes || row.raw_payload?.custom_attributes);
+    const customAttributes = {
+        ...(row.custom_attributes || {}),
+        ...mappedAttrs,
+        ...contactCustomAttributes,
+        ...conversationCustomAttributes
+    };
 
     const lastNonActivity = row.raw_payload?.last_non_activity_message || {};
 
@@ -88,10 +102,10 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
         id: Number(row.chatwoot_conversation_id),
         status: row.status || 'open',
         labels: row.labels || [],
-        timestamp: parseDateToUnix(
-            row.last_activity_at_chatwoot ||
-            row.last_message_at ||
-            row.updated_at_chatwoot ||
+        timestamp: maxDateToUnix(
+            row.updated_at_chatwoot,
+            row.last_activity_at_chatwoot,
+            row.last_message_at,
             row.created_at_chatwoot
         ),
         created_at: parseDateToUnix(row.created_at_chatwoot),
@@ -104,10 +118,7 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
                 phone_number: sender.phone_number || row.celular,
                 identifier: sender.identifier,
                 additional_attributes: sender.additional_attributes || row.raw_payload?.meta?.sender?.additional_attributes || {},
-                custom_attributes: {
-                    ...(sender.custom_attributes || {}),
-                    ...customAttributes
-                }
+                custom_attributes: contactCustomAttributes
             },
             assignee: {
                 name: assignee.name,
@@ -115,6 +126,9 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
             }
         },
         custom_attributes: customAttributes,
+        conversation_custom_attributes: conversationCustomAttributes,
+        contact_custom_attributes: contactCustomAttributes,
+        resolved_custom_attributes: customAttributes,
         messages: [],
         inbox_id: row.chatwoot_inbox_id ? Number(row.chatwoot_inbox_id) : undefined,
         last_non_activity_message: {
@@ -140,7 +154,7 @@ export const mapMinifiedToChatwootConversation = (conv: MinifiedConversation): C
             phone_number: conv.meta?.sender?.phone_number || '',
             thumbnail: '',
             identifier: conv.meta?.sender?.identifier,
-            custom_attributes: conv.meta?.sender?.custom_attributes || {},
+            custom_attributes: conv.contact_custom_attributes || conv.meta?.sender?.custom_attributes || {},
             additional_attributes: conv.meta?.sender?.additional_attributes || {}
         },
         assignee: conv.meta?.assignee
@@ -156,7 +170,11 @@ export const mapMinifiedToChatwootConversation = (conv: MinifiedConversation): C
     timestamp: conv.timestamp,
     created_at: conv.created_at,
     first_reply_created_at: conv.first_reply_created_at,
-    custom_attributes: conv.custom_attributes || {}
+    custom_attributes: conv.conversation_custom_attributes || conv.custom_attributes || {},
+    conversation_custom_attributes: conv.conversation_custom_attributes || {},
+    contact_custom_attributes: conv.contact_custom_attributes || conv.meta?.sender?.custom_attributes || {},
+    resolved_custom_attributes: conv.resolved_custom_attributes || conv.custom_attributes || {},
+    source: conv.source
 });
 
 export const mapSupabaseConversationRowToChatwoot = (row: any) =>

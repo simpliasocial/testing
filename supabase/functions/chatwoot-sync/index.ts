@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -24,6 +25,49 @@ const parseNumber = (value: unknown) => {
     const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ""));
     return Number.isNaN(parsed) ? null : parsed;
 };
+
+const errorMessage = (error: unknown) => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    try {
+        return JSON.stringify(error);
+    } catch {
+        return String(error);
+    }
+};
+
+const asObject = (value: unknown): Record<string, any> =>
+    Boolean(value) && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, any>
+        : {};
+
+const resolveAttributeSnapshots = (conversation: Record<string, any>) => {
+    const contactAttrs = asObject(conversation.meta?.sender?.custom_attributes);
+    const conversationAttrs = asObject(conversation.custom_attributes);
+    const resolvedAttrs = { ...contactAttrs, ...conversationAttrs };
+
+    return {
+        contactAttrs,
+        conversationAttrs,
+        resolvedAttrs,
+    };
+};
+
+const toUnixSeconds = (value: unknown) => {
+    if (!value) return 0;
+    const n = Number(value);
+    if (!Number.isNaN(n)) return n < 10000000000 ? Math.floor(n) : Math.floor(n / 1000);
+    const date = new Date(String(value));
+    return Number.isNaN(date.getTime()) ? 0 : Math.floor(date.getTime() / 1000);
+};
+
+const conversationTouchedAt = (conversation: Record<string, any>) =>
+    Math.max(
+        toUnixSeconds(conversation.updated_at),
+        toUnixSeconds(conversation.last_activity_at),
+        toUnixSeconds(conversation.timestamp),
+        toUnixSeconds(conversation.created_at),
+    );
 
 const uniqueBy = <T extends Record<string, unknown>>(rows: T[], key: keyof T) => {
     const map = new Map<unknown, T>();
@@ -76,6 +120,11 @@ serve(async (req) => {
         const chatwootUrl = `${chatwootBase}/api/v1/accounts/${accountId}`;
         const body = await req.json().catch(() => ({}));
         const windowHours = Number(body.window_hours || 48);
+        const mode = body.mode === "full" ? "full" : "delta";
+        const syncMessages = ["none", "recent", "all"].includes(body.sync_messages)
+            ? body.sync_messages
+            : "recent";
+        const maxPages = Math.max(1, Math.min(Number(body.max_pages || MAX_CHATWOOT_PAGES), MAX_CHATWOOT_PAGES));
         const untilUnix = Math.floor(Date.now() / 1000);
         const sinceUnix = untilUnix - windowHours * 60 * 60;
 
@@ -100,9 +149,9 @@ serve(async (req) => {
             .schema("cw")
             .from("sync_runs")
             .insert({
-                sync_type: "daily_48h",
+                sync_type: mode === "full" ? "daily_full" : "daily_delta",
                 status: "running",
-                stats: { window_hours: windowHours },
+                stats: { mode, window_hours: windowHours, sync_messages: syncMessages, max_pages: maxPages },
             })
             .select("id")
             .single();
@@ -112,6 +161,9 @@ serve(async (req) => {
         const runId = run.id;
         const stats = {
             window_hours: windowHours,
+            mode,
+            sync_messages: syncMessages,
+            max_pages: maxPages,
             inboxes: 0,
             contacts: 0,
             conversations: 0,
@@ -149,7 +201,7 @@ serve(async (req) => {
             }
 
             let page = 1;
-            while (page <= MAX_CHATWOOT_PAGES) {
+            while (page <= maxPages) {
                 const conversations = await apiGet("/conversations", {
                     page,
                     status: "all",
@@ -258,9 +310,11 @@ serve(async (req) => {
                 }
 
                 const conversationRows = conversations.map((conv: any) => {
-                    const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                    const convAttrs = conv.custom_attributes || {};
-                    const attrs = { ...contactAttrs, ...convAttrs };
+                    const {
+                        contactAttrs,
+                        conversationAttrs,
+                        resolvedAttrs: attrs,
+                    } = resolveAttributeSnapshots(conv);
                     const lastNonActivity = conv.last_non_activity_message || {};
 
                     return {
@@ -280,6 +334,8 @@ serve(async (req) => {
                         labels: conv.labels || [],
                         business_stage_current: attrs.business_stage,
                         additional_attributes: conv.additional_attributes || {},
+                        contact_custom_attributes: contactAttrs,
+                        conversation_custom_attributes: conversationAttrs,
                         custom_attributes: attrs,
                         meta: conv.meta || {},
                         applied_sla: conv.applied_sla || {},
@@ -288,7 +344,7 @@ serve(async (req) => {
                         waiting_since_chatwoot: toIso(conv.waiting_since),
                         last_activity_at_chatwoot: toIso(conv.last_activity_at || conv.timestamp),
                         created_at_chatwoot: toIso(conv.created_at || conv.timestamp),
-                        updated_at_chatwoot: new Date().toISOString(),
+                        updated_at_chatwoot: toIso(conv.updated_at || conv.last_activity_at || conv.timestamp),
                         last_non_activity_message_id: lastNonActivity.id,
                         last_non_activity_message_preview: lastNonActivity.content,
                         last_message_at: toIso(lastNonActivity.created_at || conv.timestamp),
@@ -319,6 +375,9 @@ serve(async (req) => {
                 stats.conversations += conversationRows.length;
 
                 for (const conv of conversations) {
+                    if (syncMessages === "none") continue;
+                    if (syncMessages === "recent" && conversationTouchedAt(conv) < sinceUnix) continue;
+
                     const messages = await apiGet(`/conversations/${conv.id}/messages`);
                     if (!Array.isArray(messages) || messages.length === 0) continue;
 
@@ -370,7 +429,7 @@ serve(async (req) => {
                         .filter(Boolean)
                 );
 
-                if (oldestActivity && oldestActivity < sinceUnix) break;
+                if (mode !== "full" && oldestActivity && oldestActivity < sinceUnix) break;
                 if (conversations.length < CHATWOOT_PAGE_SIZE) break;
                 page += 1;
             }
@@ -379,10 +438,10 @@ serve(async (req) => {
                 .schema("cw")
                 .from("sync_cursor")
                 .upsert({
-                    cursor_name: "daily_delta",
+                    cursor_name: mode === "full" ? "daily_full" : "daily_delta",
                     last_since_ts: toIso(sinceUnix),
                     last_until_ts: toIso(untilUnix),
-                    cursor_payload: { window_hours: windowHours },
+                    cursor_payload: { mode, window_hours: windowHours, sync_messages: syncMessages, max_pages: maxPages },
                     updated_at: new Date().toISOString(),
                 }, { onConflict: "cursor_name" });
 
@@ -413,7 +472,7 @@ serve(async (req) => {
                     status: "error",
                     finished_at: new Date().toISOString(),
                     stats,
-                    error_message: syncError instanceof Error ? syncError.message : String(syncError),
+                    error_message: errorMessage(syncError),
                 })
                 .eq("id", runId);
 
@@ -422,7 +481,7 @@ serve(async (req) => {
     } catch (error) {
         return new Response(JSON.stringify({
             success: false,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage(error),
         }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
             status: 400,

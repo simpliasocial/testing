@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -11,6 +12,33 @@ const parseNumber = (value: unknown) => {
     if (typeof value === "number") return Number.isNaN(value) ? null : value;
     const parsed = Number.parseFloat(String(value).replace(/[^0-9.-]/g, ""));
     return Number.isNaN(parsed) ? null : parsed;
+};
+
+const errorMessage = (error: unknown) => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    try {
+        return JSON.stringify(error);
+    } catch {
+        return String(error);
+    }
+};
+
+const asObject = (value: unknown): Record<string, any> =>
+    Boolean(value) && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, any>
+        : {};
+
+const resolveAttributeSnapshots = (conversation: Record<string, any>) => {
+    const sender = conversation.meta?.sender || conversation.contact || {};
+    const contactAttrs = asObject(sender.custom_attributes);
+    const conversationAttrs = asObject(conversation.custom_attributes);
+
+    return {
+        contactAttrs,
+        conversationAttrs,
+        resolvedAttrs: { ...contactAttrs, ...conversationAttrs },
+    };
 };
 
 const compactObject = (obj: Record<string, unknown>) =>
@@ -40,13 +68,15 @@ const labelDelta = (previousLabels: unknown, nextLabels: unknown) => {
 };
 
 const toIso = (value: unknown) => {
-    if (!value) return new Date().toISOString();
+    if (!value) return null;
     const n = Number(value);
     const date = Number.isNaN(n)
         ? new Date(String(value))
         : new Date(n < 10000000000 ? n * 1000 : n);
-    return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
+
+const toIsoOrNow = (value: unknown) => toIso(value) || new Date().toISOString();
 
 const firstArray = (...values: unknown[]) =>
     values.find((value) => Array.isArray(value)) as unknown[] | undefined;
@@ -55,9 +85,11 @@ const buildConversationUpsertRow = (conversation: Record<string, any>) => {
     if (!conversation?.id) return null;
 
     const sender = conversation.meta?.sender || conversation.contact || {};
-    const contactAttrs = sender.custom_attributes || {};
-    const convAttrs = conversation.custom_attributes || {};
-    const attrs = { ...contactAttrs, ...convAttrs };
+    const {
+        contactAttrs,
+        conversationAttrs,
+        resolvedAttrs: attrs,
+    } = resolveAttributeSnapshots(conversation);
     const lastNonActivity = conversation.last_non_activity_message || {};
 
     return {
@@ -77,6 +109,8 @@ const buildConversationUpsertRow = (conversation: Record<string, any>) => {
         labels: normalizeLabels(conversation.labels || []),
         business_stage_current: attrs.business_stage || null,
         additional_attributes: conversation.additional_attributes || {},
+        contact_custom_attributes: contactAttrs,
+        conversation_custom_attributes: conversationAttrs,
         custom_attributes: attrs,
         meta: conversation.meta || {},
         applied_sla: conversation.applied_sla || {},
@@ -104,7 +138,7 @@ const buildConversationUpsertRow = (conversation: Record<string, any>) => {
             agente: attrs.agente === true || attrs.agente === "true",
             score_interes: parseNumber(attrs.score_interes),
             monto_operacion: attrs.monto_operacion,
-            fecha_monto_operacion: attrs.fecha_monto_operacion,
+            fecha_monto_operacion: toIso(attrs.fecha_monto_operacion),
         }),
         updated_at: new Date().toISOString(),
     };
@@ -228,7 +262,7 @@ serve(async (req) => {
         const delta = labelDelta(previousLabels, nextLabels);
 
         if (delta.added.length > 0 || delta.removed.length > 0) {
-            const occurredAt = toIso(body.event_created_at || body.created_at || body.updated_at || conversation?.updated_at || conversation?.timestamp);
+            const occurredAt = toIsoOrNow(body.event_created_at || body.created_at || body.updated_at || conversation?.updated_at || conversation?.timestamp);
             const eventKey = [
                 "webhook",
                 conversationId,
@@ -280,7 +314,7 @@ serve(async (req) => {
     } catch (error) {
         return new Response(JSON.stringify({
             success: false,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage(error),
         }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
             status: 400,

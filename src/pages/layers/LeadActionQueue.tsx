@@ -63,6 +63,7 @@ import {
     operationDateToIso,
     parseAmount
 } from "@/lib/leadDisplay";
+import { getContactCustomAttributes, getConversationCustomAttributes } from "@/lib/leadAttributes";
 import {
     Dialog,
     DialogContent,
@@ -766,6 +767,7 @@ const LeadActionQueue = () => {
         lead,
         nextLabels,
         contactAttributePatch,
+        conversationAttributePatch,
         conversationUpdatePatch,
         rawPayload,
         successMessage
@@ -773,6 +775,7 @@ const LeadActionQueue = () => {
         lead: QueueLead;
         nextLabels: string[];
         contactAttributePatch?: Record<string, any>;
+        conversationAttributePatch?: Record<string, any>;
         conversationUpdatePatch?: Record<string, any>;
         rawPayload: Record<string, any>;
         successMessage: string;
@@ -782,16 +785,49 @@ const LeadActionQueue = () => {
             throw new Error("No se encontro el ID del contacto de Chatwoot");
         }
 
-        const currentContactAttrs = lead.meta?.sender?.custom_attributes || {};
-        const currentConvAttrs = lead.custom_attributes || {};
+        const currentContactAttrs = getContactCustomAttributes(lead);
+        const currentConversationAttrs = getConversationCustomAttributes(lead);
         const nextContactAttrs = {
             ...currentContactAttrs,
             ...(contactAttributePatch || {})
         };
-        const nextMergedAttrs = {
-            ...currentConvAttrs,
-            ...nextContactAttrs
+        const nextConversationAttrs = {
+            ...currentConversationAttrs,
+            ...(conversationAttributePatch || {})
         };
+        const nextResolvedAttrs = {
+            ...(lead.custom_attributes || {}),
+            ...nextContactAttrs,
+            ...nextConversationAttrs
+        };
+
+        const denormalizedPatch = Object.fromEntries(
+            [
+                "nombre_completo",
+                "fecha_visita",
+                "hora_visita",
+                "agencia",
+                "celular",
+                "correo",
+                "campana",
+                "ciudad",
+                "edad",
+                "canal",
+                "score_interes",
+                "monto_operacion",
+                "fecha_monto_operacion"
+            ]
+                .filter((key) => nextResolvedAttrs[key] !== undefined)
+                .map((key) => [key, nextResolvedAttrs[key]])
+        );
+
+        if (nextResolvedAttrs.agente !== undefined) {
+            denormalizedPatch.agente = nextResolvedAttrs.agente === true || nextResolvedAttrs.agente === "true";
+        }
+
+        if (conversationAttributePatch && Object.keys(conversationAttributePatch).length > 0) {
+            await chatwootService.updateConversationCustomAttributes(lead.id, nextConversationAttrs);
+        }
 
         if (contactAttributePatch && Object.keys(contactAttributePatch).length > 0) {
             await chatwootService.updateContact(contactId, {
@@ -814,8 +850,11 @@ const LeadActionQueue = () => {
             .from("conversations_current")
             .update({
                 labels: nextLabels,
-                custom_attributes: nextMergedAttrs,
+                contact_custom_attributes: nextContactAttrs,
+                conversation_custom_attributes: nextConversationAttrs,
+                custom_attributes: nextResolvedAttrs,
                 updated_at: new Date().toISOString(),
+                ...denormalizedPatch,
                 ...(conversationUpdatePatch || {})
             })
             .eq("chatwoot_conversation_id", lead.id);
@@ -885,6 +924,7 @@ const LeadActionQueue = () => {
                 lead: appointmentLead,
                 nextLabels: [humanAppointmentTargetLabel],
                 contactAttributePatch: appointmentPayload,
+                conversationAttributePatch: appointmentPayload,
                 rawPayload: {
                     action: "schedule_human_appointment",
                     fields: appointmentPayload,
@@ -935,6 +975,10 @@ const LeadActionQueue = () => {
                 lead: operationLead,
                 nextLabels: [humanSaleTargetLabel],
                 contactAttributePatch: {
+                    monto_operacion: operationAmount.trim(),
+                    fecha_monto_operacion: operationDate
+                },
+                conversationAttributePatch: {
                     monto_operacion: operationAmount.trim(),
                     fecha_monto_operacion: operationDate
                 },

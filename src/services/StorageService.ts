@@ -23,6 +23,15 @@ export interface MinifiedConversation {
     custom_attributes?: {
         [key: string]: any;
     };
+    conversation_custom_attributes?: {
+        [key: string]: any;
+    };
+    contact_custom_attributes?: {
+        [key: string]: any;
+    };
+    resolved_custom_attributes?: {
+        [key: string]: any;
+    };
     messages?: any[];
     inbox_id?: number;
     last_non_activity_message?: {
@@ -58,11 +67,15 @@ export const StorageService = {
         });
     },
 
-    async saveConversations(conversations: MinifiedConversation[]): Promise<void> {
+    async saveConversations(conversations: MinifiedConversation[], options: { replaceAll?: boolean } = {}): Promise<void> {
         const db = await this.initDB();
         return new Promise((resolve, reject) => {
             const transaction = db.transaction([STORE_NAME], 'readwrite');
             const store = transaction.objectStore(STORE_NAME);
+
+            if (options.replaceAll) {
+                store.clear();
+            }
 
             conversations.forEach((conv) => {
                 store.put(conv); // Overwrite if it exists, add if new

@@ -38,6 +38,16 @@ export interface ChatwootConversation {
     custom_attributes?: {
         [key: string]: any;
     };
+    conversation_custom_attributes?: {
+        [key: string]: any;
+    };
+    contact_custom_attributes?: {
+        [key: string]: any;
+    };
+    resolved_custom_attributes?: {
+        [key: string]: any;
+    };
+    source?: 'api' | 'supabase' | 'cache';
 }
 
 export const chatwootService = {
@@ -315,6 +325,20 @@ export const chatwootService = {
             return response.data;
         } catch (error) {
             console.error(`Error updating labels for conversation ${conversationId}:`, error);
+            throw error;
+        }
+    },
+
+    updateConversationCustomAttributes: async (conversationId: number, customAttributes: Record<string, any>): Promise<any> => {
+        try {
+            const response = await axios.post(`${CHATWOOT_API_URL}/conversations/${conversationId}/custom_attributes`, {
+                custom_attributes: customAttributes
+            }, {
+                headers: { api_access_token: API_TOKEN }
+            });
+            return response.data;
+        } catch (error) {
+            console.error(`Error updating custom attributes for conversation ${conversationId}:`, error);
             throw error;
         }
     },

@@ -11,7 +11,7 @@ import { dateStringIncludesToday, guayaquilEndOfDayIso, guayaquilStartOfDayIso }
 import { config } from '@/config';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
-import { getInboxChannelName, getLeadChannelName } from '@/lib/leadDisplay';
+import { getAttrs, getInboxChannelName, getLeadChannelName } from '@/lib/leadDisplay';
 
 const ReportsPage = () => {
     const [isExporting, setIsExporting] = useState(false);
@@ -164,17 +164,16 @@ const ReportsPage = () => {
             rows.push(headers);
 
             convs.forEach(conv => {
-                const cA = conv.meta?.sender?.custom_attributes || {};
-                const vA = conv.custom_attributes || {};
+                const attrs = getAttrs(conv);
 
                 const inbox = inboxes.find(i => i.id === conv.inbox_id);
                 const canal = getLeadChannelName(conv, inbox);
 
                 let telefonoPrincipal = "";
                 if (canal.toLowerCase().includes('whatsapp')) {
-                    telefonoPrincipal = conv.meta?.sender?.phone_number || cA.celular || vA.celular || "";
+                    telefonoPrincipal = conv.meta?.sender?.phone_number || attrs.celular || "";
                 } else {
-                    telefonoPrincipal = cA.celular || vA.celular || "";
+                    telefonoPrincipal = attrs.celular || "";
                 }
 
                 const createdAt = conv.created_at ? new Date(conv.created_at * 1000) : null;
@@ -186,19 +185,19 @@ const ReportsPage = () => {
                     telefonoPrincipal,
                     canal,
                     (conv.labels || []).join(' | '),
-                    cA.responsable || vA.responsable || "",
-                    conv.meta?.assignee?.name || (cA.agente === true || vA.agente === true ? "Asignado" : "Sin Asignar"),
-                    cA.nombre_completo || vA.nombre_completo || "",
-                    cA.correo || vA.correo || conv.meta?.sender?.email || "",
-                    cA.ciudad || vA.ciudad || "",
-                    cA.campana || vA.campana || "",
-                    cA.edad || vA.edad || "",
-                    cA.fecha_visita || vA.fecha_visita || "",
-                    cA.hora_visita || vA.hora_visita || "",
-                    cA.agencia || vA.agencia || "",
-                    cA.score_interes || vA.score_interes || "",
-                    cA.monto_operacion || vA.monto_operacion || "",
-                    cA.fecha_monto_operacion || vA.fecha_monto_operacion || "",
+                    attrs.responsable || "",
+                    conv.meta?.assignee?.name || (attrs.agente === true ? "Asignado" : "Sin Asignar"),
+                    attrs.nombre_completo || "",
+                    attrs.correo || conv.meta?.sender?.email || "",
+                    attrs.ciudad || "",
+                    attrs.campana || "",
+                    attrs.edad || "",
+                    attrs.fecha_visita || "",
+                    attrs.hora_visita || "",
+                    attrs.agencia || "",
+                    attrs.score_interes || "",
+                    attrs.monto_operacion || "",
+                    attrs.fecha_monto_operacion || "",
                     `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conv.id}`,
                     createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : "",
                     lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : ""

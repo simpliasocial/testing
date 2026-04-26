@@ -1,5 +1,6 @@
 import type { ConversationLabelEvent } from '@/services/LabelEventService';
 import type { MinifiedConversation } from '@/services/StorageService';
+import { resolveLeadAttributes } from './leadAttributes';
 
 const normalizeLabels = (labels: unknown): string[] => {
     if (!Array.isArray(labels)) return [];
@@ -73,10 +74,7 @@ export const applyLatestLabelState = (
     });
 };
 
-export const getLeadAttrs = (lead: Partial<MinifiedConversation> | any) => ({
-    ...(lead?.custom_attributes || {}),
-    ...(lead?.meta?.sender?.custom_attributes || {})
-});
+export const getLeadAttrs = resolveLeadAttributes;
 
 export const resolveLeadStage = (lead: MinifiedConversation, tags: {
     sqlTags?: string[];

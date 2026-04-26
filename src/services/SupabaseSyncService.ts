@@ -241,6 +241,8 @@ export const SupabaseSyncService = {
                 labels: conv.labels || [],
                 business_stage_current: attrs.business_stage,
                 additional_attributes: conv.additional_attributes || {},
+                contact_custom_attributes: contactAttrs,
+                conversation_custom_attributes: convAttrs,
                 custom_attributes: attrs,
                 meta: conv.meta || {},
 
@@ -258,13 +260,13 @@ export const SupabaseSyncService = {
                 agente: attrs.agente === true || attrs.agente === 'true',
                 score_interes: SupabaseSyncService.parseNumber(attrs.score_interes),
                 monto_operacion: SupabaseSyncService.parseNumber(attrs.monto_operacion),
-                fecha_monto_operacion: attrs.fecha_monto_operacion,
+                fecha_monto_operacion: attrs.fecha_monto_operacion ? SupabaseSyncService.parseDateIso(attrs.fecha_monto_operacion) : null,
 
                 applied_sla: conv.applied_sla || {},
                 sla_events: conv.sla_events || [],
                 last_activity_at_chatwoot: conv.last_activity_at ? new Date(conv.last_activity_at * 1000).toISOString() : null,
-                created_at_chatwoot: conv.timestamp ? new Date(conv.timestamp * 1000).toISOString() : null,
-                updated_at_chatwoot: new Date().toISOString(),
+                created_at_chatwoot: conv.created_at ? SupabaseSyncService.parseDateIso(conv.created_at) : (conv.timestamp ? new Date(conv.timestamp * 1000).toISOString() : null),
+                updated_at_chatwoot: SupabaseSyncService.parseDateIso(conv.updated_at || conv.last_activity_at || conv.timestamp),
                 raw_payload: conv,
                 updated_at: new Date().toISOString()
             };

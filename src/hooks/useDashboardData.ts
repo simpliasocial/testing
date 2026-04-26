@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useDashboardContext } from '../context/DashboardDataContext';
 import { getGuayaquilDateString } from '../lib/guayaquilTime';
+import { getLeadAttrs } from '../lib/conversationState';
 import { getLeadChannelName } from '../lib/leadDisplay';
 
 export interface DashboardFilters {
@@ -423,7 +424,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const responseTime = firstResponseAverageSeconds > 0 ? Math.round(firstResponseAverageSeconds / 60) : 0;
 
             const getEffectiveOwner = (conv: any) => {
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const attrs = getLeadAttrs(conv);
                 const manualResponsible = attrs.responsable?.toString().trim();
                 const assignedAgent = conv.meta?.assignee?.name?.toString().trim();
 
@@ -433,9 +434,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             };
 
             const mapQueueLead = (conv: any) => {
-                const contactAttrs = conv.meta?.sender?.custom_attributes || {};
-                const convAttrs = conv.custom_attributes || {};
-                const allAttrs = { ...convAttrs, ...contactAttrs };
+                const allAttrs = getLeadAttrs(conv);
 
                 return {
                     id: conv.id,
@@ -469,7 +468,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             };
 
             kpiConversations.forEach(conv => {
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const attrs = getLeadAttrs(conv);
                 ensureOwner(conv.meta?.assignee?.name, 'agente');
                 ensureOwner(attrs.responsable, 'responsable');
             });
@@ -556,7 +555,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 activeLeads: kpiConversations.filter(c => c.status !== 'resolved').slice(0, 10).map(c => ({
                     id: c.id,
                     name: c.meta?.sender?.name || "Sin Nombre",
-                    owner: (c.meta?.sender?.custom_attributes?.responsable || c.meta?.assignee?.name || "Sin Asignar"),
+                    owner: (getLeadAttrs(c).responsable || c.meta?.assignee?.name || "Sin Asignar"),
                     status: c.status,
                     channel: getChannelDisplayName(c),
                     timestamp: c.timestamp
@@ -566,7 +565,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             // Campaigns / Origins
             const campaignStats = new Map<string, { name: string, leads: number, interacted: number }>();
             kpiConversations.forEach(conv => {
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const attrs = getLeadAttrs(conv);
                 const campName = String(attrs.utm_campaign || attrs.campana || attrs.origen || "").trim() || "Sin campaña";
                 if (!campaignStats.has(campName)) campaignStats.set(campName, { name: campName, leads: 0, interacted: 0 });
                 const s = campaignStats.get(campName)!;
@@ -668,13 +667,13 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                     if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return false;
                     if (!labelsInclude(conv, humanSaleTargetLabel)) return false;
 
-                    const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                    const attrs = getLeadAttrs(conv);
                     const saleDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
                     return !Number.isNaN(saleDate.getTime()) && saleDate >= globalStart && saleDate <= globalEnd;
                 });
             const salesByDateMap = new Map<string, { date: string, sales: number, salesVolume: number }>();
             const totalHumanSalesVolume = humanSales.reduce((acc, conv) => {
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const attrs = getLeadAttrs(conv);
                 const saleDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
                 const dateKey = getGuayaquilDateString(saleDate);
                 const amount = parseMonto(attrs.monto_operacion);
@@ -717,7 +716,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                     disqualificationMap.set(matchedDisqualified, (disqualificationMap.get(matchedDisqualified) || 0) + 1);
                 }
 
-                const attrs = { ...(conv.custom_attributes || {}), ...(conv.meta?.sender?.custom_attributes || {}) };
+                const attrs = getLeadAttrs(conv);
                 const camp = attrs.campana?.toString();
                 const cleanCamp = camp && camp.trim() ? camp.trim() : "Sin campaña";
                 campaignMap.set(cleanCamp, (campaignMap.get(cleanCamp) || 0) + 1);

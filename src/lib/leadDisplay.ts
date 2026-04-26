@@ -1,5 +1,6 @@
 import { config } from "@/config";
 import { MinifiedConversation } from "@/services/StorageService";
+import { resolveLeadAttributes } from "./leadAttributes";
 
 export const cleanText = (value: unknown) => String(value ?? "").trim();
 
@@ -22,10 +23,7 @@ export const parseAmount = (value: unknown) => {
 export const money = (value: number) =>
     new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(value);
 
-export const getAttrs = (lead: Partial<MinifiedConversation> | any) => ({
-    ...(lead?.custom_attributes || {}),
-    ...(lead?.meta?.sender?.custom_attributes || {})
-});
+export const getAttrs = resolveLeadAttributes;
 
 export const getLeadName = (lead: Partial<MinifiedConversation> | any) => {
     const attrs = getAttrs(lead);
