@@ -29,7 +29,8 @@ import { useDashboardContext } from '@/context/DashboardDataContext';
 import { DateRangePicker } from '@/components/dashboard/DateRangePicker';
 import { ChannelSelector } from '@/components/dashboard/ChannelSelector';
 import { TagConfigDialog } from '@/components/dashboard/TagConfigDialog';
-import { ExportToExcel } from '@/components/dashboard/ExportToExcel';
+import { TabExportMenu } from '@/components/dashboard/TabExportMenu';
+import type { ReportTabId } from '@/lib/reportCatalog';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { DateRange } from 'react-day-picker';
 import { useAuth } from '@/context/AuthContext';
@@ -71,6 +72,12 @@ const DashboardLayout = () => {
         await signOut();
         window.location.href = '/login';
     };
+
+    const renderTabExport = (tabId: ReportTabId) => (
+        <div className="flex justify-end">
+            <TabExportMenu tabId={tabId} compact />
+        </div>
+    );
 
     const statusBadge = () => {
         if (dataSource === 'HYBRID') {
@@ -189,7 +196,6 @@ const DashboardLayout = () => {
                             </div>
 
                             <div className="flex items-center gap-2 w-full lg:w-auto lg:ml-auto justify-end">
-                                <ExportToExcel />
                                 <Button variant="outline" size="icon" onClick={refetch} title="Actualizar datos">
                                     <RefreshCw className="h-4 w-4" />
                                 </Button>
@@ -199,14 +205,17 @@ const DashboardLayout = () => {
 
                     <div className="mt-6 transition-all duration-300">
                         <TabsContent value="overview" className="mt-0 space-y-6">
+                            {renderTabExport('overview')}
                             <ExecutiveOverview />
                         </TabsContent>
 
-                        <TabsContent value="funnel" className="mt-0">
+                        <TabsContent value="funnel" className="mt-0 space-y-6">
+                            {renderTabExport('funnel')}
                             <FunnelLayer />
                         </TabsContent>
 
-                        <TabsContent value="operational" className="mt-0">
+                        <TabsContent value="operational" className="mt-0 space-y-6">
+                            {renderTabExport('operational')}
                             <OperationalEfficiency />
                         </TabsContent>
 
@@ -214,19 +223,23 @@ const DashboardLayout = () => {
                             <LeadActionQueue />
                         </TabsContent>
 
-                        <TabsContent value="performance" className="mt-0">
+                        <TabsContent value="performance" className="mt-0 space-y-6">
+                            {renderTabExport('performance')}
                             <PerformanceLayer />
                         </TabsContent>
 
-                        <TabsContent value="trends" className="mt-0">
+                        <TabsContent value="trends" className="mt-0 space-y-6">
+                            {renderTabExport('trends')}
                             <TrendLayer />
                         </TabsContent>
 
-                        <TabsContent value="scoring" className="mt-0">
+                        <TabsContent value="scoring" className="mt-0 space-y-6">
+                            {renderTabExport('scoring')}
                             <LeadScoringLayer />
                         </TabsContent>
 
-                        <TabsContent value="chats" className="mt-0">
+                        <TabsContent value="chats" className="mt-0 space-y-6">
+                            {renderTabExport('chats')}
                             <ChatwootPage />
                         </TabsContent>
 

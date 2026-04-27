@@ -1,97 +1,138 @@
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { useDashboardContext, DEFAULT_TAG_CONFIG } from "@/context/DashboardDataContext";
+import { useEffect, useMemo, useState } from "react";
 import {
-    Loader2,
-    Download,
-    Mail,
-    Settings,
-    PlayCircle,
+    BarChart3,
+    BriefcaseBusiness,
+    CalendarClock,
     CheckCircle2,
-    Clock,
-    Plus,
+    Loader2,
+    Mail,
+    PauseCircle,
+    PlayCircle,
+    Settings,
     Trash2,
-    FileSpreadsheet
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
     Dialog,
     DialogContent,
-    DialogHeader,
-    DialogTitle,
     DialogDescription,
     DialogFooter,
-    DialogTrigger
+    DialogHeader,
+    DialogTitle,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "sonner";
-import ReportsPage from "@/pages/ReportsPage";
-import { useAuth } from "@/context/AuthContext";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-
 import { supabase } from "@/lib/supabase";
+import { DEFAULT_TAG_CONFIG, useDashboardContext } from "@/context/DashboardDataContext";
+import { useAuth } from "@/context/AuthContext";
+import { TabExportMenu } from "@/components/dashboard/TabExportMenu";
+import {
+    CRITICAL_REPORT_PROFILES,
+    REPORT_FORMATS,
+    REPORT_TAB_LABELS,
+    REPORT_TABS,
+    WEEKDAY_OPTIONS,
+    formatFormatsLabel,
+    resolveCriticalProfile,
+    type CriticalProfileKey,
+    type ReportFileFormat,
+    type ReportTabId,
+} from "@/lib/reportCatalog";
 
 interface ScheduledReport {
     id: string;
     name: string;
-    frequency: 'weekly' | 'monthly';
-    schedule_days: string[];
+    frequency: "weekly" | "monthly";
+    schedule_days: string[] | null;
     schedule_month_day: number | null;
     schedule_time: string;
     recipients: string;
     is_active: boolean;
-    last_run_at?: string;
-    created_at?: string;
+    last_run_at?: string | null;
+    created_at?: string | null;
+    report_scope?: "tab" | "critical_profile" | string;
+    tab_ids?: ReportTabId[] | null;
+    critical_profile_key?: CriticalProfileKey | null;
+    file_formats?: ReportFileFormat[] | null;
+    last_status?: string | null;
+    last_error?: string | null;
+    created_by_email?: string | null;
 }
 
-const DAY_OPTIONS = [
-    { label: 'LU', value: '1' },
-    { label: 'MA', value: '2' },
-    { label: 'MI', value: '3' },
-    { label: 'JU', value: '4' },
-    { label: 'VI', value: '5' },
-    { label: 'SA', value: '6' },
-    { label: 'DO', value: '0' },
-];
+const PROFILE_ICONS: Record<CriticalProfileKey, typeof BarChart3> = {
+    management: BriefcaseBusiness,
+    daily_operations: CalendarClock,
+    team_performance: CheckCircle2,
+    marketing_quality: BarChart3,
+};
+
+const PROFILE_AREAS: Record<CriticalProfileKey, string> = {
+    management: "Gerencia",
+    daily_operations: "Operacion",
+    team_performance: "Equipo",
+    marketing_quality: "Marketing",
+};
+
+const profileKeys = Object.keys(CRITICAL_REPORT_PROFILES) as CriticalProfileKey[];
+
+const formatSchedule = (report: ScheduledReport) => {
+    const time = report.schedule_time?.slice(0, 5) || "08:00";
+    if (report.frequency === "monthly") {
+        return `Mensual, dia ${report.schedule_month_day || 1}, ${time}`;
+    }
+
+    const selectedDays = WEEKDAY_OPTIONS
+        .filter((day) => (report.schedule_days || []).includes(day.value))
+        .map((day) => day.shortLabel)
+        .join(", ");
+
+    return `Semanal, ${selectedDays || "LU"}, ${time}`;
+};
+
+const getReportTabsLabel = (report: ScheduledReport) => {
+    const tabs = report.tab_ids || [];
+    if (tabs.length === 0 && report.critical_profile_key) {
+        return CRITICAL_REPORT_PROFILES[report.critical_profile_key]?.label || "Perfil critico";
+    }
+    return tabs.map((tabId) => REPORT_TAB_LABELS[tabId] || tabId).join(", ") || "Sin pestanas";
+};
 
 const ReportingLayer = () => {
-    const [view, setView] = useState<'exports' | 'scheduled' | 'config'>('exports');
-    const { loading: contextLoading, tagSettings, updateTagSettings, contactAttributeDefinitions, labels } = useDashboardContext();
+    const { loading: contextLoading, tagSettings, updateTagSettings } = useDashboardContext();
     const { role } = useAuth();
-    const [isLoading, setIsLoading] = useState(false);
-
     const [reports, setReports] = useState<ScheduledReport[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [editingProfileKey, setEditingProfileKey] = useState<CriticalProfileKey | null>(null);
+    const [profileTabs, setProfileTabs] = useState<ReportTabId[]>([]);
+    const [profileFormats, setProfileFormats] = useState<ReportFileFormat[]>([]);
+    const [profileActive, setProfileActive] = useState(true);
 
-    // Dialog state
-    const [isDialogOpen, setIsDialogOpen] = useState(false);
-    const [editingReport, setEditingReport] = useState<ScheduledReport | null>(null);
-    const [formData, setFormData] = useState<Partial<ScheduledReport>>({
-        name: '',
-        frequency: 'weekly',
-        schedule_days: ['1', '2', '3', '4', '5'],
-        schedule_month_day: 1,
-        schedule_time: '08:00',
-        recipients: '',
-        is_active: true
-    });
+    const resolvedProfiles = useMemo(() => profileKeys.map((key) => (
+        resolveCriticalProfile(key, tagSettings.criticalReportProfiles)
+    )), [tagSettings.criticalReportProfiles]);
+
+    const visibleProfiles = useMemo(
+        () => resolvedProfiles.filter((profile) => profile.isActive || role === "admin"),
+        [resolvedProfiles, role],
+    );
 
     const fetchReports = async () => {
         try {
             setIsLoading(true);
             const { data, error } = await supabase
-                .schema('cw')
-                .from('automated_reports')
-                .select('*')
-                .order('created_at', { ascending: false });
+                .schema("cw")
+                .from("automated_reports")
+                .select("*")
+                .order("created_at", { ascending: false });
 
             if (error) throw error;
-            setReports(data || []);
+            setReports((data || []) as ScheduledReport[]);
         } catch (error) {
-            console.error("Error fetching reports:", error);
-            // toast.error("Error al cargar automatizaciones");
+            console.error("Error fetching scheduled reports:", error);
+            toast.error("No se pudieron cargar los reportes programados");
         } finally {
             setIsLoading(false);
         }
@@ -101,102 +142,87 @@ const ReportingLayer = () => {
         fetchReports();
     }, []);
 
-    const openCreateDialog = () => {
-        setEditingReport(null);
-        setFormData({
-            name: '',
-            frequency: 'weekly',
-            schedule_days: ['1', '2', '3', '4', '5'],
-            schedule_month_day: 1,
-            schedule_time: '08:00',
-            recipients: '',
-            is_active: true
+    const openProfileEditor = (key: CriticalProfileKey) => {
+        const profile = resolveCriticalProfile(key, tagSettings.criticalReportProfiles);
+        setEditingProfileKey(key);
+        setProfileTabs(profile.tabIds);
+        setProfileFormats(profile.fileFormats);
+        setProfileActive(profile.isActive);
+    };
+
+    const toggleProfileTab = (tabId: ReportTabId, checked: boolean | string) => {
+        setProfileTabs((current) => {
+            const next = checked === true
+                ? Array.from(new Set([...current, tabId]))
+                : current.filter((item) => item !== tabId);
+            return next.length > 0 ? next : current;
         });
-        setIsDialogOpen(true);
     };
 
-    const openEditDialog = (report: ScheduledReport) => {
-        setEditingReport(report);
-        setFormData({ ...report });
-        setIsDialogOpen(true);
+    const toggleProfileFormat = (formatId: ReportFileFormat, checked: boolean | string) => {
+        setProfileFormats((current) => {
+            const next = checked === true
+                ? Array.from(new Set([...current, formatId]))
+                : current.filter((item) => item !== formatId);
+            return next.length > 0 ? next : current;
+        });
     };
 
-    const handleSaveReport = async () => {
-        if (!formData.name || !formData.recipients) {
-            toast.error("Por favor completa el nombre y destinatarios");
-            return;
-        }
-
+    const saveProfileConfig = async () => {
+        if (!editingProfileKey) return;
         try {
-            setIsLoading(true);
-            const reportData = {
-                name: formData.name,
-                frequency: formData.frequency || 'weekly',
-                schedule_days: formData.frequency === 'weekly' ? formData.schedule_days : [],
-                schedule_month_day: formData.frequency === 'monthly' ? formData.schedule_month_day : null,
-                schedule_time: formData.schedule_time,
-                recipients: formData.recipients,
-                is_active: formData.is_active ?? true,
-                updated_at: new Date().toISOString()
-            };
-
-            if (editingReport) {
-                const { error } = await supabase
-                    .schema('cw')
-                    .from('automated_reports')
-                    .update(reportData)
-                    .eq('id', editingReport.id);
-                if (error) throw error;
-                toast.success("Reporte actualizado");
-            } else {
-                const { error } = await supabase
-                    .schema('cw')
-                    .from('automated_reports')
-                    .insert([{ ...reportData, created_at: new Date().toISOString() }]);
-                if (error) throw error;
-                toast.success("Reporte programado con éxito");
-            }
-            setIsDialogOpen(false);
-            fetchReports();
+            await updateTagSettings({
+                ...(tagSettings || DEFAULT_TAG_CONFIG),
+                criticalReportProfiles: {
+                    ...(tagSettings.criticalReportProfiles || {}),
+                    [editingProfileKey]: {
+                        tabIds: profileTabs,
+                        fileFormats: profileFormats,
+                        isActive: profileActive,
+                    },
+                },
+            });
+            toast.success("Perfil critico actualizado");
+            setEditingProfileKey(null);
         } catch (error) {
-            console.error("Error saving report:", error);
-            toast.error("Error al guardar la configuración");
-        } finally {
-            setIsLoading(false);
+            console.error("Profile config save failed:", error);
+            toast.error("No se pudo guardar la configuracion del perfil");
         }
     };
 
-    const toggleStatus = async (report: ScheduledReport) => {
+    const toggleScheduledStatus = async (report: ScheduledReport) => {
         try {
-            const newStatus = !report.is_active;
+            const nextStatus = !report.is_active;
             const { error } = await supabase
-                .schema('cw')
-                .from('automated_reports')
-                .update({ is_active: newStatus })
-                .eq('id', report.id);
+                .schema("cw")
+                .from("automated_reports")
+                .update({ is_active: nextStatus, updated_at: new Date().toISOString() })
+                .eq("id", report.id);
 
             if (error) throw error;
-            setReports(reports.map(r => r.id === report.id ? { ...r, is_active: newStatus } : r));
-            toast.info(`Reporte ${newStatus ? 'activado' : 'pausado'}`);
+            setReports((current) => current.map((item) => item.id === report.id ? { ...item, is_active: nextStatus } : item));
+            toast.success(nextStatus ? "Reporte activado" : "Reporte pausado");
         } catch (error) {
-            console.error("Error toggling status:", error);
+            console.error("Scheduled report status failed:", error);
+            toast.error("No se pudo actualizar el reporte");
         }
     };
 
-    const deleteReport = async (id: string) => {
-        if (!confirm("¿Estás seguro de eliminar esta programación?")) return;
+    const deleteScheduledReport = async (report: ScheduledReport) => {
+        if (!confirm(`Eliminar la programacion "${report.name}"?`)) return;
         try {
             const { error } = await supabase
-                .schema('cw')
-                .from('automated_reports')
+                .schema("cw")
+                .from("automated_reports")
                 .delete()
-                .eq('id', id);
+                .eq("id", report.id);
 
             if (error) throw error;
-            setReports(reports.filter(r => r.id !== id));
-            toast.error("Reporte eliminado");
+            setReports((current) => current.filter((item) => item.id !== report.id));
+            toast.success("Reporte programado eliminado");
         } catch (error) {
-            console.error("Error deleting report:", error);
+            console.error("Scheduled report delete failed:", error);
+            toast.error("No se pudo eliminar el reporte");
         }
     };
 
@@ -208,375 +234,209 @@ const ReportingLayer = () => {
         );
     }
 
+    const editingProfile = editingProfileKey ? resolveCriticalProfile(editingProfileKey, tagSettings.criticalReportProfiles) : null;
+
     return (
-        <div className="space-y-6">
-            <div className="flex gap-2 p-1 bg-muted w-fit rounded-lg">
-                <Button
-                    variant={view === 'exports' ? 'secondary' : 'ghost'}
-                    size="sm"
-                    onClick={() => setView('exports')}
-                    className="gap-2"
-                >
-                    <Download className="w-4 h-4" />
-                    Exportación Manual
-                </Button>
-                <Button
-                    variant={view === 'scheduled' ? 'secondary' : 'ghost'}
-                    size="sm"
-                    onClick={() => setView('scheduled')}
-                    className="gap-2"
-                >
-                    <Mail className="w-4 h-4" />
-                    Reportes Programados
-                </Button>
-                {role === 'admin' && (
-                    <Button
-                        variant={view === 'config' ? 'secondary' : 'ghost'}
-                        size="sm"
-                        onClick={() => setView('config')}
-                        className="gap-2"
-                    >
-                        <Settings className="w-4 h-4" />
-                        Configuración Excel
-                    </Button>
-                )}
-            </div>
-
-            {view === 'exports' ? (
-                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <ReportsPage />
-                </div>
-            ) : view === 'config' ? (
-                <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <FileSpreadsheet className="w-5 h-5 text-primary" />
-                                Configuración de Columnas Excel
-                            </CardTitle>
-                            <CardDescription>
-                                Selecciona qué campos se incluirán en las exportaciones manuales y automáticas.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-6">
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                <div className="space-y-4">
-                                    <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Campos Base</h3>
-                                    <div className="space-y-2">
-                                        {["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"].map(field => (
-                                            <div key={field} className="flex items-center space-x-2">
-                                                <Checkbox
-                                                    id={`field-${field}`}
-                                                    checked={tagSettings?.excelExportFields?.includes(field) || false}
-                                                    onCheckedChange={(checked) => {
-                                                        const current = tagSettings?.excelExportFields || [];
-                                                        const next = checked
-                                                            ? [...current, field]
-                                                            : current.filter(f => f !== field);
-                                                        updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
-                                                    }}
-                                                />
-                                                <Label htmlFor={`field-${field}`}>{field}</Label>
+        <div className="space-y-8">
+            <Card className="border-primary/15 bg-gradient-to-br from-primary/5 via-background to-background">
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-2xl">
+                        <BriefcaseBusiness className="h-6 w-6 text-primary" />
+                        Reportes criticos
+                    </CardTitle>
+                    <CardDescription>
+                        Cuatro perfiles listos para gerencia, operacion, equipo y marketing. Cada uno puede descargarse ahora o programarse por correo con Resend.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-4 lg:grid-cols-2">
+                    {visibleProfiles.map((profile) => {
+                        const Icon = PROFILE_ICONS[profile.key];
+                        return (
+                            <Card key={profile.key} className="overflow-hidden border shadow-sm">
+                                <CardHeader className="pb-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="flex items-start gap-3">
+                                            <div className="rounded-2xl bg-primary/10 p-3 text-primary">
+                                                <Icon className="h-5 w-5" />
                                             </div>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Métricas Operativas</h3>
-                                    <div className="space-y-2">
-                                        {["Monto", "Fecha Monto", "Agencia", "Check-in", "Check-out", "Campana", "Ciudad", "Responsable", "URL Red Social"].map(field => (
-                                            <div key={field} className="flex items-center space-x-2">
-                                                <Checkbox
-                                                    id={`field-${field}`}
-                                                    checked={tagSettings?.excelExportFields?.includes(field) || false}
-                                                    onCheckedChange={(checked) => {
-                                                        const current = tagSettings?.excelExportFields || [];
-                                                        const next = checked
-                                                            ? [...current, field]
-                                                            : current.filter(f => f !== field);
-                                                        updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
-                                                    }}
-                                                />
-                                                <Label htmlFor={`field-${field}`}>{field}</Label>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Atributos Técnicos (IDs)</h3>
-                                    <div className="space-y-2">
-                                        {["ID Contacto", "ID Inbox", "ID Cuenta", "Origen Dato"].map(field => (
-                                            <div key={field} className="flex items-center space-x-2">
-                                                <Checkbox
-                                                    id={`field-${field}`}
-                                                    checked={tagSettings?.excelExportFields?.includes(field) || false}
-                                                    onCheckedChange={(checked) => {
-                                                        const current = tagSettings?.excelExportFields || [];
-                                                        const next = checked
-                                                            ? [...current, field]
-                                                            : current.filter(f => f !== field);
-                                                        updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
-                                                    }}
-                                                />
-                                                <Label htmlFor={`field-${field}`}>{field}</Label>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="pt-4 border-t">
-                                <p className="text-xs text-muted-foreground italic">
-                                    Los cambios se guardan automáticamente y afectan a todas las exportaciones del sistema.
-                                </p>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <Card className="lg:col-span-2">
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <Clock className="w-5 h-5 text-primary" />
-                                Automatizaciones Activas
-                            </CardTitle>
-                            <CardDescription>Gestión de envíos automáticos a gerencia y stakeholders</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="border rounded-xl overflow-hidden">
-                                <table className="w-full text-sm text-left">
-                                    <thead className="bg-muted/50 text-muted-foreground font-medium border-b text-[10px] uppercase">
-                                        <tr>
-                                            <th className="px-6 py-4">Reporte</th>
-                                            <th className="px-6 py-4">Horario</th>
-                                            <th className="px-6 py-4">Destinatarios</th>
-                                            <th className="px-6 py-4">Estado</th>
-                                            <th className="px-6 py-4 text-right">Acción</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {reports.map((report) => (
-                                            <tr key={report.id} className="border-b hover:bg-muted/30 transition-colors group">
-                                                <td className="px-6 py-4 font-medium">{report.name}</td>
-                                                <td className="px-6 py-4 text-xs font-mono">
-                                                    <div className="flex flex-col gap-1">
-                                                        <span className="font-bold text-primary">{report.schedule_time}</span>
-                                                        {report.frequency === 'weekly' ? (
-                                                            <div className="flex gap-1">
-                                                                {DAY_OPTIONS.map(d => (
-                                                                    <span
-                                                                        key={d.value}
-                                                                        className={`text-[9px] px-1 rounded ${report.schedule_days.includes(d.value) ? 'bg-primary/10 text-primary font-bold' : 'text-slate-300'}`}
-                                                                    >
-                                                                        {d.label}
-                                                                    </span>
-                                                                ))}
-                                                            </div>
-                                                        ) : (
-                                                            <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded border italic">
-                                                                Día {report.schedule_month_day} de cada mes
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 text-xs text-muted-foreground max-w-[200px] truncate">{report.recipients}</td>
-                                                <td className="px-6 py-4">
-                                                    <Badge
-                                                        variant={report.is_active ? 'default' : 'outline'}
-                                                        className={`cursor-pointer transition-all ${report.is_active ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100' : ''}`}
-                                                        onClick={() => toggleStatus(report)}
-                                                    >
-                                                        {report.is_active ? 'Activo' : 'Pausado'}
+                                            <div>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <CardTitle className="text-lg">{profile.label}</CardTitle>
+                                                    <Badge variant={profile.isActive ? "default" : "outline"} className={profile.isActive ? "bg-green-50 text-green-700 border-green-200" : ""}>
+                                                        {profile.isActive ? "Activo" : "Inactivo"}
                                                     </Badge>
-                                                </td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <div className="flex justify-end gap-1">
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-                                                            onClick={() => openEditDialog(report)}
-                                                        >
-                                                            <Settings className="h-4 w-4" />
-                                                        </Button>
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-8 w-8 text-destructive/50 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                                                            onClick={() => deleteReport(report.id)}
-                                                        >
-                                                            <Trash2 className="h-4 w-4" />
-                                                        </Button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    <div className="space-y-6">
-                        <Card className="bg-primary/5 border-primary/10">
-                            <CardHeader className="pb-2">
-                                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                                    <PlayCircle className="w-4 h-4 text-primary" />
-                                    Registro de Envío
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                                <div className="space-y-4">
-                                    {[
-                                        { time: "Hoy, 08:00 AM", res: "Exitoso", detail: "3 destinatarios" },
-                                        { time: "Ayer, 08:00 AM", res: "Exitoso", detail: "3 destinatarios" },
-                                        { time: "07 Abr, 08:00 AM", res: "Error", detail: "SMTP Timeout" },
-                                    ].map((log, i) => (
-                                        <div key={i} className="flex gap-3 border-l-2 border-primary/20 pl-4 py-1">
-                                            <div className="flex flex-col">
-                                                <span className="text-[11px] font-bold">{log.time}</span>
-                                                <div className="flex items-center gap-1.5 mt-0.5">
-                                                    <CheckCircle2 className={`w-3 h-3 ${log.res === 'Exitoso' ? 'text-green-500' : 'text-red-500'}`} />
-                                                    <span className="text-[10px] text-muted-foreground uppercase tracking-wider">{log.res}: {log.detail}</span>
                                                 </div>
+                                                <CardDescription className="mt-1">{profile.description}</CardDescription>
                                             </div>
                                         </div>
-                                    ))}
-                                </div>
-                            </CardContent>
-                        </Card>
+                                        <Badge variant="secondary">{PROFILE_AREAS[profile.key]}</Badge>
+                                    </div>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="rounded-xl border bg-muted/30 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pestanas que debe incluir</p>
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                            {profile.tabIds.map((includedTabId) => (
+                                                <Badge key={includedTabId} variant="outline" className="bg-background">
+                                                    {REPORT_TAB_LABELS[includedTabId]}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    </div>
 
-                        <Button
-                            className="w-full gap-2 py-6 text-md font-bold rounded-2xl shadow-lg border-b-4 border-primary/20 hover:translate-y-[1px] active:translate-y-[2px] transition-all"
-                            onClick={openCreateDialog}
-                        >
-                            <Plus className="w-5 h-5" />
-                            Configurar Nuevo Reporte
-                        </Button>
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                        <div>
+                                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Formato principal</p>
+                                            <p className="text-sm font-bold">{formatFormatsLabel(profile.fileFormats)}</p>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            <TabExportMenu
+                                                profileKey={profile.key}
+                                                tabIds={profile.tabIds}
+                                                title={profile.label}
+                                                defaultFormats={profile.fileFormats}
+                                                compact
+                                                onScheduled={fetchReports}
+                                            />
+                                            {role === "admin" && (
+                                                <Button variant="outline" size="sm" className="gap-2" onClick={() => openProfileEditor(profile.key)}>
+                                                    <Settings className="h-4 w-4" />
+                                                    Editar
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        );
+                    })}
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Mail className="h-5 w-5 text-primary" />
+                        Reportes programados
+                    </CardTitle>
+                    <CardDescription>
+                        Resumen de envios automaticos activos o pausados. Puedes eliminar los que ya no se necesiten.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="overflow-hidden rounded-xl border">
+                        <table className="w-full text-left text-sm">
+                            <thead className="border-b bg-muted/50 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                <tr>
+                                    <th className="px-4 py-3">Reporte</th>
+                                    <th className="px-4 py-3">Pestanas / Perfil</th>
+                                    <th className="px-4 py-3">Formato</th>
+                                    <th className="px-4 py-3">Horario</th>
+                                    <th className="px-4 py-3">Correos</th>
+                                    <th className="px-4 py-3">Estado</th>
+                                    <th className="px-4 py-3 text-right">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {reports.map((report) => (
+                                    <tr key={report.id} className="border-b last:border-0 hover:bg-muted/30">
+                                        <td className="px-4 py-4">
+                                            <div className="font-semibold">{report.name}</div>
+                                            <div className="text-[11px] text-muted-foreground">
+                                                {report.report_scope === "critical_profile" ? "Perfil critico" : "Pestana"}
+                                                {report.created_by_email ? ` · ${report.created_by_email}` : ""}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-4 text-xs text-muted-foreground max-w-[280px]">{getReportTabsLabel(report)}</td>
+                                        <td className="px-4 py-4 text-xs font-semibold">{formatFormatsLabel(report.file_formats || ["excel"])}</td>
+                                        <td className="px-4 py-4 text-xs font-mono">{formatSchedule(report)}</td>
+                                        <td className="px-4 py-4 text-xs text-muted-foreground max-w-[260px] truncate">{report.recipients}</td>
+                                        <td className="px-4 py-4">
+                                            <Badge variant={report.is_active ? "default" : "outline"} className={report.is_active ? "bg-green-50 text-green-700 border-green-200" : ""}>
+                                                {report.is_active ? "Activo" : "Pausado"}
+                                            </Badge>
+                                            {report.last_status === "error" && (
+                                                <p className="mt-1 text-[10px] text-destructive">Ultimo envio con error</p>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-4 text-right">
+                                            <div className="flex justify-end gap-1">
+                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleScheduledStatus(report)}>
+                                                    {report.is_active ? <PauseCircle className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
+                                                </Button>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => deleteScheduledReport(report)}>
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                                {reports.length === 0 && (
+                                    <tr>
+                                        <td colSpan={7} className="px-6 py-16 text-center text-sm text-muted-foreground">
+                                            Todavia no hay reportes automaticos programados.
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
                     </div>
-                </div>
-            )
-            }
+                </CardContent>
+            </Card>
 
-            {/* SHARED DIALOG FOR CREATE/EDIT */}
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                <DialogContent className="sm:max-w-[425px]">
+            <Dialog open={Boolean(editingProfileKey)} onOpenChange={(open) => !open && setEditingProfileKey(null)}>
+                <DialogContent className="sm:max-w-[680px]">
                     <DialogHeader>
-                        <DialogTitle>{editingReport ? 'Editar Programación' : 'Programar Nuevo Reporte'}</DialogTitle>
+                        <DialogTitle>Configurar perfil critico</DialogTitle>
                         <DialogDescription>
-                            {editingReport ? 'Modifica los parámetros del reporte seleccionado.' : 'Configura un envío automático de métricas por correo.'}
+                            {editingProfile?.label}. Solo admins pueden cambiar la base de pestanas y formatos recomendados.
                         </DialogDescription>
                     </DialogHeader>
-                    <div className="grid gap-4 py-4">
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Nombre del Reporte</label>
-                            <Input
-                                placeholder="Ej: Resumen Comercial"
-                                value={formData.name}
-                                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            />
-                        </div>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Frecuencia</label>
-                            <div className="flex gap-2 p-1 bg-muted rounded-md border shadow-sm">
-                                <Button
-                                    type="button"
-                                    variant={formData.frequency === 'weekly' ? 'secondary' : 'ghost'}
-                                    className={`flex-1 text-xs font-semibold h-7 transition-all ${formData.frequency === 'weekly' ? 'bg-white shadow-sm' : ''}`}
-                                    onClick={() => setFormData({ ...formData, frequency: 'weekly' })}
-                                >
-                                    Semanal
-                                </Button>
-                                <Button
-                                    type="button"
-                                    variant={formData.frequency === 'monthly' ? 'secondary' : 'ghost'}
-                                    className={`flex-1 text-xs font-semibold h-7 transition-all ${formData.frequency === 'monthly' ? 'bg-white shadow-sm' : ''}`}
-                                    onClick={() => setFormData({ ...formData, frequency: 'monthly' })}
-                                >
-                                    Mensual
-                                </Button>
+                    <div className="grid gap-6 py-2 md:grid-cols-2">
+                        <div className="space-y-3">
+                            <Label>Pestanas incluidas</Label>
+                            <div className="space-y-2 rounded-xl border p-3">
+                                {REPORT_TABS.map((tab) => (
+                                    <label key={tab.id} className="flex items-center gap-2 rounded-lg p-2 text-sm hover:bg-muted/50">
+                                        <Checkbox
+                                            checked={profileTabs.includes(tab.id)}
+                                            onCheckedChange={(checked) => toggleProfileTab(tab.id, checked)}
+                                        />
+                                        <span>{tab.label}</span>
+                                    </label>
+                                ))}
                             </div>
                         </div>
 
-                        {formData.frequency === 'weekly' ? (
-                            <div className="space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
-                                <label className="text-sm font-medium">Días de Envío</label>
-                                <div className="flex flex-wrap gap-2">
-                                    {DAY_OPTIONS.map((day) => {
-                                        const isSelected = formData.schedule_days?.includes(day.value);
-                                        return (
-                                            <Button
-                                                key={day.value}
-                                                type="button"
-                                                variant={isSelected ? "default" : "outline"}
-                                                size="sm"
-                                                className={`h-8 w-10 p-0 text-[10px] ${isSelected ? 'bg-primary' : ''}`}
-                                                onClick={() => {
-                                                    const current = formData.schedule_days || [];
-                                                    const next = isSelected
-                                                        ? current.filter(d => d !== day.value)
-                                                        : [...current, day.value];
-                                                    setFormData({ ...formData, schedule_days: next });
-                                                }}
-                                            >
-                                                {day.label}
-                                            </Button>
-                                        );
-                                    })}
-                                </div>
+                        <div className="space-y-3">
+                            <Label>Formatos default</Label>
+                            <div className="space-y-2 rounded-xl border p-3">
+                                {REPORT_FORMATS.map((formatOption) => (
+                                    <label key={formatOption.id} className="flex items-center gap-2 rounded-lg p-2 text-sm hover:bg-muted/50">
+                                        <Checkbox
+                                            checked={profileFormats.includes(formatOption.id)}
+                                            onCheckedChange={(checked) => toggleProfileFormat(formatOption.id, checked)}
+                                        />
+                                        <span>{formatOption.label}</span>
+                                    </label>
+                                ))}
                             </div>
-                        ) : (
-                            <div className="space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
-                                <label className="text-sm font-medium">Día del Mes (1-31)</label>
-                                <Input
-                                    type="number"
-                                    min={1}
-                                    max={31}
-                                    value={formData.schedule_month_day || 1}
-                                    onChange={(e) => setFormData({ ...formData, schedule_month_day: parseInt(e.target.value) })}
-                                />
-                            </div>
-                        )}
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Hora de Envío</label>
-                                <Input
-                                    type="time"
-                                    value={formData.schedule_time}
-                                    onChange={(e) => setFormData({ ...formData, schedule_time: e.target.value })}
-                                />
-                            </div>
-                            <div className="flex items-end">
-                                <div className="p-3 bg-blue-50 text-blue-700 rounded-lg text-[10px] italic border border-blue-100 w-full flex items-center gap-2">
-                                    <FileSpreadsheet className="h-4 w-4 shrink-0" />
-                                    <span>Se enviará el reporte estándar de Excel</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Emails de Destino (separados por coma)</label>
-                            <Input
-                                placeholder="ejemplo@simplia.com, gerente@simplia.com"
-                                value={formData.recipients}
-                                onChange={(e) => setFormData({ ...formData, recipients: e.target.value })}
-                            />
+                            <label className="flex items-center gap-2 rounded-xl border p-3 text-sm">
+                                <Checkbox checked={profileActive} onCheckedChange={(checked) => setProfileActive(checked === true)} />
+                                Perfil activo para usuarios
+                            </label>
                         </div>
                     </div>
+
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancelar</Button>
-                        <Button onClick={handleSaveReport}>
-                            {editingReport ? 'Actualizar' : 'Confirmar'}
-                        </Button>
+                        <Button variant="outline" onClick={() => setEditingProfileKey(null)}>Cancelar</Button>
+                        <Button onClick={saveProfileConfig}>Guardar configuracion</Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-        </div >
+        </div>
     );
 };
 

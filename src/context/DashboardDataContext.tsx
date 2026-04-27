@@ -5,6 +5,11 @@ import { HybridDashboardService, mergeConversationsPreferApi } from '../services
 import { ConversationLabelEvent, LabelEventService } from '../services/LabelEventService';
 import { supabase } from '../lib/supabase';
 import { applyLatestLabelState, collectKnownLabels, getLeadAttrs, resolveLeadStage } from '../lib/conversationState';
+import {
+    DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG,
+    DEFAULT_REPORT_COLUMN_FIELDS,
+    type CriticalReportProfileConfig
+} from '../lib/reportCatalog';
 
 export interface DashboardFilters {
     startDate?: Date;
@@ -46,6 +51,8 @@ export interface TagConfig {
     scoreAppointmentLabels?: string[];
     scoreThresholds?: ScoreThresholds;
     excelExportFields?: string[];
+    reportColumnFields?: Record<string, string[]>;
+    criticalReportProfiles?: Record<string, CriticalReportProfileConfig>;
 }
 
 export interface ResolvedConversation extends MinifiedConversation {
@@ -107,7 +114,9 @@ export const DEFAULT_TAG_CONFIG: TagConfig = {
         "Enlace Chatwoot",
         "Fecha Ingreso",
         "Ultima Interaccion"
-    ]
+    ],
+    reportColumnFields: DEFAULT_REPORT_COLUMN_FIELDS,
+    criticalReportProfiles: DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG
 };
 
 const TAG_SETTINGS_STORAGE_KEY = 'dashboard_tag_settings';
@@ -144,6 +153,31 @@ const normalizeScoreThresholds = (value?: Partial<ScoreThresholds> | null): Scor
     };
 };
 
+const normalizeReportColumnFields = (value?: Record<string, unknown> | null) => {
+    const entries = Object.entries(DEFAULT_REPORT_COLUMN_FIELDS).map(([tabId, fallback]) => {
+        const configured = value?.[tabId];
+        return [tabId, normalizeTagArray(configured, fallback)];
+    });
+
+    return Object.fromEntries(entries);
+};
+
+const normalizeCriticalReportProfiles = (value?: Record<string, Partial<CriticalReportProfileConfig>> | null) => {
+    const entries = Object.entries(DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG).map(([key, fallback]) => {
+        const configured = value?.[key];
+        return [
+            key,
+            {
+                tabIds: normalizeTagArray(configured?.tabIds, fallback.tabIds || []),
+                fileFormats: normalizeTagArray(configured?.fileFormats, fallback.fileFormats || []),
+                isActive: typeof configured?.isActive === 'boolean' ? configured.isActive : fallback.isActive
+            }
+        ];
+    });
+
+    return Object.fromEntries(entries);
+};
+
 export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig => ({
     sqlTags: normalizeTagArray(value?.sqlTags, DEFAULT_TAG_CONFIG.sqlTags),
     appointmentTags: normalizeTagArray(value?.appointmentTags, DEFAULT_TAG_CONFIG.appointmentTags),
@@ -160,7 +194,9 @@ export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig
     scoreAttributeKey: String(value?.scoreAttributeKey || DEFAULT_TAG_CONFIG.scoreAttributeKey || '').trim(),
     scoreAppointmentLabels: normalizeTagArray(value?.scoreAppointmentLabels, DEFAULT_TAG_CONFIG.scoreAppointmentLabels || []),
     scoreThresholds: normalizeScoreThresholds(value?.scoreThresholds),
-    excelExportFields: normalizeTagArray(value?.excelExportFields, DEFAULT_TAG_CONFIG.excelExportFields || [])
+    excelExportFields: normalizeTagArray(value?.excelExportFields, DEFAULT_TAG_CONFIG.excelExportFields || []),
+    reportColumnFields: normalizeReportColumnFields(value?.reportColumnFields),
+    criticalReportProfiles: normalizeCriticalReportProfiles(value?.criticalReportProfiles)
 });
 
 const persistTagSettingsLocally = (config: TagConfig) => {

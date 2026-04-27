@@ -32,7 +32,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker";
 import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
-import { ExportToExcel } from "@/components/dashboard/ExportToExcel";
+import { TabExportMenu } from "@/components/dashboard/TabExportMenu";
 import { chatwootService } from "@/services/ChatwootService";
 import { SupabaseService } from "@/services/SupabaseService";
 import { LabelEventService } from "@/services/LabelEventService";
@@ -1498,7 +1498,7 @@ const LeadActionQueue = () => {
                 </div>
 
                 <div className="flex items-center gap-2 w-full lg:w-auto lg:ml-auto justify-end">
-                    <ExportToExcel />
+                    <TabExportMenu tabId="followup" compact />
                     <Button variant="outline" size="icon" onClick={refetch} title="Actualizar datos">
                         <RefreshCw className="h-4 w-4" />
                     </Button>
