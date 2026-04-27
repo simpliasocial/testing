@@ -36,6 +36,7 @@ import { ExportToExcel } from "@/components/dashboard/ExportToExcel";
 import { chatwootService } from "@/services/ChatwootService";
 import { SupabaseService } from "@/services/SupabaseService";
 import { LabelEventService } from "@/services/LabelEventService";
+import { HybridDashboardService } from "@/services/HybridDashboardService";
 import { supabase } from "@/lib/supabase";
 import { getGuayaquilDateString } from "@/lib/guayaquilTime";
 import { MinifiedConversation } from "@/services/StorageService";
@@ -60,7 +61,6 @@ import {
     getRawLeadPhone,
     money,
     normalize,
-    operationDateToIso,
     parseAmount
 } from "@/lib/leadDisplay";
 import { getContactCustomAttributes, getConversationCustomAttributes } from "@/lib/leadAttributes";
@@ -120,6 +120,8 @@ type HumanFlowConfigState = {
     humanSaleTargetLabel: string;
     humanAppointmentFieldKeys: string[];
 };
+
+type WorkflowModalStep = "closed" | "edit" | "confirm" | "saving";
 
 const normalizeList = (values: string[] = []) =>
     Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
@@ -498,6 +500,7 @@ const LeadActionQueue = () => {
         inboxes,
         setGlobalFilters,
         updateTagSettings,
+        replaceConversation,
         refetch: refetchContext
     } = useDashboardContext();
     const { loading, error, data, refetch } = useDashboardData({
@@ -532,14 +535,12 @@ const LeadActionQueue = () => {
     const [operationLead, setOperationLead] = useState<QueueLead | null>(null);
     const [operationAmount, setOperationAmount] = useState("");
     const [operationDate, setOperationDate] = useState(getGuayaquilDateString());
-    const [isOperationDialogOpen, setIsOperationDialogOpen] = useState(false);
-    const [isOperationConfirmOpen, setIsOperationConfirmOpen] = useState(false);
+    const [operationModalStep, setOperationModalStep] = useState<WorkflowModalStep>("closed");
     const [isSavingOperation, setIsSavingOperation] = useState(false);
 
     const [appointmentLead, setAppointmentLead] = useState<QueueLead | null>(null);
     const [appointmentValues, setAppointmentValues] = useState<Record<string, AppointmentFormValue>>({});
-    const [isAppointmentDialogOpen, setIsAppointmentDialogOpen] = useState(false);
-    const [isAppointmentConfirmOpen, setIsAppointmentConfirmOpen] = useState(false);
+    const [appointmentModalStep, setAppointmentModalStep] = useState<WorkflowModalStep>("closed");
     const [isSavingAppointment, setIsSavingAppointment] = useState(false);
 
     const [salesStartDate, setSalesStartDate] = useState("");
@@ -763,12 +764,32 @@ const LeadActionQueue = () => {
         [salesRows]
     );
 
+    const reconcileConversationSnapshot = async (conversationId: number, remainingRetries = 1): Promise<void> => {
+        try {
+            const { error } = await supabase.functions.invoke("chatwoot-repair-conversations", {
+                body: {
+                    ids: [conversationId],
+                    limit: 1,
+                    batch_size: 1
+                }
+            });
+
+            if (error) throw error;
+        } catch (reconcileError) {
+            console.error(`Server-side conversation reconcile failed for ${conversationId}:`, reconcileError);
+            if (remainingRetries > 0) {
+                window.setTimeout(() => {
+                    void reconcileConversationSnapshot(conversationId, remainingRetries - 1);
+                }, 1500);
+            }
+        }
+    };
+
     const applyLeadWorkflowUpdate = async ({
         lead,
         nextLabels,
         contactAttributePatch,
         conversationAttributePatch,
-        conversationUpdatePatch,
         rawPayload,
         successMessage
     }: {
@@ -776,7 +797,6 @@ const LeadActionQueue = () => {
         nextLabels: string[];
         contactAttributePatch?: Record<string, any>;
         conversationAttributePatch?: Record<string, any>;
-        conversationUpdatePatch?: Record<string, any>;
         rawPayload: Record<string, any>;
         successMessage: string;
     }) => {
@@ -801,30 +821,6 @@ const LeadActionQueue = () => {
             ...nextConversationAttrs
         };
 
-        const denormalizedPatch = Object.fromEntries(
-            [
-                "nombre_completo",
-                "fecha_visita",
-                "hora_visita",
-                "agencia",
-                "celular",
-                "correo",
-                "campana",
-                "ciudad",
-                "edad",
-                "canal",
-                "score_interes",
-                "monto_operacion",
-                "fecha_monto_operacion"
-            ]
-                .filter((key) => nextResolvedAttrs[key] !== undefined)
-                .map((key) => [key, nextResolvedAttrs[key]])
-        );
-
-        if (nextResolvedAttrs.agente !== undefined) {
-            denormalizedPatch.agente = nextResolvedAttrs.agente === true || nextResolvedAttrs.agente === "true";
-        }
-
         if (conversationAttributePatch && Object.keys(conversationAttributePatch).length > 0) {
             await chatwootService.updateConversationCustomAttributes(lead.id, nextConversationAttrs);
         }
@@ -837,32 +833,47 @@ const LeadActionQueue = () => {
 
         await chatwootService.updateConversationLabels(lead.id, nextLabels);
 
-        await LabelEventService.recordConversationLabelChange({
-            conversationId: lead.id,
-            previousLabels: lead.labels || [],
-            nextLabels,
-            eventSource: "dashboard",
-            rawPayload
+        try {
+            await LabelEventService.recordConversationLabelChange({
+                conversationId: lead.id,
+                previousLabels: lead.labels || [],
+                nextLabels,
+                eventSource: "dashboard",
+                rawPayload
+            });
+        } catch (labelEventError) {
+            console.error("Local label event sync failed after successful Chatwoot update:", labelEventError);
+        }
+
+        const [freshConversation] = await HybridDashboardService.refreshConversationDetailsById([lead.id]);
+        if (!freshConversation) {
+            throw new Error(`No se pudo refrescar la conversacion ${lead.id} desde Chatwoot`);
+        }
+
+        await replaceConversation({
+            ...freshConversation,
+            custom_attributes: nextResolvedAttrs
         });
 
-        const { error: supabaseError } = await supabase
-            .schema("cw")
-            .from("conversations_current")
-            .update({
-                labels: nextLabels,
-                contact_custom_attributes: nextContactAttrs,
-                conversation_custom_attributes: nextConversationAttrs,
-                custom_attributes: nextResolvedAttrs,
-                updated_at: new Date().toISOString(),
-                ...denormalizedPatch,
-                ...(conversationUpdatePatch || {})
-            })
-            .eq("chatwoot_conversation_id", lead.id);
-
-        if (supabaseError) throw supabaseError;
-
         toast.success(successMessage);
-        await Promise.all([refetchContext(), refetch?.()]);
+
+        void reconcileConversationSnapshot(lead.id);
+        void Promise.allSettled([refetchContext(), refetch?.()]);
+    };
+
+    const closeAppointmentWorkflow = (force = false) => {
+        if (isSavingAppointment && !force) return;
+        setAppointmentModalStep("closed");
+        setAppointmentLead(null);
+        setAppointmentValues({});
+    };
+
+    const closeOperationWorkflow = (force = false) => {
+        if (isSavingOperation && !force) return;
+        setOperationModalStep("closed");
+        setOperationLead(null);
+        setOperationAmount("");
+        setOperationDate(getGuayaquilDateString());
     };
 
     const openAppointmentDialog = (lead: QueueLead) => {
@@ -880,7 +891,7 @@ const LeadActionQueue = () => {
 
         setAppointmentLead(lead);
         setAppointmentValues(nextValues);
-        setIsAppointmentDialogOpen(true);
+        setAppointmentModalStep("edit");
     };
 
     const handleAppointmentValueChange = (key: string, value: AppointmentFormValue) => {
@@ -905,13 +916,14 @@ const LeadActionQueue = () => {
             return;
         }
 
-        setIsAppointmentConfirmOpen(true);
+        setAppointmentModalStep("confirm");
     };
 
     const executeAppointmentConfirm = async () => {
         if (!appointmentLead) return;
 
         setIsSavingAppointment(true);
+        setAppointmentModalStep("saving");
         try {
             const appointmentPayload = Object.fromEntries(
                 configuredAppointmentFields.map((field) => [
@@ -930,16 +942,14 @@ const LeadActionQueue = () => {
                     fields: appointmentPayload,
                     target_label: humanAppointmentTargetLabel
                 },
-                successMessage: `Lead actualizado a ${humanAppointmentTargetLabel}`
+                successMessage: "Cita guardada correctamente"
             });
 
-            setIsAppointmentConfirmOpen(false);
-            setIsAppointmentDialogOpen(false);
-            setAppointmentLead(null);
-            setAppointmentValues({});
+            closeAppointmentWorkflow(true);
         } catch (appointmentError) {
             console.error("Error confirming human appointment:", appointmentError);
             toast.error("No se pudo guardar la cita agendada en Chatwoot");
+            setAppointmentModalStep("confirm");
         } finally {
             setIsSavingAppointment(false);
         }
@@ -950,7 +960,7 @@ const LeadActionQueue = () => {
         setOperationLead(lead);
         setOperationAmount(attrs.monto_operacion ? String(attrs.monto_operacion) : "");
         setOperationDate(getLeadOperationDate(lead) || getGuayaquilDateString());
-        setIsOperationDialogOpen(true);
+        setOperationModalStep("edit");
     };
 
     const handleOperationFormConfirm = () => {
@@ -963,13 +973,14 @@ const LeadActionQueue = () => {
             toast.error("Ingresa la fecha del monto de operacion");
             return;
         }
-        setIsOperationConfirmOpen(true);
+        setOperationModalStep("confirm");
     };
 
     const executeOperationConfirm = async () => {
         if (!operationLead) return;
 
         setIsSavingOperation(true);
+        setOperationModalStep("saving");
         try {
             await applyLeadWorkflowUpdate({
                 lead: operationLead,
@@ -982,25 +993,20 @@ const LeadActionQueue = () => {
                     monto_operacion: operationAmount.trim(),
                     fecha_monto_operacion: operationDate
                 },
-                conversationUpdatePatch: {
-                    monto_operacion: operationAmount.trim(),
-                    fecha_monto_operacion: operationDateToIso(operationDate)
-                },
                 rawPayload: {
                     action: "confirm_operation",
                     monto_operacion: operationAmount.trim(),
                     fecha_monto_operacion: operationDate,
                     target_label: humanSaleTargetLabel
                 },
-                successMessage: `Operacion confirmada y marcada como ${humanSaleTargetLabel}`
+                successMessage: "Venta guardada correctamente"
             });
 
-            setIsOperationConfirmOpen(false);
-            setIsOperationDialogOpen(false);
-            setOperationLead(null);
+            closeOperationWorkflow(true);
         } catch (operationError) {
             console.error("Error confirming operation:", operationError);
             toast.error("No se pudo confirmar la operacion en Chatwoot");
+            setOperationModalStep("confirm");
         } finally {
             setIsSavingOperation(false);
         }
@@ -1890,7 +1896,12 @@ const LeadActionQueue = () => {
                 </CardContent>
             </Card>
 
-            <Dialog open={isAppointmentDialogOpen} onOpenChange={setIsAppointmentDialogOpen}>
+            <Dialog
+                open={appointmentModalStep !== "closed"}
+                onOpenChange={(open) => {
+                    if (!open) closeAppointmentWorkflow();
+                }}
+            >
                 <DialogContent className="max-w-2xl">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
@@ -1910,64 +1921,80 @@ const LeadActionQueue = () => {
                             </div>
                         </div>
 
-                        <ScrollArea className="max-h-[380px] pr-4">
+                        {appointmentModalStep === "edit" && (
+                            <ScrollArea className="max-h-[380px] pr-4">
+                                <div className="space-y-4">
+                                    {configuredAppointmentFields.map(renderAppointmentField)}
+                                </div>
+                            </ScrollArea>
+                        )}
+
+                        {appointmentModalStep !== "edit" && (
                             <div className="space-y-4">
-                                {configuredAppointmentFields.map(renderAppointmentField)}
+                                <p className="text-sm text-muted-foreground">
+                                    Vas a guardar la cita agendada de <strong>{appointmentLead ? getLeadName(appointmentLead) : ""}</strong> y cambiar la etiqueta a{" "}
+                                    <strong>{humanAppointmentTargetLabel}</strong>.
+                                </p>
+                                <div className="rounded-lg border bg-amber-50 p-3 text-sm text-amber-900">
+                                    <p className="font-semibold mb-2">Campos que se guardarán en Chatwoot</p>
+                                    <div className="space-y-1">
+                                        {configuredAppointmentFields.map((field) => (
+                                            <div key={`confirm-appointment-${field.key}`}>
+                                                <span className="font-medium">{field.label}:</span>{" "}
+                                                <span>{formatAppointmentFieldValue(field, appointmentValues[field.key])}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <p className="text-sm text-muted-foreground">
+                                    El lead saldrá de la cola actual y quedará con la etiqueta <strong>{humanAppointmentTargetLabel}</strong>.
+                                </p>
+                                {appointmentModalStep === "saving" && (
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        Guardando cambios...
+                                    </div>
+                                )}
                             </div>
-                        </ScrollArea>
+                        )}
                     </div>
 
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsAppointmentDialogOpen(false)}>Cancelar</Button>
-                        <Button className="bg-violet-600 hover:bg-violet-700" onClick={handleAppointmentFormConfirm}>
-                            Guardar cita
-                        </Button>
+                        {appointmentModalStep === "edit" ? (
+                            <>
+                                <Button variant="outline" onClick={closeAppointmentWorkflow}>Cancelar</Button>
+                                <Button className="bg-violet-600 hover:bg-violet-700" onClick={handleAppointmentFormConfirm}>
+                                    Guardar cita
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setAppointmentModalStep("edit")}
+                                    disabled={isSavingAppointment}
+                                >
+                                    Volver
+                                </Button>
+                                <Button
+                                    className="bg-violet-600 hover:bg-violet-700"
+                                    onClick={executeAppointmentConfirm}
+                                    disabled={isSavingAppointment}
+                                >
+                                    {isSavingAppointment ? "Guardando..." : "Confirmar cita"}
+                                </Button>
+                            </>
+                        )}
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
 
-            <AlertDialog open={isAppointmentConfirmOpen} onOpenChange={setIsAppointmentConfirmOpen}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle className="flex items-center gap-2">
-                            <AlertTriangle className="h-5 w-5 text-amber-500" />
-                            Confirmacion final
-                        </AlertDialogTitle>
-                        <AlertDialogDescription className="space-y-4 pt-2">
-                            <p>
-                                Vas a guardar la cita agendada de <strong>{appointmentLead ? getLeadName(appointmentLead) : ""}</strong> y cambiar la etiqueta a{" "}
-                                <strong>{humanAppointmentTargetLabel}</strong>. Estas seguro?
-                            </p>
-                            <div className="rounded-lg border bg-amber-50 p-3 text-sm text-amber-900">
-                                <p className="font-semibold mb-2">Campos que se guardarán en Chatwoot</p>
-                                <div className="space-y-1">
-                                    {configuredAppointmentFields.map((field) => (
-                                        <div key={`confirm-appointment-${field.key}`}>
-                                            <span className="font-medium">{field.label}:</span>{" "}
-                                            <span>{formatAppointmentFieldValue(field, appointmentValues[field.key])}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                            <p>
-                                El lead saldrá de la cola actual y quedará con la etiqueta <strong>{humanAppointmentTargetLabel}</strong>.
-                            </p>
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel disabled={isSavingAppointment}>Cancelar</AlertDialogCancel>
-                        <AlertDialogAction
-                            onClick={executeAppointmentConfirm}
-                            disabled={isSavingAppointment}
-                            className="bg-violet-600 hover:bg-violet-700"
-                        >
-                            {isSavingAppointment ? "Guardando..." : "Si, guardar cita"}
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-
-            <Dialog open={isOperationDialogOpen} onOpenChange={setIsOperationDialogOpen}>
+            <Dialog
+                open={operationModalStep !== "closed"}
+                onOpenChange={(open) => {
+                    if (!open) closeOperationWorkflow();
+                }}
+            >
                 <DialogContent>
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
@@ -1987,67 +2014,80 @@ const LeadActionQueue = () => {
                             </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Monto operacion</label>
-                            <Input
-                                value={operationAmount}
-                                onChange={(e) => setOperationAmount(e.target.value)}
-                                placeholder="Ej: 15000"
-                            />
-                        </div>
+                        {operationModalStep === "edit" && (
+                            <>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Monto operacion</label>
+                                    <Input
+                                        value={operationAmount}
+                                        onChange={(e) => setOperationAmount(e.target.value)}
+                                        placeholder="Ej: 15000"
+                                    />
+                                </div>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Fecha monto operacion</label>
-                            <div className="relative">
-                                <CalendarDays className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    className="pl-9"
-                                    type="date"
-                                    value={operationDate}
-                                    onChange={(e) => setOperationDate(e.target.value)}
-                                />
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Fecha monto operacion</label>
+                                    <div className="relative">
+                                        <CalendarDays className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                                        <Input
+                                            className="pl-9"
+                                            type="date"
+                                            value={operationDate}
+                                            onChange={(e) => setOperationDate(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {operationModalStep !== "edit" && (
+                            <div className="space-y-4">
+                                <p className="text-sm text-muted-foreground">
+                                    Vas a confirmar la venta de <strong>{operationLead ? getLeadName(operationLead) : ""}</strong> por{" "}
+                                    <strong>{money(parseAmount(operationAmount))}</strong> con fecha <strong>{operationDate}</strong>.
+                                </p>
+                                <p className="text-sm text-muted-foreground">
+                                    Se guardarán <strong>monto_operacion</strong> y <strong>fecha_monto_operacion</strong> en Chatwoot y la conversación quedará con la etiqueta <strong>{humanSaleTargetLabel}</strong>.
+                                </p>
+                                {operationModalStep === "saving" && (
+                                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        Guardando cambios...
+                                    </div>
+                                )}
                             </div>
-                        </div>
+                        )}
                     </div>
 
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsOperationDialogOpen(false)}>Cancelar</Button>
-                        <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleOperationFormConfirm}>
-                            Confirmar
-                        </Button>
+                        {operationModalStep === "edit" ? (
+                            <>
+                                <Button variant="outline" onClick={closeOperationWorkflow}>Cancelar</Button>
+                                <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleOperationFormConfirm}>
+                                    Confirmar
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setOperationModalStep("edit")}
+                                    disabled={isSavingOperation}
+                                >
+                                    Volver
+                                </Button>
+                                <Button
+                                    className="bg-emerald-600 hover:bg-emerald-700"
+                                    onClick={executeOperationConfirm}
+                                    disabled={isSavingOperation}
+                                >
+                                    {isSavingOperation ? "Guardando..." : "Confirmar venta"}
+                                </Button>
+                            </>
+                        )}
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-
-            <AlertDialog open={isOperationConfirmOpen} onOpenChange={setIsOperationConfirmOpen}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle className="flex items-center gap-2">
-                            <AlertTriangle className="h-5 w-5 text-amber-500" />
-                            Confirmacion final
-                        </AlertDialogTitle>
-                        <AlertDialogDescription className="space-y-4 pt-2">
-                            <p>
-                                Vas a confirmar la venta de <strong>{operationLead ? getLeadName(operationLead) : ""}</strong> por{" "}
-                                <strong>{money(parseAmount(operationAmount))}</strong> con fecha <strong>{operationDate}</strong>. Estas seguro?
-                            </p>
-                            <p>
-                                Al confirmar se guardarán <strong>monto_operacion</strong> y <strong>fecha_monto_operacion</strong> en Chatwoot y la conversacion quedará con la etiqueta <strong>{humanSaleTargetLabel}</strong>.
-                            </p>
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel disabled={isSavingOperation}>Cancelar</AlertDialogCancel>
-                        <AlertDialogAction
-                            onClick={executeOperationConfirm}
-                            disabled={isSavingOperation}
-                            className="bg-emerald-600 hover:bg-emerald-700"
-                        >
-                            {isSavingOperation ? "Guardando..." : "Si, confirmar venta"}
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
 
             <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
                 <DialogContent className="max-w-2xl sm:max-w-3xl">

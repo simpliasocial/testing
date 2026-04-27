@@ -72,6 +72,7 @@ type DashboardDataContextType = {
     updateTagSettings: (config: TagConfig) => Promise<void>;
     globalFilters: DashboardFilters;
     setGlobalFilters: React.Dispatch<React.SetStateAction<DashboardFilters>>;
+    replaceConversation: (conversation: MinifiedConversation) => Promise<void>;
     refetch: () => Promise<void>;
 };
 
@@ -207,6 +208,7 @@ const DashboardDataContext = createContext<DashboardDataContextType>({
     updateTagSettings: async () => { },
     globalFilters: {},
     setGlobalFilters: () => { },
+    replaceConversation: async () => { },
     refetch: async () => { }
 });
 
@@ -310,6 +312,32 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             } catch (storageError) {
                 console.warn('[Dashboard] IndexedDB cache write failed:', storageError);
             }
+        }
+    };
+
+    const replaceConversation = async (conversation: MinifiedConversation) => {
+        let nextConversations: MinifiedConversation[] = [];
+
+        setConversations((prev) => {
+            const existingIndex = prev.findIndex((item) => Number(item.id) === Number(conversation.id));
+            if (existingIndex >= 0) {
+                nextConversations = prev.map((item, index) => (
+                    index === existingIndex
+                        ? { ...item, ...conversation }
+                        : item
+                ));
+            } else {
+                nextConversations = [{ ...conversation }, ...prev];
+            }
+
+            conversationsRef.current = nextConversations;
+            return nextConversations;
+        });
+
+        try {
+            await StorageService.saveConversations(nextConversations, { replaceAll: true });
+        } catch (storageError) {
+            console.warn('[Dashboard] IndexedDB cache write failed after conversation patch:', storageError);
         }
     };
 
@@ -689,6 +717,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             updateTagSettings,
             globalFilters,
             setGlobalFilters,
+            replaceConversation,
             refetch: initData
         }}>
             {children}
