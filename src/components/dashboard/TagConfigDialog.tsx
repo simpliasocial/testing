@@ -15,6 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TagConfig } from "@/context/DashboardDataContext";
+import { formatBusinessLabel } from "@/lib/displayCopy";
 
 interface TagConfigDialogProps {
     availableLabels: string[];
@@ -31,7 +32,7 @@ export function TagConfigDialog({
     const [tempConfig, setTempConfig] = React.useState<TagConfig>(config);
     const [saving, setSaving] = React.useState(false);
 
-    // Sync temp state with prop when dialog opens
+    // Keep the editable copy aligned when the dialog opens.
     React.useEffect(() => {
         if (open) {
             setTempConfig(config);
@@ -62,14 +63,14 @@ export function TagConfigDialog({
             <DialogTrigger asChild>
                 <Button variant="outline" size="sm" className="gap-2">
                     <Settings2 className="h-4 w-4" />
-                    Configurar Funnel
+                    Configurar embudo
                 </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl">
                 <DialogHeader>
-                    <DialogTitle>Configurar Etiquetas del Funnel</DialogTitle>
+                    <DialogTitle>Configurar estados del embudo</DialogTitle>
                     <DialogDescription>
-                        Selecciona qué etiquetas de Chatwoot corresponden a cada etapa de tu proceso comercial.
+                        Selecciona qué estados corresponden a cada etapa de tu proceso comercial.
                     </DialogDescription>
                 </DialogHeader>
 
@@ -94,7 +95,7 @@ export function TagConfigDialog({
                                 <div className="grid grid-cols-2 gap-4">
                                     {availableLabels.length === 0 ? (
                                         <div className="col-span-2 text-center py-8 text-muted-foreground italic text-sm">
-                                            No se detectaron etiquetas en Chatwoot todavía.
+                                            No hay estados configurados todavía.
                                         </div>
                                     ) : (
                                         availableLabels.map((label) => (
@@ -108,7 +109,7 @@ export function TagConfigDialog({
                                                     htmlFor={`${category}-${label}`}
                                                     className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 whitespace-nowrap overflow-hidden text-ellipsis"
                                                 >
-                                                    {label}
+                                                    {formatBusinessLabel(label)}
                                                 </Label>
                                             </div>
                                         ))

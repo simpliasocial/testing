@@ -13,6 +13,7 @@ import {
     SelectValue
 } from "@/components/ui/select";
 import { getGuayaquilDateString } from "@/lib/guayaquilTime";
+import { formatBusinessLabel } from "@/lib/displayCopy";
 import {
     Bar,
     BarChart,
@@ -31,15 +32,15 @@ const formatCurrency = (value: number) =>
 const modeCopy: Record<string, { label: string; description: string }> = {
     exact: {
         label: "Exacto",
-        description: "Medido con eventos reales de cambio de etiqueta."
+        description: "Medido con cambios reales de estado."
     },
     mixed: {
         label: "Mixto",
-        description: "Combina eventos reales nuevos con estimacion historica anterior al tracking."
+        description: "Combina cambios reales recientes con una estimación para periodos anteriores."
     },
     estimated_legacy: {
-        label: "Estimado historico",
-        description: "No existia historial de cambios para este rango; se estima con etiquetas actuales."
+        label: "Histórico estimado",
+        description: "No había registro de cambios para este rango; se estima con los estados actuales."
     }
 };
 
@@ -203,8 +204,8 @@ const PerformanceLayer = () => {
     const { humanMetrics } = data;
     const mode = modeCopy[humanAppointmentMetrics.humanAppointmentMode] || modeCopy.estimated_legacy;
     const appointmentComparison = [
-        { name: transitionFromLabel, value: humanAppointmentMetrics.followupCurrent, fill: "#243d90" },
-        { name: transitionToLabel, value: humanAppointmentMetrics.humanAppointmentConversions, fill: "#059669" }
+        { name: formatBusinessLabel(transitionFromLabel), value: humanAppointmentMetrics.followupCurrent, fill: "#243d90" },
+        { name: formatBusinessLabel(transitionToLabel), value: humanAppointmentMetrics.humanAppointmentConversions, fill: "#059669" }
     ];
     const salesChartData = humanMetrics.salesByDate?.length
         ? humanMetrics.salesByDate
@@ -224,7 +225,7 @@ const PerformanceLayer = () => {
                                     Citas agendadas por humano
                                 </CardTitle>
                                 <CardDescription>
-                                    Analiza cuántos leads estaban en una etiqueta y luego pasaron a otra. Elige abajo la etiqueta inicial y la etiqueta destino para este negocio.
+                                    Analiza cuántos leads estaban en un estado y luego pasaron a otro. Elige abajo el estado inicial y el estado destino para este negocio.
                                 </CardDescription>
                             </div>
                             <Badge variant="outline" className="w-fit">{mode.label}</Badge>
@@ -235,15 +236,15 @@ const PerformanceLayer = () => {
                             <div className="rounded-xl border bg-muted/20 p-4">
                                 <div className="grid gap-3 lg:grid-cols-[1fr_auto_1fr] lg:items-end">
                                     <div className="space-y-2">
-                                        <p className="text-xs font-medium text-muted-foreground">Etiqueta inicial</p>
+                                        <p className="text-xs font-medium text-muted-foreground">Estado inicial</p>
                                         <Select value={transitionFromLabel} onValueChange={setTransitionFromLabel}>
                                             <SelectTrigger>
-                                                <SelectValue placeholder="Selecciona etiqueta inicial" />
+                                                <SelectValue placeholder="Selecciona estado inicial" />
                                             </SelectTrigger>
                                             <SelectContent>
                                                 {availableHumanTransitionLabels.map((label) => (
                                                     <SelectItem key={`human-from-${label}`} value={label}>
-                                                        {label}
+                                                        {formatBusinessLabel(label)}
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -255,15 +256,15 @@ const PerformanceLayer = () => {
                                     </div>
 
                                     <div className="space-y-2">
-                                        <p className="text-xs font-medium text-muted-foreground">Etiqueta destino</p>
+                                        <p className="text-xs font-medium text-muted-foreground">Estado destino</p>
                                         <Select value={transitionToLabel} onValueChange={setTransitionToLabel}>
                                             <SelectTrigger>
-                                                <SelectValue placeholder="Selecciona etiqueta destino" />
+                                                <SelectValue placeholder="Selecciona estado destino" />
                                             </SelectTrigger>
                                             <SelectContent>
                                                 {availableHumanTransitionLabels.map((label) => (
                                                     <SelectItem key={`human-to-${label}`} value={label}>
-                                                        {label}
+                                                        {formatBusinessLabel(label)}
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -274,7 +275,7 @@ const PerformanceLayer = () => {
                         )}
                         <div>
                             <p className="mt-3 text-xs text-muted-foreground">
-                                Se calcula sobre leads que estaban en <span className="font-medium text-foreground">{transitionFromLabel}</span> y después pasaron a <span className="font-medium text-foreground">{transitionToLabel}</span>, respetando el rango y canal seleccionados.
+                                Se calcula sobre leads que estaban en <span className="font-medium text-foreground">{formatBusinessLabel(transitionFromLabel)}</span> y después pasaron a <span className="font-medium text-foreground">{formatBusinessLabel(transitionToLabel)}</span>, respetando el rango y canal seleccionados.
                             </p>
                         </div>
 
@@ -324,7 +325,7 @@ const PerformanceLayer = () => {
                             Ventas exitosas
                         </CardTitle>
                         <CardDescription>
-                            Leads con {humanSaleTargetLabel} y valores de monto_operacion.
+                            Leads marcados como {formatBusinessLabel(humanSaleTargetLabel).toLowerCase()} con monto registrado.
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-5">
@@ -345,7 +346,7 @@ const PerformanceLayer = () => {
 
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <TrendingUp className="h-4 w-4" />
-                            La fecha del grafico usa fecha_monto_operacion; si falta, usa la fecha de creacion del lead.
+                            El gráfico usa la fecha en que se registró el monto; si falta, usa la fecha de creación del lead.
                         </div>
 
                         <div className="h-[300px] w-full">

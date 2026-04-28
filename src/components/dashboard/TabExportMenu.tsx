@@ -27,6 +27,7 @@ import { useAuth } from "@/context/AuthContext";
 import { DEFAULT_TAG_CONFIG, useDashboardContext } from "@/context/DashboardDataContext";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import { downloadDashboardReport } from "@/lib/reportExport";
+import { formatFieldLabel, friendlyErrorMessage } from "@/lib/displayCopy";
 import {
     CRITICAL_REPORT_PROFILES,
     DEFAULT_REPORT_COLUMN_FIELDS,
@@ -117,7 +118,7 @@ export function TabExportMenu({
             toast.success("Reporte descargado correctamente");
         } catch (error) {
             console.error("Report download failed:", error);
-            toast.error(error instanceof Error ? error.message : "No se pudo generar el reporte");
+            toast.error(error instanceof Error ? error.message : friendlyErrorMessage("export"));
         }
     };
 
@@ -177,7 +178,7 @@ export function TabExportMenu({
                 });
 
             if (error) throw error;
-            toast.success("Reporte automatico programado correctamente");
+            toast.success("Reporte automático programado correctamente");
             setScheduleOpen(false);
             onScheduled?.();
         } catch (error) {
@@ -213,7 +214,7 @@ export function TabExportMenu({
         });
     };
 
-    const buttonLabel = compact ? "Exportar" : `Exportar ${profileKey ? "perfil" : "pestana"}`;
+    const buttonLabel = compact ? "Exportar" : `Exportar ${profileKey ? "perfil" : "pestaña"}`;
 
     return (
         <>
@@ -237,7 +238,7 @@ export function TabExportMenu({
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setScheduleOpen(true); }}>
                         <Mail className="mr-2 h-4 w-4" />
-                        Reporte automatico
+                        Reporte automático
                     </DropdownMenuItem>
                     {canConfigureColumns && (
                         <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setColumnsOpen(true); }}>
@@ -251,9 +252,9 @@ export function TabExportMenu({
             <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
                 <DialogContent className="sm:max-w-[560px]">
                     <DialogHeader>
-                        <DialogTitle>Programar reporte automatico</DialogTitle>
+                        <DialogTitle>Programar reporte automático</DialogTitle>
                         <DialogDescription>
-                            Configura el envio por correo para {reportTitle}. Semanal usa la semana anterior completa y mensual usa el mes anterior completo.
+                            Configura el envío por correo para {reportTitle}. Semanal usa la semana anterior completa y mensual usa el mes anterior completo.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -277,7 +278,7 @@ export function TabExportMenu({
 
                             {frequency === "weekly" ? (
                                 <div className="space-y-2">
-                                    <Label>Dia de la semana</Label>
+                                    <Label>Día de la semana</Label>
                                     <Select value={weekday} onValueChange={setWeekday}>
                                         <SelectTrigger><SelectValue /></SelectTrigger>
                                         <SelectContent>
@@ -289,16 +290,16 @@ export function TabExportMenu({
                                 </div>
                             ) : (
                                 <div className="space-y-2">
-                                    <Label>Dia del mes</Label>
+                                    <Label>Día del mes</Label>
                                     <Input type="number" min={1} max={31} value={monthDay} onChange={(event) => setMonthDay(event.target.value)} />
-                                    <p className="text-[11px] text-muted-foreground">Si el mes no tiene ese dia, se enviara el ultimo dia del mes.</p>
+                                    <p className="text-[11px] text-muted-foreground">Si el mes no tiene ese día, se enviará el último día del mes.</p>
                                 </div>
                             )}
                         </div>
 
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
-                                <Label>Hora de envio</Label>
+                                <Label>Hora de envío</Label>
                                 <Input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
                             </div>
                             <div className="space-y-2">
@@ -324,7 +325,7 @@ export function TabExportMenu({
                                 value={recipients}
                                 onChange={(event) => setRecipients(event.target.value)}
                             />
-                            <p className="text-[11px] text-muted-foreground">Puedes separar varios correos con coma, punto y coma o salto de linea.</p>
+                            <p className="text-[11px] text-muted-foreground">Puedes separar varios correos con coma, punto y coma o salto de línea.</p>
                         </div>
                     </div>
 
@@ -344,7 +345,7 @@ export function TabExportMenu({
                         <DialogHeader>
                             <DialogTitle>Columnas de {REPORT_TAB_LABELS[tabId]}</DialogTitle>
                             <DialogDescription>
-                                Esta configuracion solo la ve admin y aplica a las descargas de esta pestana.
+                                Esta configuración solo la ve el administrador y aplica a las descargas de esta pestaña.
                             </DialogDescription>
                         </DialogHeader>
 
@@ -355,7 +356,7 @@ export function TabExportMenu({
                                         checked={selectedColumnFields.includes(field)}
                                         onCheckedChange={(checked) => handleToggleColumn(field, checked)}
                                     />
-                                    {field}
+                                    {formatFieldLabel(field)}
                                 </label>
                             ))}
                         </div>

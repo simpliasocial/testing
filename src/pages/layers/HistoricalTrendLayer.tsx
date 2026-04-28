@@ -72,8 +72,8 @@ const HistoricalTrendLayer = () => {
                 });
 
             } catch (err: any) {
-                console.error("Supabase fetch error:", err);
-                setError(err.message || "Error conectando con Supabase.");
+                console.error("Historical trend fetch error:", err);
+                setError("No se pudo cargar el historial. Intenta nuevamente.");
             } finally {
                 setLoading(false);
             }
@@ -265,12 +265,12 @@ const HistoricalTrendLayer = () => {
                     <div>
                         <h3 className="font-bold text-indigo-900 text-lg">Reporte de Tendencias Históricas</h3>
                         <p className="text-sm text-indigo-700/60 max-w-2xl">
-                            Consumo longitudinal desde Supabase. Permite analizar estacionalidad sin límites de borrado de Chatwoot.
+                            Información histórica consolidada para analizar estacionalidad y comportamiento comercial por periodos amplios.
                         </p>
                         <div className="mt-3 flex gap-4 text-[10px] font-bold uppercase tracking-widest text-indigo-600">
-                            <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Sync Activa</span>
-                            <span>Records: {stats.totalSyncLeads.toLocaleString()}</span>
-                            <span>Origen: {stats.firstSyncDate}</span>
+                            <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Historial activo</span>
+                            <span>Leads: {stats.totalSyncLeads.toLocaleString()}</span>
+                            <span>Desde: {stats.firstSyncDate}</span>
                         </div>
                     </div>
                 </div>
@@ -451,7 +451,7 @@ const HistoricalTrendLayer = () => {
             {/* Detail Table */}
             <Card className="border-none shadow-sm overflow-hidden bg-white">
                 <CardHeader className="border-b border-slate-50">
-                    <CardTitle className="text-sm font-bold">Auditoría de Series Históricas</CardTitle>
+                    <CardTitle className="text-sm font-bold">Detalle de series históricas</CardTitle>
                 </CardHeader>
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">

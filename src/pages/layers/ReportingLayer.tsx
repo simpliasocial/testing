@@ -71,7 +71,7 @@ const PROFILE_ICONS: Record<CriticalProfileKey, typeof BarChart3> = {
 
 const PROFILE_AREAS: Record<CriticalProfileKey, string> = {
     management: "Gerencia",
-    daily_operations: "Operacion",
+    daily_operations: "Operación",
     team_performance: "Equipo",
     marketing_quality: "Marketing",
 };
@@ -95,7 +95,7 @@ const formatSchedule = (report: ScheduledReport) => {
 const getReportTabsLabel = (report: ScheduledReport) => {
     const tabs = report.tab_ids || [];
     if (tabs.length === 0 && report.critical_profile_key) {
-        return CRITICAL_REPORT_PROFILES[report.critical_profile_key]?.label || "Perfil critico";
+        return CRITICAL_REPORT_PROFILES[report.critical_profile_key]?.label || "Perfil crítico";
     }
     return tabs.map((tabId) => REPORT_TAB_LABELS[tabId] || tabId).join(", ") || "Sin pestanas";
 };
@@ -182,7 +182,7 @@ const ReportingLayer = () => {
                     },
                 },
             });
-            toast.success("Perfil critico actualizado");
+            toast.success("Perfil crítico actualizado");
             setEditingProfileKey(null);
         } catch (error) {
             console.error("Profile config save failed:", error);
@@ -242,10 +242,10 @@ const ReportingLayer = () => {
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-2xl">
                         <BriefcaseBusiness className="h-6 w-6 text-primary" />
-                        Reportes criticos
+                        Reportes críticos
                     </CardTitle>
                     <CardDescription>
-                        Cuatro perfiles listos para gerencia, operacion, equipo y marketing. Cada uno puede descargarse ahora o programarse por correo con Resend.
+                        Cuatro perfiles listos para gerencia, operación, equipo y marketing. Cada uno puede descargarse ahora o programarse por correo.
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4 lg:grid-cols-2">
@@ -274,7 +274,7 @@ const ReportingLayer = () => {
                                 </CardHeader>
                                 <CardContent className="space-y-4">
                                     <div className="rounded-xl border bg-muted/30 p-4">
-                                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pestanas que debe incluir</p>
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pestañas que debe incluir</p>
                                         <div className="mt-2 flex flex-wrap gap-2">
                                             {profile.tabIds.map((includedTabId) => (
                                                 <Badge key={includedTabId} variant="outline" className="bg-background">
@@ -320,7 +320,7 @@ const ReportingLayer = () => {
                         Reportes programados
                     </CardTitle>
                     <CardDescription>
-                        Resumen de envios automaticos activos o pausados. Puedes eliminar los que ya no se necesiten.
+                        Resumen de envíos automáticos activos o pausados. Puedes eliminar los que ya no se necesiten.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -329,7 +329,7 @@ const ReportingLayer = () => {
                             <thead className="border-b bg-muted/50 text-[10px] uppercase tracking-wide text-muted-foreground">
                                 <tr>
                                     <th className="px-4 py-3">Reporte</th>
-                                    <th className="px-4 py-3">Pestanas / Perfil</th>
+                                    <th className="px-4 py-3">Pestañas / Perfil</th>
                                     <th className="px-4 py-3">Formato</th>
                                     <th className="px-4 py-3">Horario</th>
                                     <th className="px-4 py-3">Correos</th>
@@ -343,7 +343,7 @@ const ReportingLayer = () => {
                                         <td className="px-4 py-4">
                                             <div className="font-semibold">{report.name}</div>
                                             <div className="text-[11px] text-muted-foreground">
-                                                {report.report_scope === "critical_profile" ? "Perfil critico" : "Pestana"}
+                                                {report.report_scope === "critical_profile" ? "Perfil crítico" : "Pestaña"}
                                                 {report.created_by_email ? ` · ${report.created_by_email}` : ""}
                                             </div>
                                         </td>
@@ -356,7 +356,7 @@ const ReportingLayer = () => {
                                                 {report.is_active ? "Activo" : "Pausado"}
                                             </Badge>
                                             {report.last_status === "error" && (
-                                                <p className="mt-1 text-[10px] text-destructive">Ultimo envio con error</p>
+                                            <p className="mt-1 text-[10px] text-destructive">Último envío con error</p>
                                             )}
                                         </td>
                                         <td className="px-4 py-4 text-right">
@@ -374,7 +374,7 @@ const ReportingLayer = () => {
                                 {reports.length === 0 && (
                                     <tr>
                                         <td colSpan={7} className="px-6 py-16 text-center text-sm text-muted-foreground">
-                                            Todavia no hay reportes automaticos programados.
+                                            Todavía no hay reportes automáticos programados.
                                         </td>
                                     </tr>
                                 )}
@@ -387,15 +387,15 @@ const ReportingLayer = () => {
             <Dialog open={Boolean(editingProfileKey)} onOpenChange={(open) => !open && setEditingProfileKey(null)}>
                 <DialogContent className="sm:max-w-[680px]">
                     <DialogHeader>
-                        <DialogTitle>Configurar perfil critico</DialogTitle>
+                        <DialogTitle>Configurar perfil crítico</DialogTitle>
                         <DialogDescription>
-                            {editingProfile?.label}. Solo admins pueden cambiar la base de pestanas y formatos recomendados.
+                            {editingProfile?.label}. Solo administradores pueden cambiar la base de pestañas y formatos recomendados.
                         </DialogDescription>
                     </DialogHeader>
 
                     <div className="grid gap-6 py-2 md:grid-cols-2">
                         <div className="space-y-3">
-                            <Label>Pestanas incluidas</Label>
+                            <Label>Pestañas incluidas</Label>
                             <div className="space-y-2 rounded-xl border p-3">
                                 {REPORT_TABS.map((tab) => (
                                     <label key={tab.id} className="flex items-center gap-2 rounded-lg p-2 text-sm hover:bg-muted/50">
@@ -410,7 +410,7 @@ const ReportingLayer = () => {
                         </div>
 
                         <div className="space-y-3">
-                            <Label>Formatos default</Label>
+                            <Label>Formatos sugeridos</Label>
                             <div className="space-y-2 rounded-xl border p-3">
                                 {REPORT_FORMATS.map((formatOption) => (
                                     <label key={formatOption.id} className="flex items-center gap-2 rounded-lg p-2 text-sm hover:bg-muted/50">
@@ -432,7 +432,7 @@ const ReportingLayer = () => {
 
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setEditingProfileKey(null)}>Cancelar</Button>
-                        <Button onClick={saveProfileConfig}>Guardar configuracion</Button>
+                        <Button onClick={saveProfileConfig}>Guardar configuración</Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>

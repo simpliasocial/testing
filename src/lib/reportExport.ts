@@ -22,6 +22,7 @@ import {
     getMessagePreview,
     parseAmount,
 } from "@/lib/leadDisplay";
+import { formatBusinessLabel, formatBusinessList, formatFieldLabel } from "@/lib/displayCopy";
 
 export interface ReportSection {
     title: string;
@@ -96,6 +97,23 @@ const numberCell = (value: unknown) => {
     return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const formatConversationStatus = (value: unknown) => {
+    const status = cleanText(value).toLowerCase();
+    if (status === "open") return "Abierto";
+    if (status === "resolved") return "Resuelto";
+    if (status === "pending") return "Pendiente";
+    if (status === "snoozed") return "Pausado";
+    return formatBusinessLabel(value) || "";
+};
+
+const formatDataOrigin = (value: unknown) => {
+    const source = cleanText(value).toLowerCase();
+    if (source === "api") return "Datos recientes";
+    if (source === "supabase") return "Historial disponible";
+    if (source === "cache") return "Información guardada";
+    return formatBusinessLabel(value) || "";
+};
+
 export const filterReportConversations = (
     conversations: ResolvedConversation[],
     filters: DashboardFilters,
@@ -135,15 +153,21 @@ const getFieldValue = (
     const attrs = getAttrs(conversation);
     const inbox = conversation.inbox_id ? inboxMap.get(Number(conversation.inbox_id)) : undefined;
     const canal = getLeadChannelName(conversation, inbox);
+    const displayField = formatFieldLabel(field);
+
+    if (displayField === "Enlace de conversación") {
+        return getChatwootUrl(conversation.id) || `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conversation.id}`;
+    }
 
     switch (field) {
         case "ID": return conversation.id;
         case "Nombre": return getLeadName(conversation);
         case "Telefono": return getLeadPhone(conversation, canal);
         case "Canal": return canal;
-        case "Etiquetas": return conversation.resolvedLabels?.join(", ") || conversation.labels?.join(", ") || "";
+        case "Estados":
+        case "Etiquetas": return formatBusinessList(conversation.resolvedLabels?.length ? conversation.resolvedLabels : conversation.labels || []);
         case "Etapa": return STAGE_LABELS[conversation.resolvedStage] || conversation.resolvedStage || "Otro";
-        case "Estado": return conversation.status || "";
+        case "Estado": return formatConversationStatus(conversation.status);
         case "Correo": return getLeadEmail(conversation);
         case "Monto": return parseAmount(attrs.monto_operacion) || attrs.monto_operacion || "";
         case "Fecha Monto": return attrs.fecha_monto_operacion || "";
@@ -153,16 +177,16 @@ const getFieldValue = (
         case "Campana": return attrs.campana || attrs.utm_campaign || attrs.origen || "";
         case "Ciudad": return attrs.ciudad || attrs.city || "";
         case "Responsable": return attrs.responsable || conversation.meta?.assignee?.name || "";
+        case "Puntaje":
         case "Score": return getScoreValue(conversation, tagSettings);
         case "Ultimo Mensaje": return getMessagePreview(conversation);
         case "URL Red Social": return getLeadExternalUrl(conversation, canal);
-        case "Enlace Chatwoot": return getChatwootUrl(conversation.id) || `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conversation.id}`;
         case "Fecha Ingreso": return formatDateTime(conversation.created_at || conversation.timestamp);
         case "Ultima Interaccion": return formatDateTime(conversation.timestamp || conversation.created_at);
         case "ID Contacto": return conversation.meta?.sender?.id || "";
         case "ID Inbox": return conversation.inbox_id || "";
         case "ID Cuenta": return (conversation as any).account_id || "";
-        case "Origen Dato": return conversation.source || "";
+        case "Origen Dato": return formatDataOrigin(conversation.source);
         default: return attrs[field] ?? attrs[field.toLowerCase()] ?? "";
     }
 };
@@ -182,7 +206,7 @@ const buildConversationRows = (
     return conversations.map((conversation) => {
         const row: Record<string, unknown> = {};
         fields.forEach((field) => {
-            row[field] = getFieldValue(field, conversation, inboxMap, tagSettings);
+            row[formatFieldLabel(field)] = getFieldValue(field, conversation, inboxMap, tagSettings);
         });
         return row;
     });
@@ -190,7 +214,9 @@ const buildConversationRows = (
 
 const rowsFromArray = (items: any[] = [], labelKey = "name", valueKey = "value") =>
     items.map((item) => ({
-        Nombre: item?.[labelKey] ?? item?.label ?? item?.date ?? item?.name ?? "",
+        Nombre: labelKey === "label"
+            ? formatBusinessLabel(item?.[labelKey] ?? item?.label ?? item?.date ?? item?.name ?? "")
+            : item?.[labelKey] ?? item?.label ?? item?.date ?? item?.name ?? "",
         Valor: item?.[valueKey] ?? item?.count ?? item?.leads ?? item?.sales ?? 0,
         Porcentaje: item?.percentage ?? item?.rate ?? item?.winRate ?? "",
     }));
@@ -223,7 +249,7 @@ const buildSummarySection = (
     if (tabId === "funnel") {
         return [
             { title: "Embudo actual", rows: rowsFromArray(dashboardData?.funnelData || [], "label", "value") },
-            { title: "Embudo historico acumulado", rows: rowsFromArray(dashboardData?.historicalFunnelData || [], "label", "value") },
+            { title: "Embudo histórico acumulado", rows: rowsFromArray(dashboardData?.historicalFunnelData || [], "label", "value") },
         ];
     }
 
@@ -287,8 +313,8 @@ const buildSummarySection = (
             else buckets.Bajo += 1;
         });
         return [{
-            title: "Distribucion de scores",
-            rows: Object.entries(buckets).map(([Bucket, Leads]) => ({ Bucket, Leads })),
+            title: "Distribución de puntajes",
+            rows: Object.entries(buckets).map(([Nivel, Leads]) => ({ Nivel: Nivel === "Sin score" ? "Sin puntaje" : Nivel, Leads })),
         }];
     }
 
@@ -400,7 +426,7 @@ const buildLabelSummaryAoa = (
         [],
     ];
 
-    const header = ["Etiqueta", "Total", ...inboxes.map(getInboxChannelName)];
+    const header = ["Estado", "Total", ...inboxes.map(getInboxChannelName)];
     rows.push(header);
 
     const labelCounts = new Map<string, { total: number; byInbox: Map<number, number> }>();
@@ -422,7 +448,7 @@ const buildLabelSummaryAoa = (
     labels.forEach((label) => {
         const count = labelCounts.get(label)!;
         rows.push([
-            label,
+            formatBusinessLabel(label),
             count.total,
             ...inboxes.map((inbox) => count.byInbox.get(Number(inbox.id)) || 0),
         ]);
@@ -430,7 +456,7 @@ const buildLabelSummaryAoa = (
 
     rows.push([]);
     rows.push([
-        "Total Etiquetas Asignadas",
+        "Total estados asignados",
         labels.reduce((sum, label) => sum + (labelCounts.get(label)?.total || 0), 0),
         ...inboxes.map((inbox) => labels.reduce((sum, label) => sum + (labelCounts.get(label)?.byInbox.get(Number(inbox.id)) || 0), 0)),
     ]);
@@ -438,7 +464,7 @@ const buildLabelSummaryAoa = (
 
     if (inboxes.length === 0 && params.referenceConversations.length > 0) {
         rows.push([]);
-        rows.push(["Nota", "No se cargaron inboxes en contexto; el canal se resolvio desde cada conversacion."]);
+        rows.push(["Nota", "No se cargaron los canales en contexto; el canal se resolvió desde cada conversación."]);
         params.referenceConversations.slice(0, 1).forEach((conversation) => {
             rows.push(["Canal ejemplo", getLeadChannelName(conversation, inboxMap.get(Number(conversation.inbox_id)))]);
         });
@@ -460,32 +486,32 @@ const buildCompleteLeadRowsAoa = (
     const headers = [
         "ID Conversacion",
         "Nombre del Lead",
-        "Telefono/Celular",
+        "Teléfono",
         "Canal",
-        "Etiquetas",
+        "Estados",
         "Etapa",
         "Estado",
         "Responsable (Persona)",
-        "Agente (Chatwoot)",
-        "Nombre Completo (Attr)",
+        "Agente asignado",
+        "Nombre completo",
         "Correo",
         "Ciudad",
-        "Campana",
+        "Campaña",
         "Edad",
-        "Fecha Visita",
-        "Hora Visita",
+        "Fecha de visita",
+        "Hora de visita",
         "Agencia",
-        "Score",
-        "Monto Operacion",
-        "Fecha Monto Operacion",
-        "Ultimo Mensaje",
-        "URL Red Social",
-        "Enlace Chatwoot",
-        "Fecha Ingreso",
-        "Ultima Interaccion",
-        "ID Contacto",
-        "ID Inbox",
-        "Origen Dato",
+        "Puntaje",
+        "Monto de la operación",
+        "Fecha en que se registró el monto",
+        "Último mensaje",
+        "URL comercial",
+        "Enlace de conversación",
+        "Fecha de ingreso",
+        "Última interacción",
+        "ID del contacto",
+        "ID de bandeja",
+        "Origen del dato",
     ];
 
     return [
@@ -500,9 +526,9 @@ const buildCompleteLeadRowsAoa = (
                 getLeadName(conversation),
                 getLeadPhone(conversation, canal),
                 canal,
-                getConversationLabels(conversation).join(" | "),
+                formatBusinessList(getConversationLabels(conversation), " | "),
                 STAGE_LABELS[conversation.resolvedStage] || conversation.resolvedStage || "Otro",
-                conversation.status || "",
+                formatConversationStatus(conversation.status),
                 attrs.responsable || "",
                 conversation.meta?.assignee?.name || "",
                 attrs.nombre_completo || "",
@@ -523,7 +549,7 @@ const buildCompleteLeadRowsAoa = (
                 formatExcelTimestamp(conversation.timestamp || conversation.created_at),
                 conversation.meta?.sender?.id || "",
                 conversation.inbox_id || "",
-                conversation.source || "",
+                formatDataOrigin(conversation.source),
             ];
         }),
     ];
@@ -566,24 +592,24 @@ const exportChatsWorkbook = (input: DashboardReportInput, fileName: string) => {
     ).values());
 
     appendAoaSheet(workbook, buildLabelSummaryAoa({
-        title: "Resumen Etiquetas Actividades",
+        title: "Resumen de estados con actividad",
         conversations: activityConversations,
         referenceConversations,
         inboxes: input.inboxes,
         filters: input.globalFilters,
         totalLabel: "Total Leads de Actividades",
-    }), "Resumen Etiquetas Actividades");
+    }), "Resumen Estados Actividad");
 
     appendAoaSheet(workbook, buildCompleteLeadRowsAoa(activityConversations, inboxMap, input.tagSettings), "Detalle Leads Actividades");
 
     appendAoaSheet(workbook, buildLabelSummaryAoa({
-        title: "Resumen Etiquetas Unicas",
+        title: "Resumen de estados únicos",
         conversations: createdConversations,
         referenceConversations,
         inboxes: input.inboxes,
         filters: input.globalFilters,
         totalLabel: "Total Leads Unicos",
-    }), "Resumen Etiquetas Unicas");
+    }), "Resumen Estados Únicos");
 
     appendAoaSheet(workbook, buildCompleteLeadRowsAoa(createdConversations, inboxMap, input.tagSettings), "Detalle Leads Unicas");
 
@@ -603,20 +629,20 @@ const buildQueueRows = (
         "ID Conversacion": conversation.id,
         "Nombre del Lead": getLeadName(conversation),
         Canal: canal,
-        Numero: getLeadPhone(conversation, canal),
-        Etiquetas: getConversationLabels(conversation).join(" | "),
+        Número: getLeadPhone(conversation, canal),
+        Estados: formatBusinessList(getConversationLabels(conversation), " | "),
         Etapa: STAGE_LABELS[conversation.resolvedStage] || conversation.resolvedStage || "Otro",
         Responsable: attrs.responsable || "",
-        "Agente Chatwoot": conversation.meta?.assignee?.name || "",
+        "Agente asignado": conversation.meta?.assignee?.name || "",
         Agencia: attrs.agencia || "",
         "Fecha Visita": attrs.fecha_visita || "",
         "Hora Visita": attrs.hora_visita || "",
         "Ultimo Mensaje": getMessagePreview(conversation),
-        "URL Red Social": getLeadExternalUrl(conversation, canal),
-        "Enlace Chatwoot": getChatwootUrl(conversation.id),
-        "Fecha Ingreso": formatExcelTimestamp(conversation.created_at || conversation.timestamp),
-        "Ultima Interaccion": formatExcelTimestamp(conversation.timestamp || conversation.created_at),
-        "Origen Dato": conversation.source || "",
+        "URL comercial": getLeadExternalUrl(conversation, canal),
+        "Enlace de conversación": getChatwootUrl(conversation.id),
+        "Fecha de ingreso": formatExcelTimestamp(conversation.created_at || conversation.timestamp),
+        "Última interacción": formatExcelTimestamp(conversation.timestamp || conversation.created_at),
+        "Origen del dato": formatDataOrigin(conversation.source),
     };
 });
 
@@ -658,21 +684,21 @@ const buildSalesRows = (
     return {
         "ID Conversacion": conversation.id,
         "Nombre del Lead": getLeadName(conversation),
-        Telefono: getLeadPhone(conversation, canal),
+        Teléfono: getLeadPhone(conversation, canal),
         Canal: canal,
-        Etiquetas: getConversationLabels(conversation).join(" | "),
+        Estados: formatBusinessList(getConversationLabels(conversation), " | "),
         Monto: attrs.monto_operacion || "",
-        "Monto Numerico": amount,
-        "Fecha Monto Operacion": attrs.fecha_monto_operacion || "",
+        "Monto numérico": amount,
+        "Fecha en que se registró el monto": attrs.fecha_monto_operacion || "",
         Agencia: attrs.agencia || "",
-        Campana: attrs.campana || attrs.utm_campaign || "",
+        Campaña: attrs.campana || attrs.utm_campaign || "",
         Responsable: attrs.responsable || conversation.meta?.assignee?.name || "",
         Correo: getLeadEmail(conversation),
-        "URL Red Social": getLeadExternalUrl(conversation, canal),
-        "Enlace Chatwoot": getChatwootUrl(conversation.id),
-        "Fecha Ingreso": formatExcelTimestamp(conversation.created_at || conversation.timestamp),
-        "Ultima Interaccion": formatExcelTimestamp(conversation.timestamp || conversation.created_at),
-        "Origen Dato": conversation.source || "",
+        "URL comercial": getLeadExternalUrl(conversation, canal),
+        "Enlace de conversación": getChatwootUrl(conversation.id),
+        "Fecha de ingreso": formatExcelTimestamp(conversation.created_at || conversation.timestamp),
+        "Última interacción": formatExcelTimestamp(conversation.timestamp || conversation.created_at),
+        "Origen del dato": formatDataOrigin(conversation.source),
     };
 });
 
@@ -686,7 +712,7 @@ const exportFollowupWorkbook = (input: DashboardReportInput, fileName: string) =
     const appointmentRows = filteredConversations.filter((conversation) => hasAnyLabel(conversation, appointmentTags));
     const saleConversations = filterSalesConversations(input.conversations, input.globalFilters, input.tagSettings);
     const salesRows = buildSalesRows(saleConversations, inboxMap);
-    const salesTotal = salesRows.reduce((sum, row) => sum + numberCell(row["Monto Numerico"]), 0);
+    const salesTotal = salesRows.reduce((sum, row) => sum + numberCell(row["Monto numérico"]), 0);
     const byChannel = new Map<string, { Canal: string; Ventas: number; Monto: number }>();
     const byMonth = new Map<string, { Periodo: string; Ventas: number; Monto: number }>();
     const { start, end } = getRangeLabel(input.globalFilters);
@@ -695,10 +721,10 @@ const exportFollowupWorkbook = (input: DashboardReportInput, fileName: string) =
         const channel = cleanText(row.Canal) || "Otro";
         const channelRow = byChannel.get(channel) || { Canal: channel, Ventas: 0, Monto: 0 };
         channelRow.Ventas += 1;
-        channelRow.Monto += numberCell(row["Monto Numerico"]);
+        channelRow.Monto += numberCell(row["Monto numérico"]);
         byChannel.set(channel, channelRow);
 
-        const month = cleanText(row["Fecha Monto Operacion"]).slice(0, 7) || "Sin fecha";
+        const month = cleanText(row["Fecha en que se registró el monto"]).slice(0, 7) || "Sin fecha";
         const monthRow = byMonth.get(month) || { Periodo: month, Ventas: 0, Monto: 0 };
         monthRow.Ventas += 1;
         monthRow.Monto += numberCell(row["Monto Numerico"]);
@@ -714,9 +740,9 @@ const exportFollowupWorkbook = (input: DashboardReportInput, fileName: string) =
         ["Fecha Inicio", start],
         ["Fecha Fin", end],
         ["Generado", format(new Date(), "yyyy-MM-dd HH:mm:ss")],
-        ["Etiquetas Cola de Trabajo Diaria", followupTags.join(", ")],
-        ["Etiquetas Citas Agendadas", appointmentTags.join(", ")],
-        ["Etiqueta Venta Exitosa", input.tagSettings.humanSaleTargetLabel || "venta_exitosa"],
+        ["Estados de Cola de Trabajo Diaria", formatBusinessList(followupTags)],
+        ["Estados de Citas Agendadas", formatBusinessList(appointmentTags)],
+        ["Estado de venta exitosa", formatBusinessLabel(input.tagSettings.humanSaleTargetLabel || "venta_exitosa")],
         [],
         ["Metrica", "Valor"],
         ["Leads en Cola de Trabajo Diaria", followupRows.length],

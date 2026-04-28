@@ -26,6 +26,7 @@ import {
 } from "recharts";
 
 import { useDashboardContext } from "@/context/DashboardDataContext";
+import { formatBusinessLabel, formatBusinessList } from "@/lib/displayCopy";
 
 const COLORS = ["#243d90", "#059669", "#d97706", "#7c3aed", "#db2777", "#475569", "#0891b2"];
 const WARM_COLORS = ["#ef4444", "#f97316", "#f43f5e", "#f59e0b", "#dc2626", "#ea580c"];
@@ -59,7 +60,11 @@ const TrendLayer = () => {
     const campaignTotal = (trendMetrics.campaignList || []).reduce((sum: number, item: any) => sum + (item.value || 0), 0);
     const disqualificationTotal = (trendMetrics.disqualificationStats || []).reduce((sum: number, item: any) => sum + (item.value || 0), 0);
     const revenueTotal = (trendMetrics.revenuePeaks || []).reduce((sum: number, item: any) => sum + (item.value || 0), 0);
-    const unqualifiedLabels = tagSettings.unqualifiedTags?.length ? tagSettings.unqualifiedTags.join(", ") : "no aplica";
+    const unqualifiedLabels = tagSettings.unqualifiedTags?.length ? formatBusinessList(tagSettings.unqualifiedTags) : "No aplica";
+    const disqualificationChartData = (trendMetrics.disqualificationStats || []).map((item: any) => ({
+        ...item,
+        name: formatBusinessLabel(item.name),
+    }));
 
     return (
         <div className="space-y-6">
@@ -75,7 +80,7 @@ const TrendLayer = () => {
                                     Origen de leads
                                 </CardTitle>
                                 <CardDescription>
-                                    Compara los canales existentes detectados en Chatwoot.
+                                    Compara los canales disponibles para entender qué origen trae más leads.
                                 </CardDescription>
                             </div>
                             <Badge variant="outline">{channelTotal} leads</Badge>
@@ -128,7 +133,7 @@ const TrendLayer = () => {
                                     Picos de ingresos
                                 </CardTitle>
                                 <CardDescription>
-                                    Usa venta_exitosa, monto_operacion y fecha_monto_operacion.
+                                    Usa las ventas marcadas como exitosas, el monto registrado y la fecha del monto.
                                 </CardDescription>
                             </div>
                             <Badge variant="outline">{formatCurrency(revenueTotal)}</Badge>
@@ -190,7 +195,7 @@ const TrendLayer = () => {
                                     Motivos de descalificacion
                                 </CardTitle>
                                 <CardDescription>
-                                    Distribucion de leads con etiquetas configuradas como no aplica.
+                                    Distribución de leads marcados como no aplican.
                                 </CardDescription>
                             </div>
                             <Badge variant="outline">{disqualificationTotal} leads</Badge>
@@ -203,11 +208,11 @@ const TrendLayer = () => {
                                 Contexto
                             </div>
                             <p>
-                                Se toma de las etiquetas de descalificacion configuradas en el funnel: {unqualifiedLabels}. Usualmente agrupa leads que insultan, mandan videos, memes, reels o preguntas fuera del contexto del negocio.
+                                Se toma de los estados de descalificación configurados en el embudo: {unqualifiedLabels}. Usualmente agrupa leads que insultan, mandan videos, memes, reels o preguntas fuera del contexto del negocio.
                             </p>
                         </div>
 
-                        {trendMetrics.disqualificationStats.length === 0 ? (
+                        {disqualificationChartData.length === 0 ? (
                             <EmptyState text="No hay leads descalificados en este rango." />
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -215,14 +220,14 @@ const TrendLayer = () => {
                                     <ResponsiveContainer width="100%" height="100%">
                                         <PieChart>
                                             <Pie
-                                                data={trendMetrics.disqualificationStats}
+                                                data={disqualificationChartData}
                                                 dataKey="value"
                                                 nameKey="name"
                                                 innerRadius={54}
                                                 outerRadius={82}
                                                 paddingAngle={4}
                                             >
-                                                {trendMetrics.disqualificationStats.map((entry: any, index: number) => (
+                                                {disqualificationChartData.map((entry: any, index: number) => (
                                                     <Cell key={entry.name} fill={WARM_COLORS[index % WARM_COLORS.length]} />
                                                 ))}
                                             </Pie>
@@ -231,7 +236,7 @@ const TrendLayer = () => {
                                     </ResponsiveContainer>
                                 </div>
                                 <div className="flex flex-col justify-center gap-2">
-                                    {trendMetrics.disqualificationStats.slice(0, 6).map((item: any, index: number) => (
+                                    {disqualificationChartData.slice(0, 6).map((item: any, index: number) => (
                                         <div key={item.name} className="flex items-center justify-between rounded-lg border p-2 text-sm">
                                             <div className="flex items-center gap-2 min-w-0">
                                                 <div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: WARM_COLORS[index % WARM_COLORS.length] }} />
@@ -255,7 +260,7 @@ const TrendLayer = () => {
                                     Campanas
                                 </CardTitle>
                                 <CardDescription>
-                                    Cuenta leads por valor no vacio del contact attribute campana.
+                                    Cuenta leads según la campaña registrada.
                                 </CardDescription>
                             </div>
                             <Badge variant="outline">{campaignTotal} leads</Badge>

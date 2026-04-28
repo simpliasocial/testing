@@ -39,6 +39,7 @@ import {
     getRawLeadPhone,
     normalize
 } from '@/lib/leadDisplay';
+import { formatBusinessLabel } from '@/lib/displayCopy';
 import { toast } from 'sonner';
 
 const PAGE_SIZE = 15;
@@ -207,19 +208,19 @@ const ChatwootPage = () => {
                             {(liveError || historicalError || error) && (
                                 <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                                     <AlertCircle className="h-3.5 w-3.5" />
-                                    La lista usa la mejor data disponible. Revisa el estado live/historico si algun origen fallo.
+                                    La lista está usando la mejor información disponible. Algunos datos recientes podrían tardar en actualizarse.
                                 </div>
                             )}
                         </div>
 
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                             <Badge variant="outline" className="h-9 justify-center px-3">
-                                {dataSource === 'HYBRID' ? 'Vivo + Historial' : dataSource === 'API_ONLY' ? 'Solo vivo' : 'Solo historial'}
+                                {dataSource === 'HYBRID' ? 'Datos en vivo + historial' : dataSource === 'API_ONLY' ? 'Datos en vivo' : 'Historial disponible'}
                             </Badge>
                             <div className="relative min-w-[260px]">
                                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                                 <Input
-                                    placeholder="Buscar por ID, nombre, numero, etiqueta o canal..."
+                                    placeholder="Buscar por ID, nombre, número, estado o canal..."
                                     className="pl-9 h-9 text-sm"
                                     value={search}
                                     onChange={(event) => setSearch(event.target.value)}
@@ -245,7 +246,7 @@ const ChatwootPage = () => {
                                                 <th className="px-6 py-4">Nombre del lead</th>
                                                 <th className="px-6 py-4">Canal</th>
                                                 <th className="px-6 py-4">Numero</th>
-                                                <th className="px-6 py-4">Etiqueta</th>
+                                                <th className="px-6 py-4">Estado</th>
                                                 <th className="px-6 py-4">Historial de mensajes</th>
                                                 <th className="px-6 py-4">URL</th>
                                             </tr>
@@ -303,11 +304,11 @@ const ChatwootPage = () => {
                                                                     {(lead.labels || []).length > 0 ? (
                                                                         (lead.labels || []).map((label) => (
                                                                             <Badge key={label} variant="outline" className="text-[9px] font-bold h-5 px-2">
-                                                                                {label}
+                                                                                {formatBusinessLabel(label)}
                                                                             </Badge>
                                                                         ))
                                                                     ) : (
-                                                                        <span className="text-xs text-muted-foreground">Sin etiqueta</span>
+                                                                        <span className="text-xs text-muted-foreground">Sin estado</span>
                                                                     )}
                                                                 </div>
                                                             </td>
@@ -386,7 +387,7 @@ const ChatwootPage = () => {
                             Historial de: {viewingConv ? getLeadName(viewingConv) : ''}
                         </DialogTitle>
                         <DialogDescription>
-                            Mensajes disponibles del lead. Puedes abrir la conversacion original para revisar mas contexto.
+                            Mensajes disponibles del lead. Puedes abrir la conversación original para revisar más contexto.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -434,7 +435,7 @@ const ChatwootPage = () => {
                             onClick={() => viewingConv && openInChatwoot(viewingConv.id)}
                         >
                             <ExternalLink className="h-4 w-4" />
-                            Ver en Chatwoot
+                            Abrir conversación
                         </Button>
                     </DialogFooter>
                 </DialogContent>

@@ -6,6 +6,7 @@ import { useDashboardContext } from "@/context/DashboardDataContext";
 import { config } from "@/config";
 import { toast } from "sonner";
 import { getAttrs, getLeadChannelName, getLeadExternalUrl } from "@/lib/leadDisplay";
+import { formatBusinessList, formatFieldLabel } from "@/lib/displayCopy";
 
 export function ExportToExcel() {
     const { conversations, inboxes, tagSettings } = useDashboardContext();
@@ -21,7 +22,7 @@ export function ExportToExcel() {
 
             const activeFields = tagSettings.excelExportFields && tagSettings.excelExportFields.length > 0
                 ? tagSettings.excelExportFields
-                : ["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"];
+                : ["ID", "Nombre", "Telefono", "Canal", "Estados", "Correo", "Enlace de conversación", "Fecha Ingreso", "Ultima Interaccion"];
 
             // 2. Map data with configured columns
             const dataToExport = conversations.map(conv => {
@@ -36,30 +37,35 @@ export function ExportToExcel() {
                 const row: any = {};
 
                 activeFields.forEach(field => {
+                    const displayField = formatFieldLabel(field);
+                    if (displayField === "Enlace de conversación") {
+                        row[displayField] = `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conv.id}`;
+                        return;
+                    }
                     switch (field) {
-                        case "ID": row[field] = conv.id; break;
-                        case "Nombre": row[field] = conv.meta?.sender?.name || allAttrs.nombre_completo || ""; break;
-                        case "Telefono": row[field] = allAttrs.celular || conv.meta?.sender?.phone_number || ""; break;
-                        case "Canal": row[field] = canal; break;
-                        case "Etiquetas": row[field] = (conv.labels || []).join(", "); break;
-                        case "Correo": row[field] = allAttrs.correo || conv.meta?.sender?.email || ""; break;
-                        case "Monto": row[field] = allAttrs.monto_operacion || ""; break;
-                        case "Fecha Monto": row[field] = allAttrs.fecha_monto_operacion || ""; break;
-                        case "Agencia": row[field] = allAttrs.agencia || ""; break;
-                        case "Check-in": row[field] = allAttrs.checkincat || ""; break;
-                        case "Check-out": row[field] = allAttrs.checkoutcat || ""; break;
-                        case "Campana": row[field] = allAttrs.campana || ""; break;
-                        case "Ciudad": row[field] = allAttrs.ciudad || ""; break;
-                        case "Responsable": row[field] = allAttrs.responsable || conv.meta?.assignee?.name || ""; break;
-                        case "URL Red Social": row[field] = getLeadExternalUrl(conv, canal); break;
-                        case "Enlace Chatwoot": row[field] = `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conv.id}`; break;
-                        case "Fecha Ingreso": row[field] = createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : ""; break;
-                        case "Ultima Interaccion": row[field] = lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : ""; break;
-                        case "ID Contacto": row[field] = conv.meta?.sender?.id || ""; break;
-                        case "ID Inbox": row[field] = conv.inbox_id || ""; break;
-                        case "ID Cuenta": row[field] = (conv as any).account_id || ""; break;
-                        case "Origen Dato": row[field] = (conv as any).source || ""; break;
-                        default: row[field] = allAttrs[field] || ""; break;
+                        case "ID": row[displayField] = conv.id; break;
+                        case "Nombre": row[displayField] = conv.meta?.sender?.name || allAttrs.nombre_completo || ""; break;
+                        case "Telefono": row[displayField] = allAttrs.celular || conv.meta?.sender?.phone_number || ""; break;
+                        case "Canal": row[displayField] = canal; break;
+                        case "Estados":
+                        case "Etiquetas": row[displayField] = formatBusinessList(conv.labels || []); break;
+                        case "Correo": row[displayField] = allAttrs.correo || conv.meta?.sender?.email || ""; break;
+                        case "Monto": row[displayField] = allAttrs.monto_operacion || ""; break;
+                        case "Fecha Monto": row[displayField] = allAttrs.fecha_monto_operacion || ""; break;
+                        case "Agencia": row[displayField] = allAttrs.agencia || ""; break;
+                        case "Check-in": row[displayField] = allAttrs.checkincat || ""; break;
+                        case "Check-out": row[displayField] = allAttrs.checkoutcat || ""; break;
+                        case "Campana": row[displayField] = allAttrs.campana || ""; break;
+                        case "Ciudad": row[displayField] = allAttrs.ciudad || ""; break;
+                        case "Responsable": row[displayField] = allAttrs.responsable || conv.meta?.assignee?.name || ""; break;
+                        case "URL Red Social": row[displayField] = getLeadExternalUrl(conv, canal); break;
+                        case "Fecha Ingreso": row[displayField] = createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : ""; break;
+                        case "Ultima Interaccion": row[displayField] = lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : ""; break;
+                        case "ID Contacto": row[displayField] = conv.meta?.sender?.id || ""; break;
+                        case "ID Inbox": row[displayField] = conv.inbox_id || ""; break;
+                        case "ID Cuenta": row[displayField] = (conv as any).account_id || ""; break;
+                        case "Origen Dato": row[displayField] = (conv as any).source || ""; break;
+                        default: row[displayField] = allAttrs[field] || ""; break;
                     }
                 });
 

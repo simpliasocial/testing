@@ -65,6 +65,12 @@ import {
 } from "@/lib/leadDisplay";
 import { getContactCustomAttributes, getConversationCustomAttributes } from "@/lib/leadAttributes";
 import {
+    formatBusinessLabel,
+    formatBusinessList,
+    formatFieldLabel,
+    friendlyErrorMessage
+} from "@/lib/displayCopy";
+import {
     Dialog,
     DialogContent,
     DialogHeader,
@@ -233,7 +239,7 @@ const normalizeAttributeDefinitions = (definitions: any[]): AttributeDefinition[
 
         byKey.set(key, {
             key,
-            label: String(definition.attribute_display_name || definition.display_name || rawKey).trim(),
+            label: formatFieldLabel(definition.attribute_display_name || definition.display_name || rawKey),
             displayType,
             valueType: getAttributeValueType(displayType, options),
             options,
@@ -287,7 +293,7 @@ const inferAttributeDefinitionsFromConversations = (leads: QueueLead[]): Attribu
             if (!existing) {
                 byKey.set(trimmedKey, {
                     key: trimmedKey,
-                    label: trimmedKey.replace(/_/g, " "),
+                    label: formatFieldLabel(trimmedKey),
                     displayType: inferredDisplayType,
                     valueType: inferredValueType,
                     options: []
@@ -361,7 +367,7 @@ const toDateInputValue = (value: unknown) => {
 };
 
 const getFieldLabel = (definition: AttributeDefinition | undefined, key: string) =>
-    definition?.label || key.replace(/_/g, " ");
+    formatFieldLabel(definition?.label || key);
 
 const getNormalizedFieldIdentity = (definition: AttributeDefinition) =>
     normalize(`${definition.key} ${definition.label}`);
@@ -382,7 +388,7 @@ const getFieldTypeLabel = (definition: AttributeDefinition) => {
         case "boolean":
             return "checkbox";
         case "number":
-            return "numero";
+            return "número";
         case "date":
             return "fecha";
         case "textarea":
@@ -437,11 +443,11 @@ const validateAppointmentFieldValue = (
     if (!rawText) return `Completa el campo ${label}`;
 
     if (field.valueType === "number" && parseNumericFieldValue(rawText) === null) {
-        return `${label} debe ser un numero valido`;
+        return `${label} debe ser un número válido`;
     }
 
     if (field.valueType === "date" && !toDateInputValue(rawText)) {
-        return `${label} debe tener una fecha valida`;
+        return `${label} debe tener una fecha válida`;
     }
 
     if (isVisitDateField(field) && !/^\d{4}-\d{2}-\d{2}$/.test(rawText)) {
@@ -459,7 +465,7 @@ const validateAppointmentFieldValue = (
                 return field.regexCue || `${label} no cumple el formato esperado`;
             }
         } catch {
-            // If Chatwoot stored an invalid regex, we skip hard validation rather than blocking the user.
+            // If the external rule is invalid, skip hard validation rather than blocking the user.
         }
     }
 
@@ -480,13 +486,13 @@ const formatAppointmentFieldValue = (
     field: AttributeDefinition,
     value: AppointmentFormValue
 ) => {
-    if (field.valueType === "boolean") return value ? "Si" : "No";
+    if (field.valueType === "boolean") return value ? "Sí" : "No";
     return String(value ?? "").trim();
 };
 
 const getEmptyQueueMessage = (title: string, configuredTags: string[]) => {
     if (configuredTags.length === 0) {
-        return `Configura primero las etiquetas de ${title.toLowerCase()} para poblar esta tabla.`;
+        return `Configura primero los estados de ${title.toLowerCase()} para poblar esta tabla.`;
     }
     return `No hay leads disponibles en ${title.toLowerCase()} con los filtros actuales.`;
 };
@@ -682,10 +688,10 @@ const LeadActionQueue = () => {
                     setLoadedAttributeDefinitions(mergedDefinitions);
                 }
             } catch (attributeError) {
-                console.error("Error loading Chatwoot attribute definitions:", attributeError);
+                console.error("Error loading external field definitions:", attributeError);
                 if (!cancelled) {
                     setLoadedAttributeDefinitions([]);
-                    toast.error("No se pudieron cargar los contact attributes de Chatwoot");
+                    toast.error(friendlyErrorMessage("loadFields"));
                 }
             } finally {
                 if (!cancelled) {
@@ -802,7 +808,7 @@ const LeadActionQueue = () => {
     }) => {
         const contactId = lead.meta?.sender?.id;
         if (!contactId) {
-            throw new Error("No se encontro el ID del contacto de Chatwoot");
+            throw new Error("No se encontró el contacto asociado a este lead.");
         }
 
         const currentContactAttrs = getContactCustomAttributes(lead);
@@ -847,7 +853,7 @@ const LeadActionQueue = () => {
 
         const [freshConversation] = await HybridDashboardService.refreshConversationDetailsById([lead.id]);
         if (!freshConversation) {
-            throw new Error(`No se pudo refrescar la conversacion ${lead.id} desde Chatwoot`);
+            throw new Error("No se pudo obtener el estado final del lead.");
         }
 
         await replaceConversation({
@@ -948,7 +954,7 @@ const LeadActionQueue = () => {
             closeAppointmentWorkflow(true);
         } catch (appointmentError) {
             console.error("Error confirming human appointment:", appointmentError);
-            toast.error("No se pudo guardar la cita agendada en Chatwoot");
+            toast.error(friendlyErrorMessage("saveAppointment"));
             setAppointmentModalStep("confirm");
         } finally {
             setIsSavingAppointment(false);
@@ -1005,7 +1011,7 @@ const LeadActionQueue = () => {
             closeOperationWorkflow(true);
         } catch (operationError) {
             console.error("Error confirming operation:", operationError);
-            toast.error("No se pudo confirmar la operacion en Chatwoot");
+            toast.error(friendlyErrorMessage("saveSale"));
             setOperationModalStep("confirm");
         } finally {
             setIsSavingOperation(false);
@@ -1020,7 +1026,7 @@ const LeadActionQueue = () => {
 
         const activeFields = tagSettings?.excelExportFields && tagSettings.excelExportFields.length > 0
             ? tagSettings.excelExportFields
-            : ["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"];
+            : ["ID", "Nombre", "Telefono", "Canal", "Estados", "Correo", "Enlace de conversación", "Fecha Ingreso", "Ultima Interaccion"];
 
         const detailRows = salesRows.map((lead) => {
             const attrs = getAttrs(lead);
@@ -1031,36 +1037,39 @@ const LeadActionQueue = () => {
             const row: any = {};
 
             activeFields.forEach(field => {
+                const displayField = formatFieldLabel(field);
+                if (displayField === "Enlace de conversación") {
+                    row[displayField] = getChatwootUrl(lead.id);
+                    return;
+                }
                 switch (field) {
-                    case "ID": row[field] = lead.id; break;
-                    case "Nombre": row[field] = getLeadName(lead); break;
-                    case "Telefono": row[field] = getLeadPhone(lead, canal); break;
-                    case "Canal": row[field] = canal; break;
-                    case "Etiquetas": row[field] = (lead.labels || []).join(", "); break;
-                    case "Correo": row[field] = getLeadEmail(lead); break;
-                    case "Monto": row[field] = attrs.monto_operacion || ""; break;
-                    case "Fecha Monto": row[field] = getLeadOperationDate(lead); break;
-                    case "Agencia": row[field] = attrs.agencia || ""; break;
-                    case "Check-in": row[field] = attrs.checkincat || ""; break;
-                    case "Check-out": row[field] = attrs.checkoutcat || ""; break;
-                    case "Campana": row[field] = attrs.campana || ""; break;
-                    case "Ciudad": row[field] = attrs.ciudad || ""; break;
-                    case "Responsable": row[field] = attrs.responsable || lead.meta?.assignee?.name || ""; break;
-                    case "URL Red Social": row[field] = getLeadExternalUrl(lead, canal); break;
-                    case "Enlace Chatwoot": row[field] = getChatwootUrl(lead.id); break;
-                    case "Fecha Ingreso": row[field] = createdAt ? formatDateTime(createdAt.getTime()) : ""; break;
-                    case "Ultima Interaccion": row[field] = lastActivity ? formatDateTime(lastActivity.getTime()) : ""; break;
-                    case "ID Contacto": row[field] = lead.meta?.sender?.id || ""; break;
-                    case "ID Inbox": row[field] = lead.inbox_id || ""; break;
-                    case "ID Cuenta": row[field] = (lead as any).account_id || ""; break;
-                    case "Origen Dato": row[field] = lead.source || ""; break;
-                    default: row[field] = attrs[field] || ""; break;
+                    case "ID": row[displayField] = lead.id; break;
+                    case "Nombre": row[displayField] = getLeadName(lead); break;
+                    case "Telefono": row[displayField] = getLeadPhone(lead, canal); break;
+                    case "Canal": row[displayField] = canal; break;
+                    case "Estados":
+                    case "Etiquetas": row[displayField] = formatBusinessList(lead.labels || []); break;
+                    case "Correo": row[displayField] = getLeadEmail(lead); break;
+                    case "Monto": row[displayField] = attrs.monto_operacion || ""; break;
+                    case "Fecha Monto": row[displayField] = getLeadOperationDate(lead); break;
+                    case "Agencia": row[displayField] = attrs.agencia || ""; break;
+                    case "Check-in": row[displayField] = attrs.checkincat || ""; break;
+                    case "Check-out": row[displayField] = attrs.checkoutcat || ""; break;
+                    case "Campana": row[displayField] = attrs.campana || ""; break;
+                    case "Ciudad": row[displayField] = attrs.ciudad || ""; break;
+                    case "Responsable": row[displayField] = attrs.responsable || lead.meta?.assignee?.name || ""; break;
+                    case "URL Red Social": row[displayField] = getLeadExternalUrl(lead, canal); break;
+                    case "Fecha Ingreso": row[displayField] = createdAt ? formatDateTime(createdAt.getTime()) : ""; break;
+                    case "Ultima Interaccion": row[displayField] = lastActivity ? formatDateTime(lastActivity.getTime()) : ""; break;
+                    case "ID Contacto": row[displayField] = lead.meta?.sender?.id || ""; break;
+                    case "ID Inbox": row[displayField] = lead.inbox_id || ""; break;
+                    case "ID Cuenta": row[displayField] = (lead as any).account_id || ""; break;
+                    case "Origen Dato": row[displayField] = lead.source || ""; break;
+                    default: row[displayField] = attrs[field] || ""; break;
                 }
             });
 
-            // Siempre incluimos Monto Numerico internamente por si acaso, aunque xlsx.utils lo tomara
-            // Para mantener compatibilidad con reportes agregados lo usaremos (el dashboard lo calculaba abajo)
-            row["Monto Numerico"] = parseAmount(attrs.monto_operacion);
+            row["Monto numérico"] = parseAmount(attrs.monto_operacion);
             return row;
         });
 
@@ -1088,7 +1097,7 @@ const LeadActionQueue = () => {
             ["Filtro fecha inicio", salesStartDate || "Todos"],
             ["Filtro fecha fin", salesEndDate || "Todos"],
             ["Filtro busqueda", salesSearch || "Todos"],
-            ["Etiqueta venta usada", humanSaleTargetLabel],
+            ["Estado de venta usado", formatBusinessLabel(humanSaleTargetLabel)],
             ["Ventas exitosas", salesRows.length],
             ["Monto total", salesTotal],
             ["Ticket promedio", salesRows.length > 0 ? salesTotal / salesRows.length : 0],
@@ -1155,7 +1164,7 @@ const LeadActionQueue = () => {
             setSelectedLead(null);
         } catch (tagError) {
             console.error("Error changing tag:", tagError);
-            toast.error("Error al cambiar la etiqueta en Chatwoot");
+            toast.error(friendlyErrorMessage("changeStatus"));
         }
     };
 
@@ -1310,11 +1319,11 @@ const LeadActionQueue = () => {
                                 {configuredTags.length > 0 ? (
                                     configuredTags.map((label) => (
                                         <Badge key={`${title}-${label}`} variant="outline">
-                                            {label}
+                                            {formatBusinessLabel(label)}
                                         </Badge>
                                     ))
                                 ) : (
-                                    <Badge variant="outline">Sin etiquetas configuradas</Badge>
+                                    <Badge variant="outline">Sin estados configurados</Badge>
                                 )}
                             </span>
                         </CardDescription>
@@ -1342,7 +1351,7 @@ const LeadActionQueue = () => {
                             <tr>
                                 <th className="px-6 py-4">Nombre del lead</th>
                                 <th className="px-6 py-4">Canal</th>
-                                <th className="px-6 py-4">Numero</th>
+                                <th className="px-6 py-4">Número</th>
                                 <th className="px-6 py-4">Historial de mensajes</th>
                                 <th className="px-6 py-4">URL</th>
                                 <th className="px-6 py-4">Cambiar estado</th>
@@ -1385,7 +1394,7 @@ const LeadActionQueue = () => {
                                             <div className="flex flex-col text-xs gap-1">
                                                 <span className="flex items-center gap-1.5 text-muted-foreground font-medium italic">
                                                     <Phone className="w-3 h-3" />
-                                                    {phoneDisplay || "Sin numero"}
+                                                    {phoneDisplay || "Sin número"}
                                                 </span>
                                             </div>
                                         </td>
@@ -1442,7 +1451,7 @@ const LeadActionQueue = () => {
                                                 <a href={getChatwootUrl(lead.id)} target="_blank" rel="noreferrer">
                                                     <Button size="sm" variant="ghost" className="h-8 gap-2 px-2 text-xs text-muted-foreground hover:text-primary">
                                                         <ExternalLink className="h-4 w-4" />
-                                                        Chatwoot
+                                                        Abrir conversación
                                                     </Button>
                                                 </a>
                                             </div>
@@ -1522,12 +1531,12 @@ const LeadActionQueue = () => {
                                                 Configurar flujo humano
                                             </CardTitle>
                                             <CardDescription className="mt-2">
-                                                Define qué etiquetas entran a cada cola y qué contact attributes se pedirán al marcar una cita agendada humana.
+                                                Define qué estados entran a cada cola y qué datos se pedirán al marcar una cita agendada.
                                             </CardDescription>
                                         </div>
                                         <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-                                            <Badge variant="outline">{humanConfig.humanFollowupQueueTags.length} etiquetas en seguimiento</Badge>
-                                            <Badge variant="outline">{humanConfig.humanSalesQueueTags.length} etiquetas en citas agendadas</Badge>
+                                            <Badge variant="outline">{humanConfig.humanFollowupQueueTags.length} estados en seguimiento</Badge>
+                                            <Badge variant="outline">{humanConfig.humanSalesQueueTags.length} estados en citas agendadas</Badge>
                                             <Badge variant="outline">{humanConfig.humanAppointmentFieldKeys.length} campos para cita</Badge>
                                             <Badge variant="secondary" className="gap-1.5 px-3 py-1">
                                                 {isHumanConfigOpen ? (
@@ -1547,18 +1556,18 @@ const LeadActionQueue = () => {
                                 <div className="grid gap-4 xl:grid-cols-2">
                                     <div className="grid gap-4 sm:grid-cols-2">
                                         <div className="space-y-2">
-                                            <Label>Etiqueta destino de cita humana</Label>
+                                            <Label>Estado destino de cita</Label>
                                             <Select
                                                 value={humanConfig.humanAppointmentTargetLabel}
                                                 onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanAppointmentTargetLabel: value }))}
                                             >
                                                 <SelectTrigger>
-                                                    <SelectValue placeholder="Selecciona etiqueta" />
+                                                    <SelectValue placeholder="Selecciona estado" />
                                                 </SelectTrigger>
                                                 <SelectContent>
                                                     {mergedLabels.map((label) => (
                                                         <SelectItem key={`appointment-target-${label}`} value={label}>
-                                                            {label}
+                                                            {formatBusinessLabel(label)}
                                                         </SelectItem>
                                                     ))}
                                                 </SelectContent>
@@ -1566,18 +1575,18 @@ const LeadActionQueue = () => {
                                         </div>
 
                                         <div className="space-y-2">
-                                            <Label>Etiqueta destino de venta</Label>
+                                            <Label>Estado destino de venta</Label>
                                             <Select
                                                 value={humanConfig.humanSaleTargetLabel}
                                                 onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanSaleTargetLabel: value }))}
                                             >
                                                 <SelectTrigger>
-                                                    <SelectValue placeholder="Selecciona etiqueta" />
+                                                    <SelectValue placeholder="Selecciona estado" />
                                                 </SelectTrigger>
                                                 <SelectContent>
                                                     {mergedLabels.map((label) => (
                                                         <SelectItem key={`sale-target-${label}`} value={label}>
-                                                            {label}
+                                                            {formatBusinessLabel(label)}
                                                         </SelectItem>
                                                     ))}
                                                 </SelectContent>
@@ -1591,25 +1600,25 @@ const LeadActionQueue = () => {
                                             <p>
                                                 Seguimiento humano:{" "}
                                                 <span className="font-medium text-foreground">
-                                                    {humanConfig.humanFollowupQueueTags.join(", ") || "Sin etiquetas"}
+                                                    {humanConfig.humanFollowupQueueTags.length ? formatBusinessList(humanConfig.humanFollowupQueueTags) : "Sin estados"}
                                                 </span>
                                             </p>
                                             <p>
                                                 Cita humana destino:{" "}
                                                 <span className="font-medium text-foreground">
-                                                    {humanConfig.humanAppointmentTargetLabel || "Sin configurar"}
+                                                    {humanConfig.humanAppointmentTargetLabel ? formatBusinessLabel(humanConfig.humanAppointmentTargetLabel) : "Sin configurar"}
                                                 </span>
                                             </p>
                                             <p>
                                                 Cola de ventas:{" "}
                                                 <span className="font-medium text-foreground">
-                                                    {humanConfig.humanSalesQueueTags.join(", ") || "Sin etiquetas"}
+                                                    {humanConfig.humanSalesQueueTags.length ? formatBusinessList(humanConfig.humanSalesQueueTags) : "Sin estados"}
                                                 </span>
                                             </p>
                                             <p>
                                                 Venta destino:{" "}
                                                 <span className="font-medium text-foreground">
-                                                    {humanConfig.humanSaleTargetLabel || "Sin configurar"}
+                                                    {humanConfig.humanSaleTargetLabel ? formatBusinessLabel(humanConfig.humanSaleTargetLabel) : "Sin configurar"}
                                                 </span>
                                             </p>
                                         </div>
@@ -1619,7 +1628,7 @@ const LeadActionQueue = () => {
                                 <Accordion type="multiple" className="w-full rounded-xl border px-4">
                                     <AccordionItem value="followup-tags">
                                         <AccordionTrigger className="text-sm">
-                                            Etiquetas que entran en Cola de Trabajo Diaria
+                                            Estados que entran en Cola de Trabajo Diaria
                                         </AccordionTrigger>
                                         <AccordionContent>
                                             <ScrollArea className="h-[220px] rounded-lg border p-4">
@@ -1632,7 +1641,7 @@ const LeadActionQueue = () => {
                                                                 onCheckedChange={() => updateHumanConfigList("humanFollowupQueueTags", label)}
                                                             />
                                                             <Label htmlFor={`followup-label-${label}`} className="text-sm font-medium">
-                                                                {label}
+                                                                {formatBusinessLabel(label)}
                                                             </Label>
                                                         </div>
                                                     ))}
@@ -1643,7 +1652,7 @@ const LeadActionQueue = () => {
 
                                     <AccordionItem value="sales-tags">
                                         <AccordionTrigger className="text-sm">
-                                            Etiquetas que entran en Citas Agendadas
+                                            Estados que entran en Citas Agendadas
                                         </AccordionTrigger>
                                         <AccordionContent>
                                             <ScrollArea className="h-[220px] rounded-lg border p-4">
@@ -1656,7 +1665,7 @@ const LeadActionQueue = () => {
                                                                 onCheckedChange={() => updateHumanConfigList("humanSalesQueueTags", label)}
                                                             />
                                                             <Label htmlFor={`sales-label-${label}`} className="text-sm font-medium">
-                                                                {label}
+                                                                {formatBusinessLabel(label)}
                                                             </Label>
                                                         </div>
                                                     ))}
@@ -1673,11 +1682,11 @@ const LeadActionQueue = () => {
                                             {loadingAttributeDefinitions ? (
                                                 <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
                                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                                    Cargando contact attributes desde Chatwoot...
+                                                    Cargando campos configurados...
                                                 </div>
                                             ) : attributeDefinitions.length === 0 ? (
                                                 <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                    No se detectaron contact attributes disponibles en Chatwoot ni en Supabase.
+                                                    No hay campos configurados disponibles todavía.
                                                 </div>
                                             ) : (
                                                 <ScrollArea className="h-[260px] rounded-lg border p-4">
@@ -1696,7 +1705,6 @@ const LeadActionQueue = () => {
                                                                             {getFieldTypeLabel(definition)}
                                                                         </Badge>
                                                                     </span>
-                                                                    <span className="block text-[11px] text-muted-foreground">{definition.key}</span>
                                                                     {definition.description && (
                                                                         <span className="block text-[11px] text-muted-foreground">
                                                                             {definition.description}
@@ -1822,7 +1830,7 @@ const LeadActionQueue = () => {
                                             <div className="space-y-4">
                                                 <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Campos Base</h3>
                                                 <div className="space-y-2">
-                                                    {["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Correo", "Enlace Chatwoot", "Fecha Ingreso", "Ultima Interaccion"].map(field => (
+                                                    {["ID", "Nombre", "Telefono", "Canal", "Estados", "Correo", "Enlace de conversación", "Fecha Ingreso", "Ultima Interaccion"].map(field => (
                                                         <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
                                                             <Checkbox
                                                                 id={`ventas-field-${field}`}
@@ -1835,7 +1843,7 @@ const LeadActionQueue = () => {
                                                                     updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
                                                                 }}
                                                             />
-                                                            <Label htmlFor={`ventas-field-${field}`}>{field}</Label>
+                                                            <Label htmlFor={`ventas-field-${field}`}>{formatFieldLabel(field)}</Label>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -1856,13 +1864,13 @@ const LeadActionQueue = () => {
                                                                     updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
                                                                 }}
                                                             />
-                                                            <Label htmlFor={`ventas-field-${field}`}>{field}</Label>
+                                                            <Label htmlFor={`ventas-field-${field}`}>{formatFieldLabel(field)}</Label>
                                                         </div>
                                                     ))}
                                                 </div>
                                             </div>
                                             <div className="space-y-4">
-                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Atributos Técnicos (IDs)</h3>
+                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Datos de referencia</h3>
                                                 <div className="space-y-2">
                                                     {["ID Contacto", "ID Inbox", "ID Cuenta", "Origen Dato"].map(field => (
                                                         <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
@@ -1877,7 +1885,7 @@ const LeadActionQueue = () => {
                                                                     updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
                                                                 }}
                                                             />
-                                                            <Label htmlFor={`ventas-field-${field}`}>{field}</Label>
+                                                            <Label htmlFor={`ventas-field-${field}`}>{formatFieldLabel(field)}</Label>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -1909,7 +1917,7 @@ const LeadActionQueue = () => {
                             Marcar cita agendada
                         </DialogTitle>
                         <DialogDescription>
-                            Completa los campos configurados para guardar los datos del cliente en Chatwoot y cambiar la etiqueta a {humanAppointmentTargetLabel}.
+                            Completa los campos configurados para guardar los datos del cliente y cambiar el estado a {formatBusinessLabel(humanAppointmentTargetLabel)}.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -1932,11 +1940,11 @@ const LeadActionQueue = () => {
                         {appointmentModalStep !== "edit" && (
                             <div className="space-y-4">
                                 <p className="text-sm text-muted-foreground">
-                                    Vas a guardar la cita agendada de <strong>{appointmentLead ? getLeadName(appointmentLead) : ""}</strong> y cambiar la etiqueta a{" "}
-                                    <strong>{humanAppointmentTargetLabel}</strong>.
+                                    Vas a guardar la cita agendada de <strong>{appointmentLead ? getLeadName(appointmentLead) : ""}</strong> y cambiar el estado a{" "}
+                                    <strong>{formatBusinessLabel(humanAppointmentTargetLabel)}</strong>.
                                 </p>
                                 <div className="rounded-lg border bg-amber-50 p-3 text-sm text-amber-900">
-                                    <p className="font-semibold mb-2">Campos que se guardarán en Chatwoot</p>
+                                    <p className="font-semibold mb-2">Datos que se guardarán</p>
                                     <div className="space-y-1">
                                         {configuredAppointmentFields.map((field) => (
                                             <div key={`confirm-appointment-${field.key}`}>
@@ -1947,7 +1955,7 @@ const LeadActionQueue = () => {
                                     </div>
                                 </div>
                                 <p className="text-sm text-muted-foreground">
-                                    El lead saldrá de la cola actual y quedará con la etiqueta <strong>{humanAppointmentTargetLabel}</strong>.
+                                    El lead saldrá de la cola actual y quedará con el estado <strong>{formatBusinessLabel(humanAppointmentTargetLabel)}</strong>.
                                 </p>
                                 {appointmentModalStep === "saving" && (
                                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1999,10 +2007,10 @@ const LeadActionQueue = () => {
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
                             <DollarSign className="h-5 w-5 text-emerald-600" />
-                            Confirmar operacion
+                            Confirmar operación
                         </DialogTitle>
                         <DialogDescription>
-                            Ingresa el monto y la fecha de la operacion para marcar este lead como {humanSaleTargetLabel}.
+                            Ingresa el monto y la fecha de la operación para marcar este lead como {formatBusinessLabel(humanSaleTargetLabel).toLowerCase()}.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -2017,7 +2025,7 @@ const LeadActionQueue = () => {
                         {operationModalStep === "edit" && (
                             <>
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium">Monto operacion</label>
+                                    <label className="text-sm font-medium">Monto de la operación</label>
                                     <Input
                                         value={operationAmount}
                                         onChange={(e) => setOperationAmount(e.target.value)}
@@ -2026,7 +2034,7 @@ const LeadActionQueue = () => {
                                 </div>
 
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium">Fecha monto operacion</label>
+                                    <label className="text-sm font-medium">Fecha en que se registró el monto</label>
                                     <div className="relative">
                                         <CalendarDays className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                         <Input
@@ -2047,7 +2055,7 @@ const LeadActionQueue = () => {
                                     <strong>{money(parseAmount(operationAmount))}</strong> con fecha <strong>{operationDate}</strong>.
                                 </p>
                                 <p className="text-sm text-muted-foreground">
-                                    Se guardarán <strong>monto_operacion</strong> y <strong>fecha_monto_operacion</strong> en Chatwoot y la conversación quedará con la etiqueta <strong>{humanSaleTargetLabel}</strong>.
+                                    Se guardarán el monto de la operación y la fecha en que se registró el monto. El lead quedará con el estado <strong>{formatBusinessLabel(humanSaleTargetLabel)}</strong>.
                                 </p>
                                 {operationModalStep === "saving" && (
                                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -2097,7 +2105,7 @@ const LeadActionQueue = () => {
                             Historial de: {selectedLead ? getLeadName(selectedLead) : ""}
                         </DialogTitle>
                         <DialogDescription>
-                            Mensajes disponibles del lead. Si necesitas responder o revisar mas contexto, abre la conversacion original.
+                            Mensajes disponibles del lead. Si necesitas responder o revisar más contexto, abre la conversación original.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -2147,7 +2155,7 @@ const LeadActionQueue = () => {
                         >
                             <Button className="gap-2">
                                 <ExternalLink className="h-4 w-4" />
-                                Ver en Chatwoot
+                                Abrir conversación
                             </Button>
                         </a>
                     </DialogFooter>
@@ -2159,21 +2167,21 @@ const LeadActionQueue = () => {
                     <DialogHeader>
                         <DialogTitle>Cambiar estado</DialogTitle>
                         <DialogDescription>
-                            Selecciona una etiqueta. Las etiquetas actuales se borrarán y este lead quedará solo con la etiqueta elegida.
+                            Selecciona un estado. Los estados actuales se reemplazarán por el estado elegido.
                         </DialogDescription>
                     </DialogHeader>
 
                     <div className="py-6 space-y-4">
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Nueva etiqueta</label>
+                            <label className="text-sm font-medium">Nuevo estado</label>
                             <Select onValueChange={setNewTag} value={newTag}>
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Seleccionar etiqueta..." />
+                                    <SelectValue placeholder="Seleccionar estado..." />
                                 </SelectTrigger>
                                 <SelectContent>
                                     {mergedLabels.map((label) => (
                                         <SelectItem key={`manual-label-${label}`} value={label}>
-                                            {label}
+                                            {formatBusinessLabel(label)}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -2203,20 +2211,20 @@ const LeadActionQueue = () => {
                         </AlertDialogTitle>
                         <AlertDialogDescription className="space-y-4 pt-2">
                             <p>
-                                Vas a reemplazar todas las etiquetas actuales de <strong>{selectedLead ? getLeadName(selectedLead) : ""}</strong> por{" "}
-                                <Badge variant="secondary">{newTag}</Badge>. Estas seguro?
+                                Vas a reemplazar todos los estados actuales de <strong>{selectedLead ? getLeadName(selectedLead) : ""}</strong> por{" "}
+                                <Badge variant="secondary">{formatBusinessLabel(newTag)}</Badge>. ¿Estás seguro?
                             </p>
                             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-sm">
                                 <p className="font-bold mb-1">Recuerda</p>
-                                <p>Si cambias a una etiqueta de cita o agendamiento, revisa antes que la informacion necesaria del cliente quede actualizada en sus atributos.</p>
-                                <p className="mt-2">Despues del cambio, este lead puede desaparecer de esta vista si ya no coincide con las etiquetas configuradas para la tabla actual.</p>
+                                <p>Si cambias a un estado de cita o agendamiento, revisa antes que la información necesaria del cliente quede actualizada.</p>
+                                <p className="mt-2">Después del cambio, este lead puede desaparecer de esta vista si ya no coincide con los estados configurados para la tabla actual.</p>
                             </div>
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancelar</AlertDialogCancel>
                         <AlertDialogAction onClick={executeTagChange} className="bg-amber-600 hover:bg-amber-700">
-                            Si, confirmar cambio
+                            Sí, confirmar cambio
                         </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>

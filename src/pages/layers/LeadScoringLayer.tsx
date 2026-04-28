@@ -26,6 +26,7 @@ import {
     getLeadName,
     getLeadPhone,
 } from "@/lib/leadDisplay";
+import { formatBusinessLabel, formatFieldLabel } from "@/lib/displayCopy";
 import { MinifiedConversation } from "@/services/StorageService";
 import { KPICard } from "@/components/dashboard/KPICard";
 import {
@@ -153,7 +154,7 @@ const toAttributeOption = (definition: ChatwootAttributeDefinition): ScoreAttrib
 
     return {
         key,
-        label: String(definition.attribute_display_name || key).trim() || key,
+        label: formatFieldLabel(definition.attribute_display_name || key),
         description: String(definition.attribute_description || "").trim(),
         type: String(definition.attribute_display_type || "number").trim()
     };
@@ -301,7 +302,7 @@ const LeadScoringLayer = () => {
 
     const saveScoringConfig = async () => {
         if (!scoreAttributeKeyDraft) {
-            toast.error("Selecciona un atributo numérico para calcular el score.");
+            toast.error("Selecciona un campo numérico para calcular el puntaje.");
             return;
         }
         if (thresholdValidationError) {
@@ -322,10 +323,10 @@ const LeadScoringLayer = () => {
             });
             setSettingsDirty(false);
             setConfigOpen(false);
-            toast.success("La configuración de scoring quedó guardada.");
+            toast.success("La configuración de puntajes quedó guardada.");
         } catch (saveError) {
             console.error("Error saving scoring config:", saveError);
-            toast.error("No se pudo guardar la configuración de scoring.");
+            toast.error("No se pudo guardar la configuración de puntajes.");
         } finally {
             setSavingSettings(false);
         }
@@ -363,7 +364,7 @@ const LeadScoringLayer = () => {
     }, [conversations, globalFilters.startDate, globalFilters.endDate, globalFilters.selectedInboxes]);
 
     const preparedLeads = useMemo<PreparedLead[]>(() => {
-        const selectedAttributeLabel = selectedScoreAttribute?.label || activeScoreAttributeKey || "Sin atributo";
+        const selectedAttributeLabel = selectedScoreAttribute?.label || formatFieldLabel(activeScoreAttributeKey) || "Sin campo";
 
         return dateFilteredLeads.map((lead: any) => {
             const inbox = lead.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
@@ -374,7 +375,7 @@ const LeadScoringLayer = () => {
                 lead,
                 score,
                 bucket,
-                bucketLabel: bucket ? BUCKET_COPY[bucket].label : "Sin score",
+                bucketLabel: bucket ? BUCKET_COPY[bucket].label : "Sin puntaje",
                 stage: STAGE_LABELS[lead.resolvedStage] || "Sin etapa",
                 channel: getLeadChannelName(lead, inbox),
                 campaign: String(lead.resolvedAttrs.campana || lead.resolvedAttrs.utm_campaign || "").trim() || "Sin campaña",
@@ -469,7 +470,7 @@ const LeadScoringLayer = () => {
                 ? (item.campaign !== "Sin campaña" ? [item.campaign] : [])
                 : (item.lead.labels || []).filter(label => scoreVisibleLabels.includes(label)).length > 0
                     ? (item.lead.labels || []).filter(label => scoreVisibleLabels.includes(label))
-                    : ["Sin etiqueta actual"];
+                    : ["Sin estado actual"];
 
             keys.forEach((key) => {
                 const row = map.get(key) || { name: key, total: 0, count: 0 };
@@ -481,17 +482,17 @@ const LeadScoringLayer = () => {
             return map;
         }, new Map<string, { name: string; total: number; count: number }>())
     ).map(([, row]) => ({
-        name: row.name,
+        name: scoreDimension === "label" ? formatBusinessLabel(row.name) : row.name,
         score: Math.round((row.total / row.count) * 10) / 10,
         leads: row.count
     })).sort((a, b) => b.score - a.score || b.leads - a.leads).slice(0, 8);
 
     const dimensionCardTitle = scoreDimension === "label"
-        ? "Score promedio según etiqueta actual"
-        : "Score promedio según campaña";
+        ? "Puntaje promedio según estado actual"
+        : "Puntaje promedio según campaña";
     const dimensionCardDescription = scoreDimension === "label"
-        ? "Muestra el score promedio de los leads que hoy tienen cada etiqueta visible."
-        : "Muestra el score promedio de los leads con score y con una campaña asignada.";
+        ? "Muestra el puntaje promedio de los leads que hoy tienen cada estado visible."
+        : "Muestra el puntaje promedio de los leads con una campaña asignada.";
 
     const scoreDomain = useMemo(() => {
         const values = [
@@ -548,9 +549,9 @@ const LeadScoringLayer = () => {
     return (
         <div className="space-y-6">
             <div className="flex flex-col gap-2">
-                <h2 className="text-2xl font-bold tracking-tight">Scores</h2>
+                <h2 className="text-2xl font-bold tracking-tight">Calidad de leads</h2>
                 <p className="text-sm text-muted-foreground">
-                    La calidad del lead se calcula con un solo contact attribute numerico de Chatwoot. El dashboard lee ese valor desde la capa hibrida: hoy y ayer API, el resto Supabase.
+                    La calidad del lead se calcula con un campo numérico configurado. El tablero usa la información más actual disponible y la complementa con el historial.
                 </p>
             </div>
 
@@ -562,10 +563,10 @@ const LeadScoringLayer = () => {
                                 <div className="space-y-1">
                                     <CardTitle className="flex items-center gap-2 text-base">
                                         <Settings2 className="h-5 w-5 text-primary" />
-                                        Configurar scoring
+                                        Configurar puntajes
                                     </CardTitle>
                                     <CardDescription>
-                                        Elige el atributo numerico oficial del score y define que etiquetas cuentan como cita para validar la calidad alta.
+                                        Elige el campo numérico oficial del puntaje y define qué estados cuentan como cita para validar la calidad alta.
                                     </CardDescription>
                                 </div>
                                 <CollapsibleTrigger asChild>
@@ -578,19 +579,19 @@ const LeadScoringLayer = () => {
 
                             <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr_1fr]">
                                 <div className="rounded-lg border bg-muted/20 p-3 text-sm">
-                                    <div className="font-semibold">Fuente actual del score</div>
+                                    <div className="font-semibold">Campo actual del puntaje</div>
                                     <div className="mt-1 text-muted-foreground">
                                         {selectedScoreAttribute
-                                            ? `${selectedScoreAttribute.label} (${selectedScoreAttribute.key})`
-                                            : "Sin atributo numérico disponible"}
+                                            ? selectedScoreAttribute.label
+                                            : "Sin campo numérico disponible"}
                                     </div>
                                     <div className="mt-2 text-xs text-muted-foreground">
-                                        El dashboard no suma palabras ni scripts. Solo consume el valor final que n8n o Chatwoot escriban en ese campo.
+                                        El tablero usa el valor final guardado en ese campo y lo clasifica con los rangos de abajo.
                                     </div>
                                 </div>
 
                                 <div className="rounded-lg border bg-muted/20 p-3 text-sm">
-                                    <div className="font-semibold">Niveles del score</div>
+                                    <div className="font-semibold">Niveles del puntaje</div>
                                     <div className="mt-2 flex flex-wrap gap-2">
                                         {BUCKET_ORDER.map((bucket) => (
                                             <button
@@ -613,12 +614,12 @@ const LeadScoringLayer = () => {
                         <CollapsibleContent>
                             <CardContent className="space-y-4 pt-0">
                                 {noScoringAttributeAvailable ? (
-                                    <EmptyState text="No se detectaron contact attributes numéricos en Chatwoot. Crea o sincroniza uno para activar esta pestaña." />
+                                    <EmptyState text="No hay campos numéricos configurados todavía. Crea uno para activar esta pestaña." />
                                 ) : (
                                     <>
                                         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_1fr]">
                                             <div className="space-y-2">
-                                                <label className="text-sm font-semibold">Atributo numérico del score</label>
+                                                <label className="text-sm font-semibold">Campo numérico del puntaje</label>
                                                 <Select
                                                     value={scoreAttributeKeyDraft || ""}
                                                     onValueChange={(value) => {
@@ -627,7 +628,7 @@ const LeadScoringLayer = () => {
                                                     }}
                                                 >
                                                     <SelectTrigger className="h-10">
-                                                        <SelectValue placeholder="Selecciona un atributo numérico" />
+                                                        <SelectValue placeholder="Selecciona un campo numérico" />
                                                     </SelectTrigger>
                                                     <SelectContent>
                                                         {scoreAttributeOptions.map((option) => (
@@ -638,7 +639,7 @@ const LeadScoringLayer = () => {
                                                     </SelectContent>
                                                 </Select>
                                                 <p className="text-xs text-muted-foreground">
-                                                    Solo aparecen contact attributes de tipo number. Si existe <span className="font-medium">score_interes</span>, se usa como default.
+                                                    Solo aparecen campos numéricos. Si existe <span className="font-medium">Puntaje de interés</span>, se usa como sugerencia inicial.
                                                 </p>
                                                 {scoreAttributeOptions.find(option => option.key === scoreAttributeKeyDraft)?.description ? (
                                                     <p className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
@@ -648,14 +649,14 @@ const LeadScoringLayer = () => {
                                             </div>
 
                                             <div className="space-y-2">
-                                                <label className="text-sm font-semibold">Etiquetas que contarán como cita</label>
+                                                <label className="text-sm font-semibold">Estados que contarán como cita</label>
                                                 <div className="rounded-lg border">
                                                     <div className="border-b bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                                                        Selecciona las etiquetas que cuentan como cita o avance comercial para medir qué porcentaje de leads de nivel alto ya llegó a ese punto.
+                                                        Selecciona los estados que cuentan como cita o avance comercial para medir qué porcentaje de leads de nivel alto ya llegó a ese punto.
                                                     </div>
                                                     <div className="max-h-[220px] space-y-2 overflow-y-auto p-3">
                                                         {actualLabels.length === 0 ? (
-                                                            <p className="py-4 text-center text-xs text-muted-foreground">No se detectaron etiquetas en Chatwoot.</p>
+                                                            <p className="py-4 text-center text-xs text-muted-foreground">No hay estados configurados todavía.</p>
                                                         ) : (
                                                             actualLabels.map((label) => (
                                                                 <label key={`score-appointment-${label}`} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/20">
@@ -663,7 +664,7 @@ const LeadScoringLayer = () => {
                                                                         checked={appointmentLabelsDraft.includes(label)}
                                                                         onCheckedChange={() => toggleAppointmentLabel(label)}
                                                                     />
-                                                                    <span className="truncate text-sm">{label}</span>
+                                                                    <span className="truncate text-sm">{formatBusinessLabel(label)}</span>
                                                                 </label>
                                                             ))
                                                         )}
@@ -677,7 +678,7 @@ const LeadScoringLayer = () => {
                                                 <div>
                                                     <div className="text-sm font-semibold">Rangos para Alta, Media y Baja</div>
                                                     <p className="text-xs text-muted-foreground">
-                                                        El dashboard clasificará el score según estos cortes.
+                                                        El tablero clasificará el puntaje según estos cortes.
                                                     </p>
                                                 </div>
                                                 <div className="flex flex-wrap gap-2">
@@ -724,12 +725,12 @@ const LeadScoringLayer = () => {
                                         </div>
 
                                         <div className="rounded-lg border bg-muted/15 p-3 text-xs text-muted-foreground">
-                                            Recomendación para n8n: escribe el score final en el atributo seleccionado. Luego el dashboard lo clasificará usando los rangos que configures aquí.
+                                            Recomendación: guarda el puntaje final en el campo seleccionado. Luego el tablero lo clasificará usando los rangos configurados aquí.
                                         </div>
 
                                         <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                                             <Button variant="outline" size="sm" onClick={restoreDefaultConfig} disabled={savingSettings}>
-                                                Restaurar default
+                                                Restaurar valores sugeridos
                                             </Button>
                                             <Button size="sm" onClick={saveScoringConfig} disabled={!settingsDirty || savingSettings}>
                                                 {savingSettings ? "Guardando..." : "Guardar configuración"}
@@ -747,16 +748,16 @@ const LeadScoringLayer = () => {
                 <CardHeader className="pb-3">
                     <CardTitle className="flex items-center gap-2 text-base">
                         <Gauge className="h-5 w-5 text-primary" />
-                        Filtros de scoring
+                        Filtros de calidad
                     </CardTitle>
                     <CardDescription>
-                        Fecha y canal se controlan arriba. Aquí refinamos campaña, etiqueta, responsable, etapa y nivel.
+                        Fecha y canal se controlan arriba. Aquí refinamos campaña, estado, responsable, etapa y nivel.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                         <FilterSelect label="Campaña" value={campaignFilter} onChange={setCampaignFilter} options={filterOptions.campaigns} />
-                        <FilterSelect label="Etiqueta" value={labelFilter} onChange={setLabelFilter} options={filterOptions.labels} />
+                        <FilterSelect label="Estado" value={labelFilter} onChange={setLabelFilter} options={filterOptions.labels} optionLabel={formatBusinessLabel} />
                         <FilterSelect label="Responsable" value={ownerFilter} onChange={setOwnerFilter} options={filterOptions.owners} />
                         <FilterSelect label="Etapa" value={stageFilter} onChange={setStageFilter} options={filterOptions.stages} />
                         <FilterSelect
@@ -775,9 +776,9 @@ const LeadScoringLayer = () => {
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <KPICard
                             icon={Gauge}
-                            title="Lead score promedio"
+                            title="Puntaje promedio"
                             value={`${kpis.averageScore}`}
-                            subtitle={`${scoredLeadCount} leads con score - ${missingScoreCount} sin score`}
+                            subtitle={`${scoredLeadCount} leads con puntaje - ${missingScoreCount} sin puntaje`}
                             variant="primary"
                         />
                         <KPICard
@@ -792,7 +793,7 @@ const LeadScoringLayer = () => {
                             title="Leads altos que llegan a cita"
                             value={`${kpis.highAppointmentConversion}%`}
                             subtitle={activeAppointmentLabels.length === 0
-                                ? "Primero configura qué etiquetas cuentan como cita."
+                                ? "Primero configura qué estados cuentan como cita."
                                 : `${highAppointments} de ${highLeads.length} leads altos ya llegaron a cita`}
                             variant="success"
                         />
@@ -806,9 +807,9 @@ const LeadScoringLayer = () => {
                     </div>
 
                     <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                        <ChartCard title="Distribución por nivel de score" description="Reparte los leads con score entre baja, media y alta calidad.">
+                        <ChartCard title="Distribución por nivel de puntaje" description="Reparte los leads con puntaje entre baja, media y alta calidad.">
                             {filteredLeads.length === 0 ? (
-                                <EmptyState text={missingScoreCount > 0 ? "Los leads visibles no tienen score en el atributo seleccionado." : "No hay leads con estos filtros."} />
+                                <EmptyState text={missingScoreCount > 0 ? "Los leads visibles no tienen puntaje en el campo seleccionado." : "No hay leads con estos filtros."} />
                             ) : (
                                 <ResponsiveContainer width="100%" height={300}>
                                     <BarChart data={bucketDistribution} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
@@ -825,9 +826,9 @@ const LeadScoringLayer = () => {
                             )}
                         </ChartCard>
 
-                        <ChartCard title="Score promedio por canal" description="Compara qué red social trae mejor calidad promedio.">
+                        <ChartCard title="Puntaje promedio por canal" description="Compara qué red social trae mejor calidad promedio.">
                             {averageByChannel.length === 0 ? (
-                                <EmptyState text="No hay canales con score para mostrar." />
+                                <EmptyState text="No hay canales con puntaje para mostrar." />
                             ) : (
                                 <ResponsiveContainer width="100%" height={300}>
                                     <BarChart data={averageByChannel.slice(0, 8)} layout="vertical" margin={{ top: 12, right: 30, left: 28, bottom: 10 }}>
@@ -852,7 +853,7 @@ const LeadScoringLayer = () => {
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="label">Etiqueta actual</SelectItem>
+                                        <SelectItem value="label">Estado actual</SelectItem>
                                         <SelectItem value="campaign">Campaña</SelectItem>
                                     </SelectContent>
                                 </Select>
@@ -860,8 +861,8 @@ const LeadScoringLayer = () => {
                         >
                             {averageByDimension.length === 0 ? (
                                 <EmptyState text={scoreDimension === "campaign"
-                                    ? "No hay leads con score y con campaña para esta vista."
-                                    : "No hay leads con score para esta vista y estos filtros."} />
+                                    ? "No hay leads con puntaje y con campaña para esta vista."
+                                    : "No hay leads con puntaje para esta vista y estos filtros."} />
                             ) : (
                                 <ResponsiveContainer width="100%" height={300}>
                                     <BarChart data={averageByDimension} layout="vertical" margin={{ top: 12, right: 30, left: 48, bottom: 10 }}>
@@ -878,13 +879,13 @@ const LeadScoringLayer = () => {
                         </ChartCard>
 
                         <ChartCard
-                            title="Leads con cita según nivel de score"
-                            description="Muestra qué porcentaje de leads con score alto, medio o bajo ya llegó a las etiquetas de cita configuradas."
+                            title="Leads con cita según nivel de puntaje"
+                            description="Muestra qué porcentaje de leads con puntaje alto, medio o bajo ya llegó a los estados de cita configurados."
                         >
                             {activeAppointmentLabels.length === 0 ? (
-                                <EmptyState text="Primero configura qué etiquetas cuentan como cita." />
+                                <EmptyState text="Primero configura qué estados cuentan como cita." />
                             ) : filteredLeads.length === 0 ? (
-                                <EmptyState text="No hay leads con score para esta vista y estos filtros." />
+                                <EmptyState text="No hay leads con puntaje para esta vista y estos filtros." />
                             ) : (
                                 <ResponsiveContainer width="100%" height={300}>
                                     <BarChart data={conversionByBucket} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
@@ -909,7 +910,7 @@ const LeadScoringLayer = () => {
                                 Leads evaluados
                             </CardTitle>
                             <CardDescription>
-                                Top 10 por score dentro de los filtros seleccionados. El score sale de {selectedScoreAttribute?.label || activeScoreAttributeKey || "ningún atributo"}.
+                                Top 10 por puntaje dentro de los filtros seleccionados. El puntaje sale de {selectedScoreAttribute?.label || formatFieldLabel(activeScoreAttributeKey) || "ningún campo"}.
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -919,10 +920,10 @@ const LeadScoringLayer = () => {
                                         <tr>
                                             <th className="px-4 py-3">Lead</th>
                                             <th className="px-4 py-3">Nivel</th>
-                                            <th className="px-4 py-3">Score</th>
+                                            <th className="px-4 py-3">Puntaje</th>
                                             <th className="px-4 py-3">Canal</th>
                                             <th className="px-4 py-3">Campaña</th>
-                                            <th className="px-4 py-3">Atributo usado</th>
+                                            <th className="px-4 py-3">Campo usado</th>
                                             <th className="px-4 py-3">Fecha</th>
                                         </tr>
                                     </thead>
@@ -930,7 +931,7 @@ const LeadScoringLayer = () => {
                                         {detailRows.length === 0 ? (
                                             <tr>
                                                 <td className="px-4 py-12 text-center text-muted-foreground" colSpan={7}>
-                                                    No hay leads con score para mostrar.
+                                                    No hay leads con puntaje para mostrar.
                                                 </td>
                                             </tr>
                                         ) : (
@@ -957,7 +958,6 @@ const LeadScoringLayer = () => {
                                                     <td className="px-4 py-3">{item.campaign}</td>
                                                     <td className="px-4 py-3">
                                                         <div className="font-medium">{item.attributeLabel}</div>
-                                                        <div className="text-[10px] text-muted-foreground">{item.attributeKey}</div>
                                                     </td>
                                                     <td className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(item.lead.created_at || item.lead.timestamp)}</td>
                                                 </tr>

@@ -103,7 +103,7 @@ export const DEFAULT_TAG_CONFIG: TagConfig = {
         "Nombre",
         "Telefono",
         "Canal",
-        "Etiquetas",
+        "Estados",
         "Correo",
         "Monto",
         "Fecha Monto",
@@ -111,7 +111,7 @@ export const DEFAULT_TAG_CONFIG: TagConfig = {
         "Check-in",
         "Check-out",
         "URL Red Social",
-        "Enlace Chatwoot",
+        "Enlace de conversación",
         "Fecha Ingreso",
         "Ultima Interaccion"
     ],

@@ -45,9 +45,9 @@ const formatDateFilter = (date?: Date) => date ? getGuayaquilDateString(date) : 
 const sourceLabel = (events: IncomingMessageTrafficEvent[]) => {
     const hasApi = events.some((event) => event.source === "api");
     const hasSupabase = events.some((event) => event.source === "supabase");
-    if (hasApi && hasSupabase) return "Live + historico";
-    if (hasApi) return "Live Chatwoot";
-    if (hasSupabase) return "Historico Supabase";
+    if (hasApi && hasSupabase) return "Datos en vivo + historial";
+    if (hasApi) return "Datos en vivo";
+    if (hasSupabase) return "Historial disponible";
     return "Sin mensajes";
 };
 
@@ -181,7 +181,7 @@ const OperationalEfficiency = () => {
     const endLabel = formatDateFilter(globalFilters.endDate || globalFilters.startDate);
 
     const ownerSourceLabel = (source?: string) => {
-        if (source === "responsable") return "Atributo responsable";
+        if (source === "responsable") return "Responsable configurado";
         if (source === "sin_asignar") return "Sin asignar";
         return "Agente asignado";
     };
@@ -237,7 +237,7 @@ const OperationalEfficiency = () => {
                             Desempeno por Responsable
                         </CardTitle>
                         <CardDescription>
-                            El atributo de contacto responsable tiene prioridad sobre el agente asignado en Chatwoot.
+                            El responsable configurado tiene prioridad sobre el agente asignado.
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
@@ -280,7 +280,7 @@ const OperationalEfficiency = () => {
                         </div>
                         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                             <span className="font-semibold">{unassignedLeads} leads sin responsable.</span>{" "}
-                            Son leads sin agente asignado en Chatwoot y sin valor en el atributo responsable.
+                            Son leads sin agente asignado y sin responsable configurado.
                         </div>
                     </CardContent>
                 </Card>

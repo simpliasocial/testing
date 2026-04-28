@@ -40,12 +40,12 @@ export interface CriticalReportProfileConfig {
 
 export const REPORT_TABS: ReportTabDefinition[] = [
     { id: "overview", label: "Estrategia", description: "KPIs ejecutivos, ventas, citas y resumen comercial." },
-    { id: "funnel", label: "Embudo", description: "Etapas actuales e historicas del embudo comercial." },
-    { id: "operational", label: "Operacion", description: "Eficiencia operativa, respuesta y carga por canal." },
+    { id: "funnel", label: "Embudo", description: "Etapas actuales e históricas del embudo comercial." },
+    { id: "operational", label: "Operación", description: "Eficiencia operativa, respuesta y carga por canal." },
     { id: "followup", label: "Seguimiento", description: "Colas humanas, citas agendadas y ventas exitosas." },
-    { id: "performance", label: "Rendimiento Humano", description: "Rendimiento por responsable y conversion humana." },
-    { id: "trends", label: "Tendencias", description: "Tendencias por canal, campana y calidad de leads." },
-    { id: "scoring", label: "Scores", description: "Calidad, score y priorizacion de leads." },
+    { id: "performance", label: "Rendimiento Humano", description: "Rendimiento por responsable y conversión humana." },
+    { id: "trends", label: "Tendencias", description: "Tendencias por canal, campaña y calidad de leads." },
+    { id: "scoring", label: "Calidad", description: "Calidad, puntaje y priorización de leads." },
     { id: "chats", label: "Conversaciones", description: "Detalle de conversaciones y mensajes recientes." },
 ];
 
@@ -72,8 +72,8 @@ export const CRITICAL_REPORT_PROFILES: Record<CriticalProfileKey, CriticalReport
     },
     daily_operations: {
         key: "daily_operations",
-        label: "Reporte de Operacion Diaria Comercial",
-        description: "Control diario de equipos, seguimiento, scores y conversaciones.",
+        label: "Reporte de Operación Diaria Comercial",
+        description: "Control diario de equipos, seguimiento, calidad y conversaciones.",
         tabIds: ["operational", "followup", "scoring", "chats"],
         fileFormats: ["excel", "csv"],
         formatLabel: "Excel / CSV",
@@ -82,7 +82,7 @@ export const CRITICAL_REPORT_PROFILES: Record<CriticalProfileKey, CriticalReport
     team_performance: {
         key: "team_performance",
         label: "Reporte de Rendimiento del Equipo",
-        description: "Rendimiento humano conectado con operacion, seguimiento y embudo.",
+        description: "Rendimiento humano conectado con operación, seguimiento y embudo.",
         tabIds: ["operational", "performance", "followup", "funnel"],
         fileFormats: ["pdf", "excel"],
         formatLabel: "PDF + Excel",
@@ -91,7 +91,7 @@ export const CRITICAL_REPORT_PROFILES: Record<CriticalProfileKey, CriticalReport
     marketing_quality: {
         key: "marketing_quality",
         label: "Reporte de Marketing y Calidad de Leads",
-        description: "Calidad de leads, tendencias, scores y estrategia por origen.",
+        description: "Calidad de leads, tendencias, puntajes y estrategia por origen.",
         tabIds: ["trends", "funnel", "scoring", "overview"],
         fileFormats: ["excel"],
         formatLabel: "Excel",
@@ -115,7 +115,7 @@ export const REPORT_COLUMN_OPTIONS = [
     "Nombre",
     "Telefono",
     "Canal",
-    "Etiquetas",
+    "Estados",
     "Etapa",
     "Estado",
     "Correo",
@@ -127,10 +127,10 @@ export const REPORT_COLUMN_OPTIONS = [
     "Campana",
     "Ciudad",
     "Responsable",
-    "Score",
+    "Puntaje",
     "Ultimo Mensaje",
     "URL Red Social",
-    "Enlace Chatwoot",
+    "Enlace de conversación",
     "Fecha Ingreso",
     "Ultima Interaccion",
     "ID Contacto",
@@ -144,7 +144,7 @@ const BASE_DETAIL_FIELDS = [
     "Nombre",
     "Telefono",
     "Canal",
-    "Etiquetas",
+    "Estados",
     "Etapa",
     "Correo",
     "Monto",
@@ -153,29 +153,29 @@ const BASE_DETAIL_FIELDS = [
     "Campana",
     "Responsable",
     "URL Red Social",
-    "Enlace Chatwoot",
+    "Enlace de conversación",
     "Fecha Ingreso",
     "Ultima Interaccion",
 ];
 
 export const DEFAULT_REPORT_COLUMN_FIELDS: Record<ReportTabId, string[]> = {
     overview: BASE_DETAIL_FIELDS,
-    funnel: ["ID", "Nombre", "Canal", "Etiquetas", "Etapa", "Monto", "Fecha Monto", "Fecha Ingreso", "Ultima Interaccion"],
+    funnel: ["ID", "Nombre", "Canal", "Estados", "Etapa", "Monto", "Fecha Monto", "Fecha Ingreso", "Ultima Interaccion"],
     operational: ["ID", "Nombre", "Canal", "Responsable", "Estado", "Ultimo Mensaje", "Fecha Ingreso", "Ultima Interaccion", "Origen Dato"],
-    followup: ["ID", "Nombre", "Telefono", "Canal", "Etiquetas", "Etapa", "Agencia", "Fecha Monto", "Monto", "Ultimo Mensaje", "Enlace Chatwoot"],
-    performance: ["ID", "Nombre", "Canal", "Responsable", "Etiquetas", "Etapa", "Monto", "Fecha Monto", "Ultima Interaccion"],
-    trends: ["ID", "Nombre", "Canal", "Campana", "Ciudad", "Etiquetas", "Etapa", "Monto", "Fecha Ingreso"],
-    scoring: ["ID", "Nombre", "Canal", "Score", "Etiquetas", "Etapa", "Responsable", "Ultima Interaccion"],
-    chats: ["ID", "Nombre", "Telefono", "Canal", "Ultimo Mensaje", "Etiquetas", "Enlace Chatwoot", "Ultima Interaccion"],
+    followup: ["ID", "Nombre", "Telefono", "Canal", "Estados", "Etapa", "Agencia", "Fecha Monto", "Monto", "Ultimo Mensaje", "Enlace de conversación"],
+    performance: ["ID", "Nombre", "Canal", "Responsable", "Estados", "Etapa", "Monto", "Fecha Monto", "Ultima Interaccion"],
+    trends: ["ID", "Nombre", "Canal", "Campana", "Ciudad", "Estados", "Etapa", "Monto", "Fecha Ingreso"],
+    scoring: ["ID", "Nombre", "Canal", "Puntaje", "Estados", "Etapa", "Responsable", "Ultima Interaccion"],
+    chats: ["ID", "Nombre", "Telefono", "Canal", "Ultimo Mensaje", "Estados", "Enlace de conversación", "Ultima Interaccion"],
 };
 
 export const WEEKDAY_OPTIONS = [
     { label: "Lunes", shortLabel: "LU", value: "1" },
     { label: "Martes", shortLabel: "MA", value: "2" },
-    { label: "Miercoles", shortLabel: "MI", value: "3" },
+    { label: "Miércoles", shortLabel: "MI", value: "3" },
     { label: "Jueves", shortLabel: "JU", value: "4" },
     { label: "Viernes", shortLabel: "VI", value: "5" },
-    { label: "Sabado", shortLabel: "SA", value: "6" },
+    { label: "Sábado", shortLabel: "SA", value: "6" },
     { label: "Domingo", shortLabel: "DO", value: "0" },
 ];
 

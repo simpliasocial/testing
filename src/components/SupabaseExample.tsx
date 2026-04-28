@@ -32,7 +32,7 @@ export function SupabaseExample() {
 
             if (error) throw error;
 
-            toast.success('Sign-in successful!');
+            toast.success('Acceso iniciado correctamente');
         } catch (error: any) {
             toast.error(error.message || 'Error signing in');
         } finally {
@@ -51,7 +51,7 @@ export function SupabaseExample() {
 
             if (error) throw error;
 
-            toast.success('Account created! Check your email to confirm.');
+            toast.success('Cuenta creada. Revisa tu correo para confirmar el acceso.');
         } catch (error: any) {
             toast.error(error.message || 'Error creating account');
         } finally {
@@ -67,12 +67,14 @@ export function SupabaseExample() {
                 .limit(1);
 
             if (error) {
-                toast.error('Connection failed: ' + error.message);
+                console.error('Connection check failed:', error);
+                toast.error('No se pudo verificar la conexión. Intenta nuevamente.');
             } else {
-                toast.success('✅ Successfully connected to Supabase!');
+                toast.success('Conexión verificada correctamente');
             }
         } catch (error: any) {
-            toast.info('Database connected (test table does not exist yet)');
+            console.info('Connection check completed:', error);
+            toast.info('La conexión está lista');
         }
     };
 
@@ -92,26 +94,26 @@ export function SupabaseExample() {
         return (
             <Card className="w-full max-w-md mx-auto mt-8">
                 <CardHeader>
-                    <CardTitle>Authenticated! ✅</CardTitle>
-                    <CardDescription>You are connected to Supabase</CardDescription>
+                    <CardTitle>Acceso confirmado</CardTitle>
+                    <CardDescription>La conexión está lista</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="space-y-2">
-                        <p className="text-sm font-medium">Email:</p>
+                        <p className="text-sm font-medium">Correo:</p>
                         <p className="text-sm text-muted-foreground">{user.email}</p>
                     </div>
                     <div className="space-y-2">
-                        <p className="text-sm font-medium">User ID:</p>
+                        <p className="text-sm font-medium">Código de usuario:</p>
                         <p className="text-sm text-muted-foreground font-mono text-xs">
                             {user.id}
                         </p>
                     </div>
                     <div className="flex gap-2">
                         <Button onClick={() => signOut()} variant="outline" className="flex-1">
-                            Sign Out
+                            Cerrar sesión
                         </Button>
                         <Button onClick={testConnection} className="flex-1">
-                            Test Connection
+                            Verificar conexión
                         </Button>
                     </div>
                 </CardContent>
@@ -122,26 +124,26 @@ export function SupabaseExample() {
     return (
         <Card className="w-full max-w-md mx-auto mt-8">
             <CardHeader>
-                <CardTitle>Supabase Auth Demo</CardTitle>
+                <CardTitle>Acceso de prueba</CardTitle>
                 <CardDescription>
-                    Test the Supabase connection
+                    Verifica la conexión del sistema
                 </CardDescription>
             </CardHeader>
             <CardContent>
                 <form onSubmit={handleLogin} className="space-y-4">
                     <div className="space-y-2">
-                        <Label htmlFor="email">Email</Label>
+                        <Label htmlFor="email">Correo</Label>
                         <Input
                             id="email"
                             type="email"
-                            placeholder="you@email.com"
+                            placeholder="correo@empresa.com"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             required
                         />
                     </div>
                     <div className="space-y-2">
-                        <Label htmlFor="password">Password</Label>
+                        <Label htmlFor="password">Contraseña</Label>
                         <Input
                             id="password"
                             type="password"
@@ -157,7 +159,7 @@ export function SupabaseExample() {
                             className="flex-1"
                             disabled={isLoading}
                         >
-                            {isLoading ? 'Loading...' : 'Sign In'}
+                            {isLoading ? 'Cargando...' : 'Ingresar'}
                         </Button>
                         <Button
                             type="button"
@@ -166,7 +168,7 @@ export function SupabaseExample() {
                             onClick={handleSignUp}
                             disabled={isLoading}
                         >
-                            Create Account
+                            Crear cuenta
                         </Button>
                     </div>
                     <Button
@@ -175,7 +177,7 @@ export function SupabaseExample() {
                         className="w-full"
                         onClick={testConnection}
                     >
-                        🔌 Test Connection
+                        Verificar conexión
                     </Button>
                 </form>
             </CardContent>

@@ -37,9 +37,6 @@ const ExecutiveOverview = () => {
 
     const { kpis, allLabels = [] } = data;
 
-    // Formulas:
-    // Win Rate (Eficiencia de conversión principal) = Comparación de etiquetas SQL vs Citas (o configurable)
-    // El usuario pidió: SQLs vs Citas
     const winRate = kpis.interestedLeads > 0
         ? Math.round((kpis.scheduledAppointments / kpis.interestedLeads) * 100)
         : 0;
@@ -73,23 +70,23 @@ const ExecutiveOverview = () => {
                     variant="primary"
                 />
                 <KPICard
-                    title="SQLs"
+                    title="Leads calificados"
                     value={kpis.interestedLeads.toLocaleString()}
-                    subtitle="Vía etiquetas seleccionadas"
+                    subtitle="Según los estados comerciales configurados"
                     icon={Target}
                     variant="primary"
                 />
                 <KPICard
                     title="Citas Agendadas"
                     value={kpis.scheduledAppointments.toLocaleString()}
-                    subtitle="Suma de etiquetas de cita"
+                    subtitle="Leads marcados como cita"
                     icon={CalendarIcon}
                     variant="success"
                 />
                 <KPICard
                     title="Cierre / Ventas"
                     value={kpis.closedSales?.toLocaleString() || "0"}
-                    subtitle="Ventas según etiquetas"
+                    subtitle="Leads marcados como venta"
                     icon={CheckSquare}
                     variant="success"
                 />
@@ -98,7 +95,7 @@ const ExecutiveOverview = () => {
             {/* Efficiency and Revenue Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <KPICard
-                    title="Win Rate (Citas/SQL)"
+                    title="Conversión a cita"
                     value={`${winRate}%`}
                     subtitle="Eficiencia de conversión seleccionada"
                     icon={Percent}
@@ -107,14 +104,14 @@ const ExecutiveOverview = () => {
                 <KPICard
                     title="Ganancia Mensual"
                     value={new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(kpis.monthlyProfit)}
-                    subtitle="Basado en fecha_monto_operacion"
+                    subtitle="Basado en la fecha en que se registró el monto"
                     icon={DollarSign}
                     variant="success"
                 />
                 <KPICard
                     title="Ganancia Total"
                     value={new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(kpis.totalProfit)}
-                    subtitle="Suma de todo monto_operacion"
+                    subtitle="Suma de los montos registrados"
                     icon={TrendingUp}
                     variant="success"
                 />

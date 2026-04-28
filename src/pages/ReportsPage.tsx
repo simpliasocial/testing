@@ -12,6 +12,7 @@ import { config } from '@/config';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
 import { getAttrs, getInboxChannelName, getLeadChannelName } from '@/lib/leadDisplay';
+import { formatBusinessLabel, formatBusinessList } from '@/lib/displayCopy';
 
 const ReportsPage = () => {
     const [isExporting, setIsExporting] = useState(false);
@@ -97,18 +98,18 @@ const ReportsPage = () => {
         resumenData.push([`Fecha Inicio`, startDate]);
         resumenData.push([`Fecha Fin`, endDate]);
         if (isPreliminary) {
-            resumenData.push([`Nota`, `Incluye datos live/preliminares de Chatwoot para hoy en horario Guayaquil.`]);
+            resumenData.push([`Nota`, `Incluye datos actualizados de hoy en horario Guayaquil.`]);
         }
         resumenData.push([]);
 
-        const headerRow1 = ["Etiqueta", "Total"];
+        const headerRow1 = ["Estado", "Total"];
         inboxes.forEach(inbox => {
             headerRow1.push(getInboxChannelName(inbox));
         });
         resumenData.push(headerRow1);
 
         Object.keys(labelCounts).forEach(label => {
-            let row = [label, labelCounts[label].total];
+            let row = [formatBusinessLabel(label), labelCounts[label].total];
             inboxes.forEach(inbox => {
                 row.push(labelCounts[label][inbox.id] || 0);
             });
@@ -126,7 +127,7 @@ const ReportsPage = () => {
             });
         });
 
-        let footerRow = [labelTitle.replace('Total Leads', 'Total Etiquetas Asignadas'), totalSum];
+        let footerRow = [labelTitle.replace('Total Leads', 'Total estados asignados'), totalSum];
         inboxes.forEach(inbox => {
             footerRow.push(sumPerInbox[inbox.id]);
         });
@@ -143,23 +144,23 @@ const ReportsPage = () => {
                 "Nombre del Lead",
                 "Telefono/Celular",
                 "Canal",
-                "Etiquetas",
+                "Estados",
                 "Responsable (Persona)",
-                "Agente (Chatwoot)",
-                "Nombre Completo (Attr)",
+                "Agente asignado",
+                "Nombre completo",
                 "Correo",
                 "Ciudad",
-                "Campana",
+                "Campaña",
                 "Edad",
                 "Fecha Visita",
                 "Hora Visita",
                 "Agencia",
-                "Score Interes",
-                "Monto Operacion",
-                "Fecha Monto Operacion",
-                "Enlace Chatwoot",
+                "Puntaje de interés",
+                "Monto de la operación",
+                "Fecha en que se registró el monto",
+                "Enlace de conversación",
                 "Fecha Ingreso",
-                "Ultima Interaccion"
+                "Última interacción"
             ];
             rows.push(headers);
 
@@ -184,7 +185,7 @@ const ReportsPage = () => {
                     conv.meta?.sender?.name || 'Sin Nombre',
                     telefonoPrincipal,
                     canal,
-                    (conv.labels || []).join(' | '),
+                    formatBusinessList(conv.labels || [], ' | '),
                     attrs.responsable || "",
                     conv.meta?.assignee?.name || (attrs.agente === true ? "Asignado" : "Sin Asignar"),
                     attrs.nombre_completo || "",
@@ -210,19 +211,19 @@ const ReportsPage = () => {
 
         const detalleDataActividades = getDetalleRows(filteredConvs);
 
-        // --- SECCIÓN 3: RESUMEN DE ETIQUETAS ÚNICAS ---
+        // --- SECCIÓN 3: RESUMEN DE ESTADOS ÚNICOS ---
         const resumenUnicasData: any[][] = [];
         resumenUnicasData.push([`Fecha Inicio`, startDate]);
         resumenUnicasData.push([`Fecha Fin`, endDate]);
         if (isPreliminary) {
-            resumenUnicasData.push([`Nota`, `Incluye datos live/preliminares de Chatwoot para hoy en horario Guayaquil.`]);
+            resumenUnicasData.push([`Nota`, `Incluye datos actualizados de hoy en horario Guayaquil.`]);
         }
         resumenUnicasData.push([]);
 
         resumenUnicasData.push(headerRow1);
 
         Object.keys(labelCountsUnicas).forEach(label => {
-            let row = [label, labelCountsUnicas[label].total];
+            let row = [formatBusinessLabel(label), labelCountsUnicas[label].total];
             inboxes.forEach(inbox => {
                 row.push(labelCountsUnicas[label][inbox.id] || 0);
             });
@@ -240,7 +241,7 @@ const ReportsPage = () => {
             });
         });
 
-        let footerRowUnicas = ["Total Etiquetas Asignadas", totalSumUnicas];
+        let footerRowUnicas = ["Total estados asignados", totalSumUnicas];
         inboxes.forEach(inbox => {
             footerRowUnicas.push(sumPerInboxUnicas[inbox.id]);
         });
@@ -265,9 +266,9 @@ const ReportsPage = () => {
         const wsNuevas = XLSX.utils.aoa_to_sheet(detalleDataUnicas);
         if (wsNuevas['!ref']) wsNuevas['!autofilter'] = { ref: wsNuevas['!ref'] };
 
-        XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen Etiquetas Actividades");
+        XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen Estados Actividades");
         XLSX.utils.book_append_sheet(wb, wsDetalle, "Detalle Leads Actividades");
-        XLSX.utils.book_append_sheet(wb, wsResumenUnicas, "Resumen Etiquetas Unicas");
+        XLSX.utils.book_append_sheet(wb, wsResumenUnicas, "Resumen Estados Unicos");
         XLSX.utils.book_append_sheet(wb, wsNuevas, "Detalle Leads Unicas");
 
         XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -276,7 +277,7 @@ const ReportsPage = () => {
     const downloadReport = async (start: string, end: string, type: 'hoy' | 'mes' | 'rango') => {
         setIsExporting(true);
         const isPreliminary = dateStringIncludesToday(start, end);
-        const toastId = toast.loading(`Descargando reporte de ${type}${isPreliminary ? ' con datos live' : ''}...`);
+        const toastId = toast.loading(`Descargando reporte de ${type}${isPreliminary ? ' con datos actualizados' : ''}...`);
         try {
             const allConvs = await fetchAllConversations(start, end, 'all');
             const startTimestamp = new Date(guayaquilStartOfDayIso(start)).getTime();
@@ -341,7 +342,7 @@ const ReportsPage = () => {
                             Reporte de Interacciones
                         </CardTitle>
                         <CardDescription>
-                            Filtra prospectos activos en este rango, incluyendo aquellos creados en el pasado pero que tuvieron actividad u otra etiqueta hoy.
+                            Filtra prospectos activos en este rango, incluyendo aquellos creados en el pasado pero que tuvieron actividad o cambio de estado hoy.
                         </CardDescription>
                     </CardHeader>
                     <CardContent>

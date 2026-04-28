@@ -84,10 +84,10 @@ const DashboardLayout = () => {
             return (
                 <div
                     className="hidden md:flex items-center bg-green-500/10 text-green-600 px-3 py-1 rounded-full text-xs font-semibold border border-green-200"
-                    title={lastLiveFetchAt ? `Ultima actualizacion live: ${lastLiveFetchAt.toLocaleTimeString()}` : undefined}
+                    title={lastLiveFetchAt ? `Última actualización: ${lastLiveFetchAt.toLocaleTimeString()}` : undefined}
                 >
                     <Activity className="w-3 h-3 mr-2 animate-pulse" />
-                    Vivo + Historial
+                    Datos en vivo + historial
                 </div>
             );
         }
@@ -96,7 +96,7 @@ const DashboardLayout = () => {
             return (
                 <div className="hidden md:flex items-center bg-green-500/10 text-green-600 px-3 py-1 rounded-full text-xs font-semibold border border-green-200">
                     <Activity className="w-3 h-3 mr-2 animate-pulse" />
-                    Vivo: Chatwoot API
+                    Datos en vivo
                 </div>
             );
         }
@@ -104,7 +104,7 @@ const DashboardLayout = () => {
         return (
             <div className="hidden md:flex items-center bg-amber-500/10 text-amber-600 px-3 py-1 rounded-full text-xs font-semibold border border-amber-200">
                 <Database className="w-3 h-3 mr-2" />
-                Historial: Supabase
+                Historial disponible
             </div>
         );
     };
@@ -129,7 +129,7 @@ const DashboardLayout = () => {
                         {statusBadge()}
                         {liveError && (
                             <div className="hidden lg:flex items-center bg-amber-500/10 text-amber-700 px-3 py-1 rounded-full text-xs font-semibold border border-amber-200">
-                                Live con error
+                                Datos en vivo no disponibles
                             </div>
                         )}
                         <Button
@@ -152,11 +152,11 @@ const DashboardLayout = () => {
                             {[
                                 { id: 'overview', label: 'Estrategia', icon: LayoutDashboard },
                                 { id: 'funnel', label: 'Embudo', icon: Filter },
-                                { id: 'operational', label: 'Operacion', icon: Zap },
+                                { id: 'operational', label: 'Operación', icon: Zap },
                                 { id: 'followup', label: 'Seguimiento', icon: ListTodo },
                                 { id: 'performance', label: 'Rendimiento Humano', icon: BarChart3 },
                                 { id: 'trends', label: 'Tendencias', icon: TrendingUp },
-                                { id: 'scoring', label: 'Scores', icon: Gauge },
+                                { id: 'scoring', label: 'Calidad', icon: Gauge },
                                 { id: 'chats', label: 'Conversaciones', icon: Search },
                                 { id: 'reporting', label: 'Reportes', icon: FileText },
                             ].map((tab) => (
