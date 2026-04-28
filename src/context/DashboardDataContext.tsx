@@ -493,7 +493,11 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             setInboxes((data || []).map((inbox: any) => ({
                 id: inbox.chatwoot_inbox_id,
                 name: inbox.name,
-                channel_type: inbox.channel_type
+                channel_type: inbox.channel_type,
+                website_url: inbox.website_url,
+                website_token: inbox.website_token,
+                provider: inbox.provider,
+                slug: inbox.slug
             })));
         } catch (dbError) {
             console.error('Failed to fetch inboxes from Supabase:', dbError);

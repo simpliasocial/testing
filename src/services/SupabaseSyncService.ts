@@ -1,5 +1,43 @@
 import { supabase } from '../lib/supabase';
 import { getLabelDelta } from './LabelEventService';
+import { channelLabelFromType } from '../lib/leadDisplay';
+
+const cleanChannel = (value: unknown) => {
+    const text = String(value || '').trim();
+    const normalized = text.toLowerCase();
+    return normalized && !['otro', 'other', 'unknown', 'sin canal', 'n/a', 'na'].includes(normalized)
+        ? text
+        : '';
+};
+
+const resolveConversationChannel = (conversation: any, attrs: Record<string, any>) => {
+    const inbox = conversation?.inbox || {};
+    const senderAdditional = conversation?.meta?.sender?.additional_attributes || {};
+    const fallbackHints = [
+        attrs.canal,
+        conversation?.canal,
+        conversation?.channel,
+        conversation?.channel_name,
+        conversation?.source,
+        conversation?.provider,
+        conversation?.additional_attributes?.channel,
+        conversation?.additional_attributes?.social_channel,
+        senderAdditional.channel,
+        senderAdditional.social_channel,
+        senderAdditional.provider,
+        senderAdditional.platform,
+        senderAdditional.source,
+        inbox.name,
+        inbox.website_url,
+        inbox.website_token,
+        inbox.channel_type,
+        inbox.provider,
+        inbox.slug
+    ].filter(Boolean).join(' ');
+
+    const resolved = channelLabelFromType(conversation?.channel_type || inbox.channel_type, fallbackHints);
+    return resolved !== 'Otro' ? resolved : cleanChannel(attrs.canal) || null;
+};
 
 export const SupabaseSyncService = {
     // Helper to safely parse any incoming custom attribute to a valid database numeric or null
@@ -223,6 +261,7 @@ export const SupabaseSyncService = {
 
             // Merged attributes with conversation priority
             const attrs = { ...contactAttrs, ...convAttrs };
+            const canal = resolveConversationChannel(conv, attrs);
 
             return {
                 chatwoot_conversation_id: conv.id,
@@ -243,7 +282,7 @@ export const SupabaseSyncService = {
                 additional_attributes: conv.additional_attributes || {},
                 contact_custom_attributes: contactAttrs,
                 conversation_custom_attributes: convAttrs,
-                custom_attributes: attrs,
+                custom_attributes: canal ? { ...attrs, canal } : attrs,
                 meta: conv.meta || {},
 
                 // Mapped Business Attributes
@@ -256,7 +295,7 @@ export const SupabaseSyncService = {
                 campana: attrs.campana,
                 ciudad: attrs.ciudad,
                 edad: attrs.edad,
-                canal: attrs.canal,
+                canal,
                 agente: attrs.agente === true || attrs.agente === 'true',
                 score_interes: SupabaseSyncService.parseNumber(attrs.score_interes),
                 monto_operacion: SupabaseSyncService.parseNumber(attrs.monto_operacion),

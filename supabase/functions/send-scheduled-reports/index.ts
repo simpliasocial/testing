@@ -52,6 +52,74 @@ const cleanText = (value: unknown) => String(value ?? "").trim();
 const asObject = (value: unknown): Record<string, any> =>
     value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 
+const normalizeText = (value: unknown) =>
+    String(value || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim();
+
+const CHANNEL_ALIAS_LABELS: Array<{ label: string; tokens: string[] }> = [
+    { label: "WhatsApp", tokens: ["whatsapp", "whats app", "wa.me"] },
+    { label: "Instagram", tokens: ["instagram"] },
+    { label: "Facebook", tokens: ["facebook", "messenger"] },
+    { label: "Telegram", tokens: ["telegram", "t.me", "tg://", "cwcloudbot_bot"] },
+    { label: "TikTok", tokens: ["tiktok", "tik tok", "douyin", "simplia.social"] },
+    { label: "Sitio web", tokens: ["webwidget", "web_widget", "web widget", "website", "web site", "sitio web", "pagina web", "livechat", "live chat", "widget"] },
+];
+
+const resolveKnownChannelLabel = (value: unknown) => {
+    const normalizedValue = normalizeText(value);
+    if (!normalizedValue) return "";
+
+    const matched = CHANNEL_ALIAS_LABELS.find(({ tokens }) =>
+        tokens.some((token) => normalizedValue.includes(token))
+    );
+
+    return matched?.label || "";
+};
+
+const cleanStoredChannel = (value: unknown) => {
+    const text = cleanText(value);
+    const normalized = normalizeText(text);
+    return normalized && !["otro", "other", "unknown", "sin canal", "n/a", "na"].includes(normalized)
+        ? text
+        : "";
+};
+
+const resolveRowChannel = (row: any, attrs: Record<string, any>) => {
+    const rawPayload = asObject(row.raw_payload);
+    const senderAdditional = asObject(rawPayload?.meta?.sender?.additional_attributes || row.meta?.sender?.additional_attributes);
+    const embeddedInbox = asObject(rawPayload.inbox || rawPayload.channel);
+    const hints = [
+        row.canal,
+        attrs.canal,
+        rawPayload.channel_type,
+        rawPayload.channel_name,
+        rawPayload.source,
+        rawPayload.provider,
+        rawPayload.additional_attributes?.channel,
+        rawPayload.additional_attributes?.social_channel,
+        senderAdditional.channel,
+        senderAdditional.social_channel,
+        senderAdditional.provider,
+        senderAdditional.platform,
+        senderAdditional.source,
+        embeddedInbox.name,
+        embeddedInbox.website_url,
+        embeddedInbox.website_token,
+        embeddedInbox.channel_type,
+        embeddedInbox.provider,
+        embeddedInbox.slug,
+    ].filter(Boolean).join(" ");
+
+    return resolveKnownChannelLabel(rawPayload.channel_type || embeddedInbox.channel_type || embeddedInbox.type)
+        || resolveKnownChannelLabel(hints)
+        || cleanStoredChannel(row.canal)
+        || cleanStoredChannel(attrs.canal)
+        || "Otro";
+};
+
 const errorMessage = (error: unknown) => {
     if (error instanceof Error) return error.message;
     if (typeof error === "string") return error;
@@ -246,7 +314,7 @@ const detailRow = (row: any) => {
         ID: row.chatwoot_conversation_id || row.id,
         Nombre: row.nombre_completo || row.meta?.sender?.name || attrs.nombre_completo || "Sin nombre",
         Telefono: row.celular || row.meta?.sender?.phone_number || attrs.celular || "",
-        Canal: row.canal || attrs.canal || "Otro",
+        Canal: resolveRowChannel(row, attrs),
         Etiquetas: labels(row),
         Etapa: stage(row),
         Correo: row.correo || row.meta?.sender?.email || attrs.correo || "",

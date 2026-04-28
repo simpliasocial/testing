@@ -29,6 +29,84 @@ const asObject = (value: unknown): Record<string, any> =>
         ? value as Record<string, any>
         : {};
 
+const normalizeText = (value: unknown) =>
+    String(value || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim();
+
+const CHANNEL_ALIAS_LABELS: Array<{ label: string; tokens: string[] }> = [
+    { label: "WhatsApp", tokens: ["whatsapp", "whats app", "wa.me"] },
+    { label: "Instagram", tokens: ["instagram"] },
+    { label: "Facebook", tokens: ["facebook", "messenger"] },
+    { label: "Telegram", tokens: ["telegram", "t.me", "tg://", "cwcloudbot_bot"] },
+    { label: "TikTok", tokens: ["tiktok", "tik tok", "douyin", "simplia.social"] },
+    { label: "Sitio web", tokens: ["webwidget", "web_widget", "web widget", "website", "web site", "sitio web", "pagina web", "livechat", "live chat", "widget"] },
+];
+
+const resolveKnownChannelLabel = (value: unknown) => {
+    const normalizedValue = normalizeText(value);
+    if (!normalizedValue) return "";
+
+    const matched = CHANNEL_ALIAS_LABELS.find(({ tokens }) =>
+        tokens.some((token) => normalizedValue.includes(token))
+    );
+
+    return matched?.label || "";
+};
+
+const cleanStoredChannel = (value: unknown) => {
+    const text = String(value || "").trim();
+    const normalized = normalizeText(text);
+    return normalized && !["otro", "other", "unknown", "sin canal", "n/a", "na"].includes(normalized)
+        ? text
+        : "";
+};
+
+const channelLabelFromType = (type?: unknown, fallback?: unknown) =>
+    resolveKnownChannelLabel(type) || resolveKnownChannelLabel(fallback) || "";
+
+const resolveConversationChannel = (
+    conversation: Record<string, any>,
+    attrs: Record<string, any>,
+    inbox?: Record<string, any> | null,
+) => {
+    const embeddedInbox = asObject(conversation.inbox || conversation.channel);
+    const senderAdditional = asObject(conversation.meta?.sender?.additional_attributes);
+    const fallbackHints = [
+        attrs.canal,
+        conversation.canal,
+        conversation.channel_name,
+        conversation.source,
+        conversation.provider,
+        conversation.additional_attributes?.channel,
+        conversation.additional_attributes?.social_channel,
+        senderAdditional.channel,
+        senderAdditional.social_channel,
+        senderAdditional.provider,
+        senderAdditional.platform,
+        senderAdditional.source,
+        embeddedInbox.name,
+        embeddedInbox.website_url,
+        embeddedInbox.website_token,
+        embeddedInbox.channel_type,
+        embeddedInbox.provider,
+        embeddedInbox.slug,
+        inbox?.name,
+        inbox?.website_url,
+        inbox?.website_token,
+        inbox?.channel_type,
+        inbox?.provider,
+        inbox?.slug,
+    ].filter(Boolean).join(" ");
+
+    return channelLabelFromType(
+        conversation.channel_type || embeddedInbox.channel_type || embeddedInbox.type || inbox?.channel_type,
+        fallbackHints,
+    ) || cleanStoredChannel(attrs.canal) || null;
+};
+
 const resolveAttributeSnapshots = (conversation: Record<string, any>) => {
     const sender = conversation.meta?.sender || conversation.contact || {};
     const contactAttrs = asObject(sender.custom_attributes);
@@ -81,7 +159,7 @@ const toIsoOrNow = (value: unknown) => toIso(value) || new Date().toISOString();
 const firstArray = (...values: unknown[]) =>
     values.find((value) => Array.isArray(value)) as unknown[] | undefined;
 
-const buildConversationUpsertRow = (conversation: Record<string, any>) => {
+const buildConversationUpsertRow = (conversation: Record<string, any>, inbox?: Record<string, any> | null) => {
     if (!conversation?.id) return null;
 
     const sender = conversation.meta?.sender || conversation.contact || {};
@@ -91,6 +169,8 @@ const buildConversationUpsertRow = (conversation: Record<string, any>) => {
         resolvedAttrs: attrs,
     } = resolveAttributeSnapshots(conversation);
     const lastNonActivity = conversation.last_non_activity_message || {};
+    const canal = resolveConversationChannel(conversation, attrs, inbox);
+    const resolvedAttrs = canal ? { ...attrs, canal } : attrs;
 
     return {
         chatwoot_conversation_id: Number(conversation.id),
@@ -111,7 +191,7 @@ const buildConversationUpsertRow = (conversation: Record<string, any>) => {
         additional_attributes: conversation.additional_attributes || {},
         contact_custom_attributes: contactAttrs,
         conversation_custom_attributes: conversationAttrs,
-        custom_attributes: attrs,
+        custom_attributes: resolvedAttrs,
         meta: conversation.meta || {},
         applied_sla: conversation.applied_sla || {},
         sla_events: conversation.sla_events || [],
@@ -134,7 +214,7 @@ const buildConversationUpsertRow = (conversation: Record<string, any>) => {
             campana: attrs.campana,
             ciudad: attrs.ciudad,
             edad: attrs.edad,
-            canal: attrs.canal,
+            canal,
             agente: attrs.agente === true || attrs.agente === "true",
             score_interes: parseNumber(attrs.score_interes),
             monto_operacion: attrs.monto_operacion,
@@ -290,7 +370,24 @@ serve(async (req) => {
             if (eventError) throw eventError;
         }
 
-        const conversationUpsertRow = buildConversationUpsertRow(conversation);
+        let inboxForConversation: Record<string, any> | null = null;
+        const inboxId = Number(conversation?.inbox_id);
+        if (Number.isFinite(inboxId) && inboxId > 0) {
+            const { data: inboxRow, error: inboxError } = await supabase
+                .schema("cw")
+                .from("inboxes")
+                .select("*")
+                .eq("chatwoot_inbox_id", inboxId)
+                .maybeSingle();
+
+            if (inboxError) {
+                console.warn("Could not load inbox metadata for webhook channel resolution:", inboxError);
+            } else {
+                inboxForConversation = inboxRow;
+            }
+        }
+
+        const conversationUpsertRow = buildConversationUpsertRow(conversation, inboxForConversation);
 
         if (conversationUpsertRow) {
             const { error: conversationError } = await supabase

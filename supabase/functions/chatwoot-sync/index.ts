@@ -41,6 +41,91 @@ const asObject = (value: unknown): Record<string, any> =>
         ? value as Record<string, any>
         : {};
 
+const normalizeText = (value: unknown) =>
+    String(value || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim();
+
+const CHANNEL_ALIAS_LABELS: Array<{ label: string; tokens: string[] }> = [
+    { label: "WhatsApp", tokens: ["whatsapp", "whats app", "wa.me"] },
+    { label: "Instagram", tokens: ["instagram"] },
+    { label: "Facebook", tokens: ["facebook", "messenger"] },
+    { label: "Telegram", tokens: ["telegram", "t.me", "tg://", "cwcloudbot_bot"] },
+    { label: "TikTok", tokens: ["tiktok", "tik tok", "douyin", "simplia.social"] },
+    { label: "Sitio web", tokens: ["webwidget", "web_widget", "web widget", "website", "web site", "sitio web", "pagina web", "livechat", "live chat", "widget"] },
+];
+
+const resolveKnownChannelLabel = (value: unknown) => {
+    const normalizedValue = normalizeText(value);
+    if (!normalizedValue) return "";
+
+    const matched = CHANNEL_ALIAS_LABELS.find(({ tokens }) =>
+        tokens.some((token) => normalizedValue.includes(token))
+    );
+
+    return matched?.label || "";
+};
+
+const cleanStoredChannel = (value: unknown) => {
+    const text = String(value || "").trim();
+    const normalized = normalizeText(text);
+    return normalized && !["otro", "other", "unknown", "sin canal", "n/a", "na"].includes(normalized)
+        ? text
+        : "";
+};
+
+const channelLabelFromType = (type?: unknown, fallback?: unknown) => {
+    const resolvedFromType = resolveKnownChannelLabel(type);
+    if (resolvedFromType) return resolvedFromType;
+
+    const resolvedFromFallback = resolveKnownChannelLabel(fallback);
+    if (resolvedFromFallback) return resolvedFromFallback;
+
+    return "";
+};
+
+const resolveConversationChannel = (
+    conversation: Record<string, any>,
+    attrs: Record<string, any>,
+    inbox?: Record<string, any>,
+) => {
+    const embeddedInbox = asObject(conversation.inbox || conversation.channel);
+    const senderAdditional = asObject(conversation.meta?.sender?.additional_attributes);
+    const fallbackHints = [
+        attrs.canal,
+        conversation.canal,
+        conversation.channel_name,
+        conversation.source,
+        conversation.provider,
+        conversation.additional_attributes?.channel,
+        conversation.additional_attributes?.social_channel,
+        senderAdditional.channel,
+        senderAdditional.social_channel,
+        senderAdditional.provider,
+        senderAdditional.platform,
+        senderAdditional.source,
+        embeddedInbox.name,
+        embeddedInbox.website_url,
+        embeddedInbox.website_token,
+        embeddedInbox.channel_type,
+        embeddedInbox.provider,
+        embeddedInbox.slug,
+        inbox?.name,
+        inbox?.website_url,
+        inbox?.website_token,
+        inbox?.channel_type,
+        inbox?.provider,
+        inbox?.slug,
+    ].filter(Boolean).join(" ");
+
+    return channelLabelFromType(
+        conversation.channel_type || embeddedInbox.channel_type || embeddedInbox.type || inbox?.channel_type,
+        fallbackHints,
+    ) || cleanStoredChannel(attrs.canal) || null;
+};
+
 const resolveAttributeSnapshots = (conversation: Record<string, any>) => {
     const contactAttrs = asObject(conversation.meta?.sender?.custom_attributes);
     const conversationAttrs = asObject(conversation.custom_attributes);
@@ -173,8 +258,14 @@ serve(async (req) => {
         };
 
         try {
+            const inboxById = new Map<number, Record<string, any>>();
             const inboxes = await apiGet("/inboxes");
             if (Array.isArray(inboxes) && inboxes.length > 0) {
+                inboxes.forEach((inbox: any) => {
+                    const inboxId = Number(inbox?.id);
+                    if (Number.isFinite(inboxId)) inboxById.set(inboxId, inbox);
+                });
+
                 const inboxRows = inboxes.map((inbox: any) => ({
                     chatwoot_inbox_id: inbox.id,
                     name: inbox.name,
@@ -316,6 +407,8 @@ serve(async (req) => {
                         resolvedAttrs: attrs,
                     } = resolveAttributeSnapshots(conv);
                     const lastNonActivity = conv.last_non_activity_message || {};
+                    const canal = resolveConversationChannel(conv, attrs, inboxById.get(Number(conv.inbox_id)));
+                    const resolvedAttrs = canal ? { ...attrs, canal } : attrs;
 
                     return {
                         chatwoot_conversation_id: conv.id,
@@ -336,7 +429,7 @@ serve(async (req) => {
                         additional_attributes: conv.additional_attributes || {},
                         contact_custom_attributes: contactAttrs,
                         conversation_custom_attributes: conversationAttrs,
-                        custom_attributes: attrs,
+                        custom_attributes: resolvedAttrs,
                         meta: conv.meta || {},
                         applied_sla: conv.applied_sla || {},
                         sla_events: conv.sla_events || [],
@@ -358,7 +451,7 @@ serve(async (req) => {
                         campana: attrs.campana,
                         ciudad: attrs.ciudad,
                         edad: attrs.edad,
-                        canal: attrs.canal,
+                        canal,
                         agente: attrs.agente === true || attrs.agente === "true",
                         score_interes: parseNumber(attrs.score_interes),
                         monto_operacion: attrs.monto_operacion,

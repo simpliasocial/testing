@@ -39,7 +39,8 @@ const CHANNEL_ALIAS_LABELS: Array<{ label: string; tokens: string[] }> = [
     { label: "Instagram", tokens: ["instagram"] },
     { label: "Facebook", tokens: ["facebook", "messenger"] },
     { label: "Telegram", tokens: ["telegram", "t.me", "tg://", "cwcloudbot_bot"] },
-    { label: "TikTok", tokens: ["tiktok", "tik tok", "douyin", "simplia.social"] }
+    { label: "TikTok", tokens: ["tiktok", "tik tok", "douyin", "simplia.social"] },
+    { label: "Sitio web", tokens: ["webwidget", "web_widget", "web widget", "website", "web site", "sitio web", "pagina web", "página web", "livechat", "live chat", "widget"] }
 ];
 
 const resolveSocialChannelLabel = (value: unknown) => {
@@ -60,6 +61,7 @@ export const getInboxChannelName = (inbox?: any) =>
             inbox?.name,
             inbox?.provider,
             inbox?.slug,
+            inbox?.website_url,
             inbox?.website_token,
             inbox?.channel?.type
         ].filter(Boolean).join(" ")
