@@ -8,6 +8,19 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useAuth } from "@/context/AuthContext";
 import { Input } from "@/components/ui/input";
 import {
+    Command,
+    CommandEmpty,
+    CommandGroup,
+    CommandInput,
+    CommandItem,
+    CommandList,
+} from "@/components/ui/command";
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
+import {
     Select,
     SelectContent,
     SelectItem,
@@ -29,6 +42,7 @@ import {
 import { formatBusinessLabel, formatFieldLabel } from "@/lib/displayCopy";
 import { MinifiedConversation } from "@/services/StorageService";
 import { KPICard } from "@/components/dashboard/KPICard";
+import { cn } from "@/lib/utils";
 import {
     Bar,
     BarChart,
@@ -43,7 +57,9 @@ import {
 import {
     Activity,
     BadgeCheck,
+    Check,
     ChevronDown,
+    ChevronsUpDown,
     Gauge,
     Loader2,
     Settings2,
@@ -66,7 +82,6 @@ interface PreparedLead {
     score: number | null;
     bucket: ScoreBucket | null;
     bucketLabel: string;
-    stage: string;
     channel: string;
     campaign: string;
     owner: string;
@@ -160,15 +175,11 @@ const toAttributeOption = (definition: ChatwootAttributeDefinition): ScoreAttrib
     };
 };
 
-const STAGE_LABELS: Record<string, string> = {
-    'sale': 'Venta',
-    'appointment': 'Cita',
-    'followup': 'Seguimiento humano',
-    'sql': 'SQL',
-    'unqualified': 'Descalificado',
-    'other': 'Sin etapa'
-};
+const extractLeadLabels = (lead: any) =>
+    unique([...(lead?.resolvedLabels || []), ...(lead?.labels || [])].map(label => String(label || "")));
 
+const resolveLeadCampaign = (lead: any) =>
+    String(lead?.resolvedAttrs?.utm_campaign || lead?.resolvedAttrs?.campana || lead?.resolvedAttrs?.origen || "").trim() || "Sin campaña";
 
 const EmptyState = ({ text }: { text: string }) => (
     <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed px-4 text-center text-sm text-muted-foreground">
@@ -190,9 +201,8 @@ const LeadScoringLayer = () => {
     const { role } = useAuth();
 
     const [campaignFilter, setCampaignFilter] = useState("all");
-    const [labelFilter, setLabelFilter] = useState("all");
+    const [labelFilters, setLabelFilters] = useState<string[]>([]);
     const [ownerFilter, setOwnerFilter] = useState("all");
-    const [stageFilter, setStageFilter] = useState("all");
     const [bucketFilter, setBucketFilter] = useState("all");
     const [scoreDimension, setScoreDimension] = useState<ScoreDimension>("label");
     const [configOpen, setConfigOpen] = useState(() => !tagSettings.scoreAttributeKey);
@@ -376,9 +386,8 @@ const LeadScoringLayer = () => {
                 score,
                 bucket,
                 bucketLabel: bucket ? BUCKET_COPY[bucket].label : "Sin puntaje",
-                stage: STAGE_LABELS[lead.resolvedStage] || "Sin etapa",
                 channel: getLeadChannelName(lead, inbox),
-                campaign: String(lead.resolvedAttrs.campana || lead.resolvedAttrs.utm_campaign || "").trim() || "Sin campaña",
+                campaign: resolveLeadCampaign(lead),
                 owner: String(lead.resolvedAttrs.responsable || lead.meta?.assignee?.name || "").trim() || "Sin responsable",
                 attributeKey: activeScoreAttributeKey,
                 attributeLabel: selectedAttributeLabel
@@ -392,33 +401,39 @@ const LeadScoringLayer = () => {
     );
 
     const scoreVisibleLabels = useMemo(
-        () => unique(scorablePreparedLeads.flatMap(item => item.lead.resolvedLabels || [])),
+        () => unique(scorablePreparedLeads.flatMap(item => extractLeadLabels(item.lead))),
         [scorablePreparedLeads]
     );
 
+    const allVisibleLabels = useMemo(
+        () => unique([...actualLabels, ...preparedLeads.flatMap(item => extractLeadLabels(item.lead))]),
+        [actualLabels, preparedLeads]
+    );
+
     const filterOptions = useMemo(() => ({
-        campaigns: unique(scorablePreparedLeads.map(item => item.campaign)),
-        labels: scoreVisibleLabels,
-        owners: unique(scorablePreparedLeads.map(item => item.owner)),
-        stages: unique(scorablePreparedLeads.map(item => item.stage))
-    }), [scorablePreparedLeads, scoreVisibleLabels]);
+        campaigns: unique(preparedLeads.map(item => item.campaign)),
+        labels: allVisibleLabels,
+        owners: unique(preparedLeads.map(item => item.owner)),
+    }), [preparedLeads, allVisibleLabels]);
 
     useEffect(() => {
         if (campaignFilter !== "all" && !filterOptions.campaigns.includes(campaignFilter)) setCampaignFilter("all");
-        if (labelFilter !== "all" && !filterOptions.labels.includes(labelFilter)) setLabelFilter("all");
         if (ownerFilter !== "all" && !filterOptions.owners.includes(ownerFilter)) setOwnerFilter("all");
-        if (stageFilter !== "all" && !filterOptions.stages.includes(stageFilter)) setStageFilter("all");
-    }, [campaignFilter, labelFilter, ownerFilter, stageFilter, filterOptions]);
+        setLabelFilters((current) =>
+            current.some(label => !filterOptions.labels.includes(label))
+                ? current.filter(label => filterOptions.labels.includes(label))
+                : current
+        );
+    }, [campaignFilter, ownerFilter, filterOptions]);
 
     const visiblePreparedLeads = useMemo(() => {
         return preparedLeads.filter(item => {
             if (campaignFilter !== "all" && item.campaign !== campaignFilter) return false;
-            if (labelFilter !== "all" && !(item.lead.resolvedLabels || []).includes(labelFilter)) return false;
+            if (labelFilters.length > 0 && !extractLeadLabels(item.lead).some(label => labelFilters.includes(label))) return false;
             if (ownerFilter !== "all" && item.owner !== ownerFilter) return false;
-            if (stageFilter !== "all" && item.stage !== stageFilter) return false;
             return true;
         });
-    }, [preparedLeads, campaignFilter, labelFilter, ownerFilter, stageFilter]);
+    }, [preparedLeads, campaignFilter, labelFilters, ownerFilter]);
 
     const missingScoreCount = visiblePreparedLeads.filter(item => item.score === null).length;
 
@@ -468,8 +483,8 @@ const LeadScoringLayer = () => {
         filteredLeads.reduce((map, item) => {
             const keys = scoreDimension === "campaign"
                 ? (item.campaign !== "Sin campaña" ? [item.campaign] : [])
-                : (item.lead.labels || []).filter(label => scoreVisibleLabels.includes(label)).length > 0
-                    ? (item.lead.labels || []).filter(label => scoreVisibleLabels.includes(label))
+                : extractLeadLabels(item.lead).filter(label => scoreVisibleLabels.includes(label)).length > 0
+                    ? extractLeadLabels(item.lead).filter(label => scoreVisibleLabels.includes(label))
                     : ["Sin estado actual"];
 
             keys.forEach((key) => {
@@ -751,15 +766,14 @@ const LeadScoringLayer = () => {
                         Filtros de calidad
                     </CardTitle>
                     <CardDescription>
-                        Fecha y canal se controlan arriba. Aquí refinamos campaña, estado, responsable, etapa y nivel.
+                        Fecha y canal se controlan arriba. Aquí refinamos campaña, estado, responsable y nivel.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                         <FilterSelect label="Campaña" value={campaignFilter} onChange={setCampaignFilter} options={filterOptions.campaigns} />
-                        <FilterSelect label="Estado" value={labelFilter} onChange={setLabelFilter} options={filterOptions.labels} optionLabel={formatBusinessLabel} />
+                        <MultiFilterSelect label="Estado" values={labelFilters} onChange={setLabelFilters} options={filterOptions.labels} optionLabel={formatBusinessLabel} />
                         <FilterSelect label="Responsable" value={ownerFilter} onChange={setOwnerFilter} options={filterOptions.owners} />
-                        <FilterSelect label="Etapa" value={stageFilter} onChange={setStageFilter} options={filterOptions.stages} />
                         <FilterSelect
                             label="Nivel"
                             value={bucketFilter}
@@ -1002,6 +1016,80 @@ const FilterSelect = ({
         </Select>
     </div>
 );
+
+const MultiFilterSelect = ({
+    label,
+    values,
+    onChange,
+    options,
+    optionLabel
+}: {
+    label: string;
+    values: string[];
+    onChange: (values: string[]) => void;
+    options: string[];
+    optionLabel?: (value: string) => string;
+}) => {
+    const [open, setOpen] = useState(false);
+
+    const toggleValue = (option: string) => {
+        onChange(
+            values.includes(option)
+                ? values.filter(value => value !== option)
+                : unique([...values, option])
+        );
+    };
+
+    const summary = values.length === 0
+        ? "Todos"
+        : values.length === 1
+            ? (optionLabel ? optionLabel(values[0]) : values[0])
+            : `${values.length} seleccionados`;
+
+    return (
+        <div className="space-y-1">
+            <label className="text-xs font-semibold text-muted-foreground">{label}</label>
+            <Popover open={open} onOpenChange={setOpen}>
+                <PopoverTrigger asChild>
+                    <Button variant="outline" role="combobox" aria-expanded={open} className="h-9 w-full justify-between font-normal">
+                        <span className="truncate">{summary}</span>
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[260px] p-0" align="start">
+                    <Command>
+                        <CommandInput placeholder={`Buscar ${label.toLowerCase()}...`} />
+                        <CommandList>
+                            <CommandEmpty>No se encontraron opciones.</CommandEmpty>
+                            <CommandGroup>
+                                <CommandItem value="__all__" onSelect={() => onChange([])}>
+                                    <Checkbox checked={values.length === 0} className="pointer-events-none mr-2" />
+                                    <span>Todos</span>
+                                </CommandItem>
+                                {options.map((option) => {
+                                    const checked = values.includes(option);
+                                    const display = optionLabel ? optionLabel(option) : option;
+
+                                    return (
+                                        <CommandItem
+                                            key={option}
+                                            value={`${display} ${option}`}
+                                            onSelect={() => toggleValue(option)}
+                                        >
+                                            <Checkbox checked={checked} className="pointer-events-none mr-2" />
+                                            <span className={cn("truncate", checked && "font-medium")}>{display}</span>
+                                            {checked ? <Check className="ml-auto h-4 w-4 text-primary" /> : null}
+                                        </CommandItem>
+                                    );
+                                })}
+                            </CommandGroup>
+                        </CommandList>
+                    </Command>
+                </PopoverContent>
+            </Popover>
+        </div>
+    );
+};
 
 
 

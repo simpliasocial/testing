@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { chatwootService } from '@/services/ChatwootService';
 import { SupabaseService } from '@/services/SupabaseService';
 import { useDashboardContext } from '@/context/DashboardDataContext';
@@ -11,8 +11,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
     AlertCircle,
-    ChevronLeft,
-    ChevronRight,
     Clock,
     ExternalLink,
     Loader2,
@@ -40,9 +38,12 @@ import {
     normalize
 } from '@/lib/leadDisplay';
 import { formatBusinessLabel } from '@/lib/displayCopy';
+import {
+    buildWindowedListState,
+    WINDOWED_LIST_MAX_RENDERED_ROWS,
+    WINDOWED_TABLE_MAX_HEIGHT_PX
+} from '@/lib/windowedList';
 import { toast } from 'sonner';
-
-const PAGE_SIZE = 15;
 
 const dayStartUnix = (date?: Date) => {
     if (!date) return 0;
@@ -70,17 +71,12 @@ const ChatwootPage = () => {
         historicalError
     } = useDashboardContext();
 
-    const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
     const [viewingConv, setViewingConv] = useState<MinifiedConversation | null>(null);
     const [messages, setMessages] = useState<any[]>([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
 
     const selectedInboxKey = (globalFilters.selectedInboxes || []).join(',');
-
-    useEffect(() => {
-        setPage(1);
-    }, [search, globalFilters.startDate, globalFilters.endDate, selectedInboxKey]);
 
     const inboxMap = useMemo(
         () => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])),
@@ -131,12 +127,10 @@ const ChatwootPage = () => {
             .sort((a, b) => (b.timestamp || b.created_at || 0) - (a.timestamp || a.created_at || 0));
     }, [conversations, globalFilters.startDate, globalFilters.endDate, selectedInboxKey, search, inboxMap]);
 
-    const totalPages = Math.max(1, Math.ceil(filteredConversations.length / PAGE_SIZE));
-    const visibleConversations = filteredConversations.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-    useEffect(() => {
-        if (page > totalPages) setPage(totalPages);
-    }, [page, totalPages]);
+    const windowedConversations = useMemo(
+        () => buildWindowedListState(filteredConversations),
+        [filteredConversations]
+    );
 
     const openInChatwoot = (conversationId: number) => {
         window.open(getChatwootUrl(conversationId), '_blank');
@@ -203,7 +197,10 @@ const ChatwootPage = () => {
                                 Listado de Conversaciones
                             </CardTitle>
                             <CardDescription>
-                                Total encontrado: <span className="font-bold text-foreground">{filteredConversations.length}</span>
+                                Total encontrado: <span className="font-bold text-foreground">{windowedConversations.total}</span>
+                                {windowedConversations.isTrimmed && (
+                                    <span> · viendo las {WINDOWED_LIST_MAX_RENDERED_ROWS} más recientes</span>
+                                )}
                             </CardDescription>
                             {(liveError || historicalError || error) && (
                                 <div className="mt-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
@@ -239,10 +236,13 @@ const ChatwootPage = () => {
                     ) : (
                         <div className="space-y-4">
                             <div className="rounded-xl border border-border overflow-hidden bg-background shadow-sm">
-                                <div className="overflow-x-auto">
+                                <div
+                                    className={windowedConversations.hasVerticalScroll ? 'overflow-auto overscroll-contain' : 'overflow-x-auto'}
+                                    style={windowedConversations.hasVerticalScroll ? { maxHeight: `${WINDOWED_TABLE_MAX_HEIGHT_PX}px` } : undefined}
+                                >
                                     <table className="w-full min-w-[1180px] text-sm text-left border-collapse">
-                                        <thead>
-                                            <tr className="bg-muted/30 text-muted-foreground uppercase text-[10px] tracking-wider font-bold border-b">
+                                        <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur supports-[backdrop-filter]:bg-muted/80">
+                                            <tr className="text-muted-foreground uppercase text-[10px] tracking-wider font-bold border-b">
                                                 <th className="px-6 py-4">Nombre del lead</th>
                                                 <th className="px-6 py-4">Canal</th>
                                                 <th className="px-6 py-4">Numero</th>
@@ -252,7 +252,7 @@ const ChatwootPage = () => {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-border">
-                                            {visibleConversations.length === 0 ? (
+                                            {windowedConversations.visibleItems.length === 0 ? (
                                                 <tr>
                                                     <td colSpan={6} className="px-6 py-24 text-center">
                                                         <div className="flex flex-col items-center gap-2 opacity-40">
@@ -262,7 +262,7 @@ const ChatwootPage = () => {
                                                     </td>
                                                 </tr>
                                             ) : (
-                                                visibleConversations.map((lead) => {
+                                                windowedConversations.visibleItems.map((lead) => {
                                                     const inbox = getInbox(lead);
                                                     const displayName = getLeadName(lead);
                                                     const channelDisplay = getLeadChannelName(lead, inbox);
@@ -346,32 +346,6 @@ const ChatwootPage = () => {
                                             )}
                                         </tbody>
                                     </table>
-                                </div>
-                            </div>
-
-                            <div className="flex items-center justify-between pt-4 border-t">
-                                <p className="text-[10px] text-muted-foreground font-medium">
-                                    Pagina {page} de {totalPages}
-                                </p>
-                                <div className="flex gap-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-8 px-3 text-xs rounded-lg"
-                                        onClick={() => setPage(current => Math.max(1, current - 1))}
-                                        disabled={page === 1 || loading}
-                                    >
-                                        <ChevronLeft className="h-3.5 w-3.5 mr-1" /> Anterior
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-8 px-3 text-xs rounded-lg"
-                                        onClick={() => setPage(current => Math.min(totalPages, current + 1))}
-                                        disabled={page >= totalPages || loading}
-                                    >
-                                        Siguiente <ChevronRight className="h-3.5 w-3.5 ml-1" />
-                                    </Button>
                                 </div>
                             </div>
                         </div>

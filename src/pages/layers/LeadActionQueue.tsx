@@ -104,6 +104,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
+import {
+    buildWindowedListState,
+    WINDOWED_LIST_MAX_RENDERED_ROWS,
+    WINDOWED_TABLE_MAX_HEIGHT_PX
+} from "@/lib/windowedList";
 
 type QueueLead = any;
 type AppointmentFormValue = string | boolean;
@@ -1304,177 +1309,190 @@ const LeadActionQueue = () => {
         onPrimaryAction: (lead: QueueLead) => void;
         searchValue: string;
         onSearchChange: (value: string) => void;
-    }) => (
-        <Card className="border-primary/20 shadow-sm">
-            <CardHeader className="pb-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                        <CardTitle className="flex items-center gap-2 text-xl">
-                            <ListTodo className="h-6 w-6 text-primary" />
-                            {title}
-                        </CardTitle>
-                        <CardDescription className="mt-2 space-y-2">
-                            <span className="block">{description}</span>
-                            <span className="flex flex-wrap items-center gap-2">
-                                {configuredTags.length > 0 ? (
-                                    configuredTags.map((label) => (
-                                        <Badge key={`${title}-${label}`} variant="outline">
-                                            {formatBusinessLabel(label)}
-                                        </Badge>
-                                    ))
-                                ) : (
-                                    <Badge variant="outline">Sin estados configurados</Badge>
-                                )}
-                            </span>
-                        </CardDescription>
-                    </div>
-                    <div className="flex flex-col gap-3 items-end w-full lg:w-auto">
-                        <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground w-fit">
-                            {leads.length} lead{leads.length === 1 ? "" : "s"} filtrados
-                        </div>
-                        <div className="relative w-full sm:w-64 lg:w-80">
-                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                className="pl-9 h-9 text-sm"
-                                placeholder={`Buscar en ${title.toLowerCase()}...`}
-                                value={searchValue}
-                                onChange={(e) => onSearchChange(e.target.value)}
-                            />
-                        </div>
-                    </div>
-                </div>
-            </CardHeader>
-            <CardContent>
-                <div className="relative overflow-x-auto border rounded-xl overflow-hidden">
-                    <table className="w-full min-w-[1180px] text-sm text-left">
-                        <thead className="text-[10px] text-muted-foreground uppercase bg-muted/30 border-b font-bold tracking-wider">
-                            <tr>
-                                <th className="px-6 py-4">Nombre del lead</th>
-                                <th className="px-6 py-4">Canal</th>
-                                <th className="px-6 py-4">Número</th>
-                                <th className="px-6 py-4">Historial de mensajes</th>
-                                <th className="px-6 py-4">URL</th>
-                                <th className="px-6 py-4">Cambiar estado</th>
-                                <th className="px-6 py-4 text-right">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-muted/20">
-                            {leads.map((lead: QueueLead) => {
-                                const displayName = getLeadName(lead);
-                                const channelDisplay = getChannelName(lead);
-                                const phoneDisplay = getLeadPhone({ ...lead, channel: channelDisplay }, channelDisplay);
-                                const lastMessage = getMessagePreview(lead);
-                                const lastMessageDate = formatDateTime(getMessageTimestamp(lead));
-                                const externalUrl = getLeadExternalUrl(lead, channelDisplay);
-                                const ActionIcon = primaryActionIcon;
+    }) => {
+        const windowedLeads = buildWindowedListState(leads);
+        const filteredLabel = `${windowedLeads.total} lead${windowedLeads.total === 1 ? "" : "s"} filtrado${windowedLeads.total === 1 ? "" : "s"}`;
+        const summaryLabel = windowedLeads.isTrimmed
+            ? `${filteredLabel} · viendo los ${WINDOWED_LIST_MAX_RENDERED_ROWS} más recientes`
+            : filteredLabel;
 
-                                return (
-                                    <tr key={`${title}-${lead.id}`} className="bg-background hover:bg-muted/10 transition-colors">
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs uppercase">
-                                                    {getInitials(displayName)}
-                                                </div>
-                                                <div className="flex min-w-0 flex-col">
-                                                    <span className="font-semibold text-foreground truncate">{displayName}</span>
-                                                    <span className="text-[10px] text-muted-foreground">ID {lead.id}</span>
-                                                    <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                                                        <UserCircle className="w-3 h-3" />
-                                                        {lead.owner}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <Badge variant="secondary" className="px-2 py-0 text-[10px] uppercase font-bold">
-                                                {channelDisplay}
+        return (
+            <Card className="border-primary/20 shadow-sm">
+                <CardHeader className="pb-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <CardTitle className="flex items-center gap-2 text-xl">
+                                <ListTodo className="h-6 w-6 text-primary" />
+                                {title}
+                            </CardTitle>
+                            <CardDescription className="mt-2 space-y-2">
+                                <span className="block">{description}</span>
+                                <span className="flex flex-wrap items-center gap-2">
+                                    {configuredTags.length > 0 ? (
+                                        configuredTags.map((label) => (
+                                            <Badge key={`${title}-${label}`} variant="outline">
+                                                {formatBusinessLabel(label)}
                                             </Badge>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex flex-col text-xs gap-1">
-                                                <span className="flex items-center gap-1.5 text-muted-foreground font-medium italic">
-                                                    <Phone className="w-3 h-3" />
-                                                    {phoneDisplay || "Sin número"}
-                                                </span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <button
-                                                type="button"
-                                                onClick={() => handleViewHistory(lead)}
-                                                className="flex max-w-[300px] flex-col text-left hover:text-primary"
-                                            >
-                                                <span className="text-xs truncate text-foreground font-medium">
-                                                    {lastMessage}
-                                                </span>
-                                                <span className="text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
-                                                    <Clock className="w-3 h-3" />
-                                                    {lastMessageDate}
-                                                </span>
-                                                <span className="text-[10px] text-primary mt-1">Ver historial</span>
-                                            </button>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            {externalUrl ? (
-                                                <a href={externalUrl} target="_blank" rel="noreferrer">
-                                                    <Button size="sm" variant="outline" className="h-8 gap-2 text-xs">
-                                                        <ExternalLink className="h-3.5 w-3.5" />
-                                                        Abrir URL
-                                                    </Button>
-                                                </a>
-                                            ) : (
-                                                <span className="text-xs text-muted-foreground">Sin URL</span>
-                                            )}
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
-                                                className="h-8 gap-2 text-xs border-primary/30 text-primary hover:bg-primary/5"
-                                                onClick={() => handleOpenTagChange(lead)}
-                                            >
-                                                <RefreshCw className="h-3.5 w-3.5" />
-                                                Cambiar estado
-                                            </Button>
-                                        </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <div className="flex justify-end gap-2">
-                                                <Button
-                                                    size="sm"
-                                                    variant="outline"
-                                                    className={`h-8 gap-2 text-xs ${primaryActionClassName}`}
-                                                    onClick={() => onPrimaryAction(lead)}
-                                                >
-                                                    <ActionIcon className="h-3.5 w-3.5" />
-                                                    {primaryActionLabel}
-                                                </Button>
-                                                <a href={getChatwootUrl(lead.id)} target="_blank" rel="noreferrer">
-                                                    <Button size="sm" variant="ghost" className="h-8 gap-2 px-2 text-xs text-muted-foreground hover:text-primary">
-                                                        <ExternalLink className="h-4 w-4" />
-                                                        Abrir conversación
-                                                    </Button>
-                                                </a>
-                                            </div>
-                                        </td>
+                                        ))
+                                    ) : (
+                                        <Badge variant="outline">Sin estados configurados</Badge>
+                                    )}
+                                </span>
+                            </CardDescription>
+                        </div>
+                        <div className="flex flex-col gap-3 items-end w-full lg:w-auto">
+                            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground w-fit">
+                                {summaryLabel}
+                            </div>
+                            <div className="relative w-full sm:w-64 lg:w-80">
+                                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                    className="pl-9 h-9 text-sm"
+                                    placeholder={`Buscar en ${title.toLowerCase()}...`}
+                                    value={searchValue}
+                                    onChange={(e) => onSearchChange(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div className="relative rounded-xl border overflow-hidden bg-background">
+                        <div
+                            className={windowedLeads.hasVerticalScroll ? "overflow-auto overscroll-contain" : "overflow-x-auto"}
+                            style={windowedLeads.hasVerticalScroll ? { maxHeight: `${WINDOWED_TABLE_MAX_HEIGHT_PX}px` } : undefined}
+                        >
+                            <table className="w-full min-w-[1180px] text-sm text-left">
+                                <thead className="sticky top-0 z-10 border-b bg-muted/95 text-[10px] text-muted-foreground uppercase font-bold tracking-wider backdrop-blur supports-[backdrop-filter]:bg-muted/80">
+                                    <tr>
+                                        <th className="px-6 py-4">Nombre del lead</th>
+                                        <th className="px-6 py-4">Canal</th>
+                                        <th className="px-6 py-4">Número</th>
+                                        <th className="px-6 py-4">Historial de mensajes</th>
+                                        <th className="px-6 py-4">URL</th>
+                                        <th className="px-6 py-4">Cambiar estado</th>
+                                        <th className="px-6 py-4 text-right">Acciones</th>
                                     </tr>
-                                );
-                            })}
-                            {leads.length === 0 && (
-                                <tr>
-                                    <td colSpan={7} className="px-6 py-20 text-center">
-                                        <div className="flex flex-col items-center gap-2 opacity-40">
-                                            <CheckCircle2 className="h-12 w-12 text-muted-foreground" />
-                                            <span className="text-sm italic font-medium">{getEmptyQueueMessage(title, configuredTags)}</span>
-                                        </div>
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </CardContent>
-        </Card>
-    );
+                                </thead>
+                                <tbody className="divide-y divide-muted/20">
+                                    {windowedLeads.visibleItems.map((lead: QueueLead) => {
+                                        const displayName = getLeadName(lead);
+                                        const channelDisplay = getChannelName(lead);
+                                        const phoneDisplay = getLeadPhone({ ...lead, channel: channelDisplay }, channelDisplay);
+                                        const lastMessage = getMessagePreview(lead);
+                                        const lastMessageDate = formatDateTime(getMessageTimestamp(lead));
+                                        const externalUrl = getLeadExternalUrl(lead, channelDisplay);
+                                        const ActionIcon = primaryActionIcon;
+
+                                        return (
+                                            <tr key={`${title}-${lead.id}`} className="bg-background hover:bg-muted/10 transition-colors">
+                                                <td className="px-6 py-4">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs uppercase">
+                                                            {getInitials(displayName)}
+                                                        </div>
+                                                        <div className="flex min-w-0 flex-col">
+                                                            <span className="font-semibold text-foreground truncate">{displayName}</span>
+                                                            <span className="text-[10px] text-muted-foreground">ID {lead.id}</span>
+                                                            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                                                <UserCircle className="w-3 h-3" />
+                                                                {lead.owner}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <Badge variant="secondary" className="px-2 py-0 text-[10px] uppercase font-bold">
+                                                        {channelDisplay}
+                                                    </Badge>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <div className="flex flex-col text-xs gap-1">
+                                                        <span className="flex items-center gap-1.5 text-muted-foreground font-medium italic">
+                                                            <Phone className="w-3 h-3" />
+                                                            {phoneDisplay || "Sin número"}
+                                                        </span>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleViewHistory(lead)}
+                                                        className="flex max-w-[300px] flex-col text-left hover:text-primary"
+                                                    >
+                                                        <span className="text-xs truncate text-foreground font-medium">
+                                                            {lastMessage}
+                                                        </span>
+                                                        <span className="text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
+                                                            <Clock className="w-3 h-3" />
+                                                            {lastMessageDate}
+                                                        </span>
+                                                        <span className="text-[10px] text-primary mt-1">Ver historial</span>
+                                                    </button>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    {externalUrl ? (
+                                                        <a href={externalUrl} target="_blank" rel="noreferrer">
+                                                            <Button size="sm" variant="outline" className="h-8 gap-2 text-xs">
+                                                                <ExternalLink className="h-3.5 w-3.5" />
+                                                                Abrir URL
+                                                            </Button>
+                                                        </a>
+                                                    ) : (
+                                                        <span className="text-xs text-muted-foreground">Sin URL</span>
+                                                    )}
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        className="h-8 gap-2 text-xs border-primary/30 text-primary hover:bg-primary/5"
+                                                        onClick={() => handleOpenTagChange(lead)}
+                                                    >
+                                                        <RefreshCw className="h-3.5 w-3.5" />
+                                                        Cambiar estado
+                                                    </Button>
+                                                </td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <div className="flex justify-end gap-2">
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            className={`h-8 gap-2 text-xs ${primaryActionClassName}`}
+                                                            onClick={() => onPrimaryAction(lead)}
+                                                        >
+                                                            <ActionIcon className="h-3.5 w-3.5" />
+                                                            {primaryActionLabel}
+                                                        </Button>
+                                                        <a href={getChatwootUrl(lead.id)} target="_blank" rel="noreferrer">
+                                                            <Button size="sm" variant="ghost" className="h-8 gap-2 px-2 text-xs text-muted-foreground hover:text-primary">
+                                                                <ExternalLink className="h-4 w-4" />
+                                                                Abrir conversación
+                                                            </Button>
+                                                        </a>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                    {windowedLeads.visibleItems.length === 0 && (
+                                        <tr>
+                                            <td colSpan={7} className="px-6 py-20 text-center">
+                                                <div className="flex flex-col items-center gap-2 opacity-40">
+                                                    <CheckCircle2 className="h-12 w-12 text-muted-foreground" />
+                                                    <span className="text-sm italic font-medium">{getEmptyQueueMessage(title, configuredTags)}</span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        );
+    };
 
     if (loading) {
         return (

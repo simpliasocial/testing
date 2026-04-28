@@ -100,21 +100,19 @@ const FunnelLayer = () => {
                         <CardContent>
                             <div className="h-[400px] w-full">
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <FunnelChart>
+                                    <FunnelChart margin={{ top: 12, right: 140, bottom: 12, left: 12 }}>
                                         <RechartsTooltip
                                             contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                                         />
                                         <Funnel
                                             dataKey="value"
-                                            data={
-                                                [
-                                                    { label: "Total Procesados", value: kpis.totalLeads, color: "#64748b" },
-                                                    ...(historicalFunnelData || [])
-                                                ]
-                                            }
+                                            data={[
+                                                { label: "Total Procesados", value: kpis.totalLeads, color: "#64748b" },
+                                                ...(historicalFunnelData || [])
+                                            ]}
                                             isAnimationActive
                                         >
-                                            <LabelList position="right" fill="#334155" stroke="none" dataKey="label" offset={10} />
+                                            <LabelList position="right" fill="#334155" stroke="none" dataKey="label" offset={12} />
                                             <LabelList position="center" fill="#fff" stroke="none" dataKey="value" style={{ fontWeight: 'bold' }} />
                                             {[...Array(4)].map((_, index) => (
                                                 <Cell key={`cell-${index}`} fill={index === 0 ? "#64748b" : historicalFunnelData?.[index - 1]?.color || "#000"} />

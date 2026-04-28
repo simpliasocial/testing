@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { Badge } from "@/components/ui/badge";
@@ -65,14 +65,32 @@ const OperationalEfficiency = () => {
 
     const [trafficEvents, setTrafficEvents] = useState<IncomingMessageTrafficEvent[]>([]);
     const [trafficLoading, setTrafficLoading] = useState(false);
+    const [trafficRefreshing, setTrafficRefreshing] = useState(false);
     const [trafficError, setTrafficError] = useState<string | null>(null);
+    const [trafficHasLoaded, setTrafficHasLoaded] = useState(false);
+    const trafficHasLoadedRef = useRef(false);
+    const lastTrafficFilterKeyRef = useRef("");
 
 
     useEffect(() => {
         if (!globalFilters.startDate) return;
 
         const controller = new AbortController();
-        setTrafficLoading(true);
+        const trafficFilterKey = [
+            globalFilters.startDate?.getTime() || 0,
+            globalFilters.endDate?.getTime() || globalFilters.startDate?.getTime() || 0,
+            (globalFilters.selectedInboxes || []).join(",")
+        ].join("|");
+        const isFilterChange = lastTrafficFilterKeyRef.current !== trafficFilterKey;
+        const shouldBlockChart = !trafficHasLoadedRef.current || isFilterChange;
+
+        lastTrafficFilterKeyRef.current = trafficFilterKey;
+        if (isFilterChange && trafficHasLoadedRef.current) {
+            trafficHasLoadedRef.current = false;
+            setTrafficHasLoaded(false);
+        }
+        setTrafficLoading(shouldBlockChart);
+        setTrafficRefreshing(!shouldBlockChart);
         setTrafficError(null);
 
         HybridDashboardService.fetchHybridIncomingMessageEvents({
@@ -82,17 +100,31 @@ const OperationalEfficiency = () => {
             signal: controller.signal
         })
             .then((events) => {
-                if (!controller.signal.aborted) setTrafficEvents(events);
+                if (!controller.signal.aborted) {
+                    setTrafficEvents(events);
+                    setTrafficError(null);
+                    if (!trafficHasLoadedRef.current) {
+                        trafficHasLoadedRef.current = true;
+                        setTrafficHasLoaded(true);
+                    }
+                }
             })
             .catch((err) => {
                 if (!controller.signal.aborted) {
                     console.error("Error loading incoming traffic:", err);
-                    setTrafficEvents([]);
-                    setTrafficError("No se pudo cargar el trafico de mensajes entrantes.");
+                    if (shouldBlockChart) {
+                        setTrafficEvents([]);
+                        setTrafficError("No se pudo cargar el trafico de mensajes entrantes.");
+                    } else {
+                        setTrafficError("No se pudo actualizar el trafico. Se mantiene la ultima vista disponible.");
+                    }
                 }
             })
             .finally(() => {
-                if (!controller.signal.aborted) setTrafficLoading(false);
+                if (!controller.signal.aborted) {
+                    setTrafficLoading(false);
+                    setTrafficRefreshing(false);
+                }
             });
 
         return () => controller.abort();
@@ -301,6 +333,7 @@ const OperationalEfficiency = () => {
                                 <Badge variant="outline">Rango: {startLabel} - {endLabel}</Badge>
                                 <Badge variant="outline">Canal: {selectedChannelLabel}</Badge>
                                 <Badge variant="secondary">{GUAYAQUIL_TIMEZONE}</Badge>
+                                {trafficRefreshing && <Badge variant="outline">Actualizando…</Badge>}
                             </div>
                         </div>
                     </CardHeader>
@@ -310,94 +343,102 @@ const OperationalEfficiency = () => {
                                 <Loader2 className="h-8 w-8 animate-spin text-primary/40" />
                                 <p className="text-sm text-muted-foreground">Calculando mapa de calor...</p>
                             </div>
-                        ) : trafficError ? (
+                        ) : trafficError && !trafficHasLoaded ? (
                             <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                                 <AlertCircle className="h-4 w-4" />
                                 {trafficError}
                             </div>
                         ) : (
-                            <div className="overflow-x-auto">
-                                <div className="min-w-[900px] pb-2 pt-2">
-                                    <div className="flex">
-                                        {/* Day labels */}
-                                        <div className="flex flex-col justify-between py-1 pr-6 w-16 text-[11px] font-bold text-muted-foreground uppercase">
-                                            {[1, 2, 3, 4, 5, 6, 0].map(dayIdx => (
-                                                <div key={dayIdx} className="h-9 flex items-center">
-                                                    {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][dayIdx]}
-                                                </div>
-                                            ))}
-                                        </div>
-
-                                        <div className="flex-1">
-                                            {/* Heat grid */}
-                                            <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(24, 1fr)' }}>
-                                                {[1, 2, 3, 4, 5, 6, 0].map(dayIdx => (
-                                                    <div key={`row-${dayIdx}`} className="contents">
-                                                        {Array.from({ length: 24 }).map((_, hour) => {
-                                                            const val = heatmapData[dayIdx][hour];
-                                                            const intensity = val > 0 ? (val / maxHeatmapValue) : 0;
-                                                            return (
-                                                                <ShadcnTooltip key={`cell-${dayIdx}-${hour}`}>
-                                                                    <TooltipTrigger asChild>
-                                                                        <div
-                                                                            className="h-9 rounded-sm transition-all hover:ring-2 hover:ring-orange-500/40 hover:z-10 cursor-default"
-                                                                            style={{
-                                                                                backgroundColor: val === 0
-                                                                                    ? 'rgba(241, 245, 249, 0.4)'
-                                                                                    : `rgba(245, 158, 11, ${0.15 + intensity * 0.85})` // Amber/Orange gradient matching "Fire" heatmap
-                                                                            }}
-                                                                        />
-                                                                    </TooltipTrigger>
-                                                                    <TooltipContent className="bg-popover border-border animate-in zoom-in-95 duration-100">
-                                                                        <p className="text-[10px] font-bold uppercase text-muted-foreground">
-                                                                            {['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][dayIdx]}
-                                                                        </p>
-                                                                        <p className="text-sm font-semibold">
-                                                                            {hour.toString().padStart(2, '0')}:00 — {intensity > 0.7 ? 'Alto tráfico' : intensity > 0.3 ? 'Tráfico medio' : val > 0 ? 'Tráfico bajo' : 'Sin actividad'}
-                                                                        </p>
-                                                                    </TooltipContent>
-                                                                </ShadcnTooltip>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                ))}
-                                            </div>
-
-                                            {/* Hour labels X axis */}
-                                            <div className="grid gap-1.5 mt-3" style={{ gridTemplateColumns: 'repeat(24, 1fr)' }}>
-                                                {Array.from({ length: 24 }).map((_, hour) => (
-                                                    <div key={`hour-${hour}`} className="text-[10px] text-muted-foreground text-center font-bold">
-                                                        {hour % 2 === 0 ? (hour === 0 ? '12' : hour === 12 ? '12' : hour > 12 ? `${hour - 12}` : `${hour}`) : ''}
-                                                    </div>
-                                                ))}
-                                            </div>
-
-                                            {/* AM/PM */}
-                                            <div className="flex mt-2 items-center text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em]">
-                                                <div className="flex-1 flex justify-center border-t border-muted-foreground/20 pt-2 mr-0.5">AM</div>
-                                                <div className="flex-1 flex justify-center border-t border-muted-foreground/20 pt-2 ml-0.5">PM</div>
-                                            </div>
-                                        </div>
+                            <>
+                                {trafficError && (
+                                    <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                        <AlertCircle className="h-4 w-4" />
+                                        {trafficError}
                                     </div>
-
-                                    {/* Leyenda */}
-                                    <div className="flex justify-center pt-8">
-                                        <div className="flex items-center gap-3">
-                                            <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Menor tráfico</span>
-                                            <div className="flex gap-1.5 h-3">
-                                                {[0.2, 0.4, 0.6, 0.8, 1].map((lvl) => (
-                                                    <div
-                                                        key={lvl}
-                                                        className="w-12 rounded-full"
-                                                        style={{ backgroundColor: `rgba(245, 158, 11, ${0.15 + lvl * 0.85})` }}
-                                                    />
+                                )}
+                                <div className="overflow-x-auto">
+                                    <div className="min-w-[900px] pb-2 pt-2">
+                                        <div className="flex">
+                                            {/* Day labels */}
+                                            <div className="flex flex-col justify-between py-1 pr-6 w-16 text-[11px] font-bold text-muted-foreground uppercase">
+                                                {[1, 2, 3, 4, 5, 6, 0].map(dayIdx => (
+                                                    <div key={dayIdx} className="h-9 flex items-center">
+                                                        {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][dayIdx]}
+                                                    </div>
                                                 ))}
                                             </div>
-                                            <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Mayor tráfico</span>
+
+                                            <div className="flex-1">
+                                                {/* Heat grid */}
+                                                <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(24, 1fr)' }}>
+                                                    {[1, 2, 3, 4, 5, 6, 0].map(dayIdx => (
+                                                        <div key={`row-${dayIdx}`} className="contents">
+                                                            {Array.from({ length: 24 }).map((_, hour) => {
+                                                                const val = heatmapData[dayIdx][hour];
+                                                                const intensity = val > 0 ? (val / maxHeatmapValue) : 0;
+                                                                return (
+                                                                    <ShadcnTooltip key={`cell-${dayIdx}-${hour}`}>
+                                                                        <TooltipTrigger asChild>
+                                                                            <div
+                                                                                className="h-9 rounded-sm transition-all hover:ring-2 hover:ring-orange-500/40 hover:z-10 cursor-default"
+                                                                                style={{
+                                                                                    backgroundColor: val === 0
+                                                                                        ? 'rgba(241, 245, 249, 0.4)'
+                                                                                        : `rgba(245, 158, 11, ${0.15 + intensity * 0.85})` // Amber/Orange gradient matching "Fire" heatmap
+                                                                                }}
+                                                                            />
+                                                                        </TooltipTrigger>
+                                                                        <TooltipContent className="bg-popover border-border animate-in zoom-in-95 duration-100">
+                                                                            <p className="text-[10px] font-bold uppercase text-muted-foreground">
+                                                                                {['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][dayIdx]}
+                                                                            </p>
+                                                                            <p className="text-sm font-semibold">
+                                                                                {hour.toString().padStart(2, '0')}:00 — {intensity > 0.7 ? 'Alto tráfico' : intensity > 0.3 ? 'Tráfico medio' : val > 0 ? 'Tráfico bajo' : 'Sin actividad'}
+                                                                            </p>
+                                                                        </TooltipContent>
+                                                                    </ShadcnTooltip>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    ))}
+                                                </div>
+
+                                                {/* Hour labels X axis */}
+                                                <div className="grid gap-1.5 mt-3" style={{ gridTemplateColumns: 'repeat(24, 1fr)' }}>
+                                                    {Array.from({ length: 24 }).map((_, hour) => (
+                                                        <div key={`hour-${hour}`} className="text-[10px] text-muted-foreground text-center font-bold">
+                                                            {hour % 2 === 0 ? (hour === 0 ? '12' : hour === 12 ? '12' : hour > 12 ? `${hour - 12}` : `${hour}`) : ''}
+                                                        </div>
+                                                    ))}
+                                                </div>
+
+                                                {/* AM/PM */}
+                                                <div className="flex mt-2 items-center text-[10px] text-muted-foreground font-bold uppercase tracking-[0.2em]">
+                                                    <div className="flex-1 flex justify-center border-t border-muted-foreground/20 pt-2 mr-0.5">AM</div>
+                                                    <div className="flex-1 flex justify-center border-t border-muted-foreground/20 pt-2 ml-0.5">PM</div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Leyenda */}
+                                        <div className="flex justify-center pt-8">
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Menor tráfico</span>
+                                                <div className="flex gap-1.5 h-3">
+                                                    {[0.2, 0.4, 0.6, 0.8, 1].map((lvl) => (
+                                                        <div
+                                                            key={lvl}
+                                                            className="w-12 rounded-full"
+                                                            style={{ backgroundColor: `rgba(245, 158, 11, ${0.15 + lvl * 0.85})` }}
+                                                        />
+                                                    ))}
+                                                </div>
+                                                <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Mayor tráfico</span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
+                            </>
                         )}
                     </CardContent>
                 </Card>
