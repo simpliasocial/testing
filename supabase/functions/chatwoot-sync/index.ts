@@ -7,7 +7,6 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const CHATWOOT_PAGE_SIZE = 15;
 const MAX_CHATWOOT_PAGES = 200;
 
 const toIso = (value: unknown) => {
@@ -185,6 +184,55 @@ const labelDelta = (previousLabels: unknown, nextLabels: unknown) => {
     };
 };
 
+const TRACKED_COMMERCIAL_ATTRIBUTE_KEYS = [
+    "monto_operacion",
+    "fecha_monto_operacion",
+    "score_interes",
+    "score",
+    "lead_score",
+    "puntaje",
+    "responsable",
+    "campana",
+    "utm_campaign",
+    "business_stage",
+];
+
+const emptyToNull = (value: unknown) =>
+    value === undefined || value === null || value === "" ? null : value;
+
+const stableJson = (value: unknown) => JSON.stringify(value ?? null);
+
+const buildAttributeHistoryRows = (
+    conversationId: number,
+    previousAttrs: Record<string, any>,
+    nextAttrs: Record<string, any>,
+    changedAt: string,
+    changeSource: "sync" | "webhook" | "repair" | "manual",
+) => TRACKED_COMMERCIAL_ATTRIBUTE_KEYS
+    .map((attributeKey) => {
+        const oldValue = emptyToNull(previousAttrs?.[attributeKey]);
+        const newValue = emptyToNull(nextAttrs?.[attributeKey]);
+        if (stableJson(oldValue) === stableJson(newValue)) return null;
+
+        return {
+            chatwoot_conversation_id: conversationId,
+            attribute_key: attributeKey,
+            old_value: oldValue,
+            new_value: newValue,
+            changed_at: changedAt,
+            change_source: changeSource,
+            event_key: [
+                changeSource,
+                conversationId,
+                attributeKey,
+                changedAt,
+                stableJson(oldValue),
+                stableJson(newValue),
+            ].join(":"),
+        };
+    })
+    .filter(Boolean);
+
 serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders });
@@ -253,6 +301,7 @@ serve(async (req) => {
             contacts: 0,
             conversations: 0,
             label_events: 0,
+            attribute_events: 0,
             messages: 0,
             pages: 0,
         };
@@ -292,6 +341,7 @@ serve(async (req) => {
             }
 
             let page = 1;
+            const seenConversationIds = new Set<number>();
             while (page <= maxPages) {
                 const conversations = await apiGet("/conversations", {
                     page,
@@ -306,17 +356,22 @@ serve(async (req) => {
                 stats.pages += 1;
 
                 const conversationIds = conversations.map((conv: any) => Number(conv.id)).filter(Boolean);
+                const newConversationIds = conversationIds.filter((conversationId: number) => !seenConversationIds.has(conversationId));
+                conversationIds.forEach((conversationId: number) => seenConversationIds.add(conversationId));
                 const existingLabels = new Map<number, string[]>();
+                const existingRowsById = new Map<number, Record<string, any>>();
                 if (conversationIds.length > 0) {
                     const { data: existingRows, error: existingError } = await supabase
                         .schema("cw")
                         .from("conversations_current")
-                        .select("chatwoot_conversation_id, labels")
+                        .select("chatwoot_conversation_id, labels, custom_attributes, conversation_custom_attributes, contact_custom_attributes")
                         .in("chatwoot_conversation_id", conversationIds);
 
                     if (existingError) throw existingError;
                     (existingRows || []).forEach((row: any) => {
-                        existingLabels.set(Number(row.chatwoot_conversation_id), normalizeLabels(row.labels));
+                        const conversationId = Number(row.chatwoot_conversation_id);
+                        existingLabels.set(conversationId, normalizeLabels(row.labels));
+                        existingRowsById.set(conversationId, row);
                     });
                 }
 
@@ -425,7 +480,7 @@ serve(async (req) => {
                         snoozed_until: toIso(conv.snoozed_until),
                         unread_count: conv.unread_count,
                         labels: conv.labels || [],
-                        business_stage_current: attrs.business_stage,
+                        business_stage_current: emptyToNull(attrs.business_stage),
                         additional_attributes: conv.additional_attributes || {},
                         contact_custom_attributes: contactAttrs,
                         conversation_custom_attributes: conversationAttrs,
@@ -442,23 +497,50 @@ serve(async (req) => {
                         last_non_activity_message_preview: lastNonActivity.content,
                         last_message_at: toIso(lastNonActivity.created_at || conv.timestamp),
                         raw_payload: conv,
-                        nombre_completo: attrs.nombre_completo,
-                        fecha_visita: attrs.fecha_visita,
-                        hora_visita: attrs.hora_visita,
-                        agencia: attrs.agencia,
-                        celular: attrs.celular,
-                        correo: attrs.correo,
-                        campana: attrs.campana,
-                        ciudad: attrs.ciudad,
-                        edad: attrs.edad,
+                        nombre_completo: emptyToNull(attrs.nombre_completo),
+                        fecha_visita: emptyToNull(attrs.fecha_visita),
+                        hora_visita: emptyToNull(attrs.hora_visita),
+                        agencia: emptyToNull(attrs.agencia),
+                        celular: emptyToNull(attrs.celular),
+                        correo: emptyToNull(attrs.correo),
+                        campana: emptyToNull(attrs.campana),
+                        ciudad: emptyToNull(attrs.ciudad),
+                        edad: emptyToNull(attrs.edad),
                         canal,
-                        agente: attrs.agente === true || attrs.agente === "true",
+                        agente: emptyToNull(attrs.agente) === null ? null : attrs.agente === true || attrs.agente === "true",
                         score_interes: parseNumber(attrs.score_interes),
-                        monto_operacion: attrs.monto_operacion,
+                        monto_operacion: emptyToNull(attrs.monto_operacion),
                         fecha_monto_operacion: toIso(attrs.fecha_monto_operacion),
                         updated_at: new Date().toISOString(),
                     };
                 });
+
+                const attributeHistoryRows = conversations.flatMap((conv: any) => {
+                    const conversationId = Number(conv.id);
+                    const existingRow = existingRowsById.get(conversationId);
+                    if (!existingRow) return [];
+
+                    const { resolvedAttrs: attrs } = resolveAttributeSnapshots(conv);
+                    const canal = resolveConversationChannel(conv, attrs, inboxById.get(Number(conv.inbox_id)));
+                    const nextAttrs = canal ? { ...attrs, canal } : attrs;
+                    const previousAttrs = {
+                        ...asObject(existingRow.contact_custom_attributes),
+                        ...asObject(existingRow.conversation_custom_attributes),
+                        ...asObject(existingRow.custom_attributes),
+                    };
+                    const changedAt = toIso(conv.updated_at || conv.last_activity_at || conv.timestamp || Date.now()) || new Date().toISOString();
+                    return buildAttributeHistoryRows(conversationId, previousAttrs, nextAttrs, changedAt, "sync");
+                });
+
+                if (attributeHistoryRows.length > 0) {
+                    const { error: attributeHistoryError } = await supabase
+                        .schema("cw")
+                        .from("conversation_attribute_history")
+                        .upsert(attributeHistoryRows, { onConflict: "event_key", ignoreDuplicates: true });
+
+                    if (attributeHistoryError) throw attributeHistoryError;
+                    stats.attribute_events += attributeHistoryRows.length;
+                }
 
                 const { error: conversationError } = await supabase
                     .schema("cw")
@@ -523,7 +605,7 @@ serve(async (req) => {
                 );
 
                 if (mode !== "full" && oldestActivity && oldestActivity < sinceUnix) break;
-                if (conversations.length < CHATWOOT_PAGE_SIZE) break;
+                if (newConversationIds.length === 0) break;
                 page += 1;
             }
 

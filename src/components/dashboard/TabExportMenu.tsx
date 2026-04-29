@@ -76,6 +76,7 @@ export function TabExportMenu({
         tagSettings,
         updateTagSettings,
         globalFilters,
+        commercialAuditEvents,
     } = useDashboardContext();
     const { data: dashboardData } = useDashboardData({ ...globalFilters, ...tagSettings });
     const { user, role } = useAuth();
@@ -114,6 +115,7 @@ export function TabExportMenu({
                 tagSettings,
                 globalFilters,
                 dashboardData,
+                commercialAuditEvents,
             });
             toast.success("Reporte descargado correctamente");
         } catch (error) {
@@ -170,6 +172,9 @@ export function TabExportMenu({
                     date_range_mode: "closed_period",
                     filters: {
                         selectedInboxes: globalFilters.selectedInboxes || [],
+                        saleTags: tagSettings.saleTags || [],
+                        humanSaleTargetLabel: tagSettings.humanSaleTargetLabel || "venta_exitosa",
+                        scoreThresholds: tagSettings.scoreThresholds,
                     },
                     created_by: user?.id || null,
                     created_by_email: user?.email || null,

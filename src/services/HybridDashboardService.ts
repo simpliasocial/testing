@@ -15,7 +15,6 @@ import {
 } from './ConversationMapper';
 import { MinifiedConversation } from './StorageService';
 
-const CHATWOOT_PAGE_SIZE = 15;
 const MAX_CHATWOOT_PAGES = 200;
 const SUPABASE_PAGE_SIZE = 1000;
 const DETAIL_REFRESH_BATCH_SIZE = 5;
@@ -141,6 +140,7 @@ export const HybridDashboardService = {
         let page = params.page || 1;
         let maxPages = params.paginated ? page : MAX_CHATWOOT_PAGES;
         let apiMeta: any = {};
+        const seenConversationIds = new Set<number>();
 
         while (page <= maxPages && !params.signal?.aborted) {
             const response = await chatwootService.getConversations({
@@ -158,6 +158,11 @@ export const HybridDashboardService = {
             const batch = response.payload || [];
             apiMeta = response.meta || {};
             if (batch.length === 0) break;
+            const batchIds = batch
+                .map((conv) => Number(conv?.id))
+                .filter((id) => Number.isFinite(id) && id > 0);
+            const newBatchIds = batchIds.filter((id) => !seenConversationIds.has(id));
+            batchIds.forEach((id) => seenConversationIds.add(id));
 
             const mapped = batch
                 .map(mapChatwootConversationToMinified)
@@ -175,7 +180,7 @@ export const HybridDashboardService = {
             );
 
             if (oldestTimestamp && oldestTimestamp < params.sinceUnix) break;
-            if (batch.length < CHATWOOT_PAGE_SIZE) break;
+            if (newBatchIds.length === 0) break;
 
             page += 1;
         }

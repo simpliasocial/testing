@@ -208,7 +208,7 @@ const TrendLayer = () => {
                                 Contexto
                             </div>
                             <p>
-                                Se toma de los estados de descalificación configurados en el embudo: {unqualifiedLabels}. Usualmente agrupa leads que insultan, mandan videos, memes, reels o preguntas fuera del contexto del negocio.
+                                Agrupa leads que insultan, mandan videos, memes, reels o preguntas fuera del contexto del negocio.
                             </p>
                         </div>
 

@@ -3,13 +3,20 @@ import { chatwootService } from '../services/ChatwootService';
 import { StorageService, MinifiedConversation } from '../services/StorageService';
 import { HybridDashboardService, mergeConversationsPreferApi } from '../services/HybridDashboardService';
 import { ConversationLabelEvent, LabelEventService } from '../services/LabelEventService';
+import { CommercialAuditService } from '../services/CommercialAuditService';
 import { supabase } from '../lib/supabase';
 import { applyLatestLabelState, collectKnownLabels, getLeadAttrs, resolveLeadStage } from '../lib/conversationState';
+import type { CommercialAuditEvent } from '../lib/commercialFacts';
 import {
     DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG,
     DEFAULT_REPORT_COLUMN_FIELDS,
     type CriticalReportProfileConfig
 } from '../lib/reportCatalog';
+import {
+    DEFAULT_SCORE_THRESHOLDS,
+    normalizeScoreThresholds,
+    type ScoreThresholds
+} from '../lib/leadScoreClassification';
 
 export interface DashboardFilters {
     startDate?: Date;
@@ -29,10 +36,7 @@ export interface ChatwootAttributeDefinition {
     raw_payload?: any;
 }
 
-export interface ScoreThresholds {
-    highMin: number;
-    mediumMin: number;
-}
+export type { ScoreThresholds };
 
 export interface TagConfig {
     sqlTags: string[];
@@ -66,6 +70,7 @@ type DashboardDataSource = 'HYBRID' | 'API_ONLY' | 'SUPABASE_ONLY';
 type DashboardDataContextType = {
     conversations: ResolvedConversation[];
     labelEvents: ConversationLabelEvent[];
+    commercialAuditEvents: CommercialAuditEvent[];
     inboxes: any[];
     labels: string[];
     contactAttributeDefinitions: ChatwootAttributeDefinition[];
@@ -94,10 +99,7 @@ export const DEFAULT_TAG_CONFIG: TagConfig = {
     humanSaleTargetLabel: 'venta_exitosa',
     scoreAttributeKey: '',
     scoreAppointmentLabels: ['cita_agendada', 'cita', 'cita_agendada_humano'],
-    scoreThresholds: {
-        highMin: 20,
-        mediumMin: 10
-    },
+    scoreThresholds: { ...DEFAULT_SCORE_THRESHOLDS },
     excelExportFields: [
         "ID",
         "Nombre",
@@ -128,29 +130,6 @@ const normalizeTagArray = (value: unknown, fallback: string[]) => {
             .map(item => String(item || '').trim())
             .filter(Boolean)
     ));
-};
-
-const normalizeScoreThresholds = (value?: Partial<ScoreThresholds> | null): ScoreThresholds => {
-    const defaultHigh = DEFAULT_TAG_CONFIG.scoreThresholds?.highMin ?? 20;
-    const defaultMedium = DEFAULT_TAG_CONFIG.scoreThresholds?.mediumMin ?? 10;
-
-    const parsedHigh = Number(value?.highMin);
-    const parsedMedium = Number(value?.mediumMin);
-
-    const highMin = Number.isFinite(parsedHigh) ? parsedHigh : defaultHigh;
-    const mediumMin = Number.isFinite(parsedMedium) ? parsedMedium : defaultMedium;
-
-    if (highMin <= mediumMin) {
-        return {
-            highMin: defaultHigh,
-            mediumMin: defaultMedium
-        };
-    }
-
-    return {
-        highMin,
-        mediumMin
-    };
 };
 
 const normalizeReportColumnFields = (value?: Record<string, unknown> | null) => {
@@ -231,6 +210,7 @@ const HISTORICAL_DETAIL_REFRESH_LIMIT = 250;
 const DashboardDataContext = createContext<DashboardDataContextType>({
     conversations: [],
     labelEvents: [],
+    commercialAuditEvents: [],
     inboxes: [],
     labels: [],
     contactAttributeDefinitions: [],
@@ -321,6 +301,7 @@ const dedupeAttributeDefinitions = (definitions: any[]) => {
 export const DashboardDataProvider = ({ children }: { children: ReactNode }) => {
     const [conversations, setConversations] = useState<MinifiedConversation[]>([]);
     const [labelEvents, setLabelEvents] = useState<ConversationLabelEvent[]>([]);
+    const [commercialAuditEvents, setCommercialAuditEvents] = useState<CommercialAuditEvent[]>([]);
     const [inboxes, setInboxes] = useState<any[]>([]);
     const [labels, setLabels] = useState<string[]>([]);
     const [contactAttributeDefinitions, setContactAttributeDefinitions] = useState<ChatwootAttributeDefinition[]>([]);
@@ -585,6 +566,16 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         }
     };
 
+    const fetchCommercialAuditEvents = async () => {
+        try {
+            const events = await CommercialAuditService.fetchAuditEvents();
+            setCommercialAuditEvents(events);
+        } catch (eventsError) {
+            console.warn('[Dashboard] Could not load commercial audit events:', eventsError);
+            setCommercialAuditEvents([]);
+        }
+    };
+
     const previousLiveFallback = () => {
         const liveWindow = HybridDashboardService.getLiveWindow();
         return conversationsRef.current.filter((conv) => {
@@ -664,7 +655,10 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 lastHistoricalDetailRefreshAtRef.current = now;
             }
 
-            await fetchLabelEvents();
+            await Promise.all([
+                fetchLabelEvents(),
+                fetchCommercialAuditEvents()
+            ]);
             await updateVisualState(merged);
 
             if (historicalSucceeded && liveSucceeded) setDataSource('HYBRID');
@@ -701,7 +695,6 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 const cachedConversations = await StorageService.loadConversations();
                 if (cachedConversations.length > 0 && !signal.aborted) {
                     await updateVisualState(cachedConversations.map(c => ({ ...c, source: c.source || 'cache' })), false);
-                    setLoading(false);
                 }
             } catch (storageError) {
                 console.warn('[Dashboard] IndexedDB cache read failed:', storageError);
@@ -712,6 +705,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 fetchLabels(signal),
                 fetchContactAttributeDefinitions(signal),
                 fetchLabelEvents(),
+                fetchCommercialAuditEvents(),
                 refreshHybridData(signal, conversationsRef.current.length === 0)
             ]);
         } catch (initError: any) {
@@ -744,6 +738,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         <DashboardDataContext.Provider value={{
             conversations: resolvedConversations,
             labelEvents,
+            commercialAuditEvents,
             inboxes,
             labels: effectiveLabels,
             contactAttributeDefinitions,

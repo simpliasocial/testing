@@ -35,6 +35,7 @@ export const mapChatwootConversationToMinified = (conv: any): MinifiedConversati
     timestamp: maxDateToUnix(conv.updated_at, conv.last_activity_at, conv.timestamp, conv.created_at),
     created_at: parseDateToUnix(conv.created_at || conv.created_at_chatwoot || conv.timestamp),
     first_reply_created_at: parseDateToUnix(conv.first_reply_created_at),
+    waiting_since: parseDateToUnix(conv.waiting_since),
     meta: {
         sender: {
             id: conv.meta?.sender?.id || conv.contact_id,
@@ -110,6 +111,7 @@ export const mapSupabaseConversationRowToMinified = (row: any): MinifiedConversa
         ),
         created_at: parseDateToUnix(row.created_at_chatwoot),
         first_reply_created_at: parseDateToUnix(row.first_reply_created_at_chatwoot),
+        waiting_since: parseDateToUnix(row.waiting_since_chatwoot),
         meta: {
             sender: {
                 id: sender.id || row.chatwoot_contact_id,
@@ -170,6 +172,7 @@ export const mapMinifiedToChatwootConversation = (conv: MinifiedConversation): C
     timestamp: conv.timestamp,
     created_at: conv.created_at,
     first_reply_created_at: conv.first_reply_created_at,
+    waiting_since: conv.waiting_since,
     custom_attributes: conv.conversation_custom_attributes || conv.custom_attributes || {},
     conversation_custom_attributes: conv.conversation_custom_attributes || {},
     contact_custom_attributes: conv.contact_custom_attributes || conv.meta?.sender?.custom_attributes || {},

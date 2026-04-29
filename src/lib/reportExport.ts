@@ -20,13 +20,33 @@ import {
     getLeadName,
     getLeadPhone,
     getMessagePreview,
-    parseAmount,
 } from "@/lib/leadDisplay";
 import { formatBusinessLabel, formatBusinessList, formatFieldLabel } from "@/lib/displayCopy";
+import {
+    buildCommercialAuditRows,
+    getCommercialSaleDate,
+    getCurrentSaleAmount,
+    isCurrentSale,
+    parseAmount,
+    type CommercialAuditEvent,
+} from "@/lib/commercialFacts";
+import {
+    bucketFromScore,
+    formatScoreValue,
+    getBucketRangeLabel,
+    normalizeScoreThresholds,
+    parseNumericScore,
+    SCORE_BUCKET_COPY,
+    SCORE_BUCKET_ORDER,
+    type ScoreBucket,
+} from "@/lib/leadScoreClassification";
 
 export interface ReportSection {
     title: string;
     rows: Array<Record<string, unknown>>;
+    kind?: "summary" | "kpi" | "analysis" | "detail";
+    sheetName?: string;
+    description?: string;
 }
 
 export interface DashboardReportInput {
@@ -37,6 +57,7 @@ export interface DashboardReportInput {
     tagSettings: TagConfig;
     globalFilters: DashboardFilters;
     dashboardData?: any;
+    commercialAuditEvents?: CommercialAuditEvent[];
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -144,6 +165,20 @@ const getScoreValue = (conversation: ResolvedConversation, tagSettings: TagConfi
     return attrs.score ?? attrs.lead_score ?? attrs.puntaje ?? "";
 };
 
+const getScoreNumber = (conversation: ResolvedConversation, tagSettings: TagConfig) =>
+    parseNumericScore(getScoreValue(conversation, tagSettings));
+
+const getScoreBucket = (conversation: ResolvedConversation, tagSettings: TagConfig) =>
+    bucketFromScore(getScoreNumber(conversation, tagSettings), normalizeScoreThresholds(tagSettings.scoreThresholds));
+
+const getScoreBucketLabel = (conversation: ResolvedConversation, tagSettings: TagConfig) =>
+    SCORE_BUCKET_COPY[getScoreBucket(conversation, tagSettings)].label;
+
+const getCampaignValue = (conversation: ResolvedConversation) => {
+    const attrs = getAttrs(conversation);
+    return attrs.campana || attrs.utm_campaign || attrs.origen || "Sin campaña";
+};
+
 const getFieldValue = (
     field: string,
     conversation: ResolvedConversation,
@@ -177,6 +212,7 @@ const getFieldValue = (
         case "Campana": return attrs.campana || attrs.utm_campaign || attrs.origen || "";
         case "Ciudad": return attrs.ciudad || attrs.city || "";
         case "Responsable": return attrs.responsable || conversation.meta?.assignee?.name || "";
+        case "Nivel": return getScoreBucketLabel(conversation, tagSettings);
         case "Puntaje":
         case "Score": return getScoreValue(conversation, tagSettings);
         case "Ultimo Mensaje": return getMessagePreview(conversation);
@@ -212,6 +248,40 @@ const buildConversationRows = (
     });
 };
 
+const buildScoringRows = (
+    conversations: ResolvedConversation[],
+    inboxMap: Map<number, any>,
+    tagSettings: TagConfig,
+) => conversations
+    .map((conversation) => {
+        const inbox = conversation.inbox_id ? inboxMap.get(Number(conversation.inbox_id)) : undefined;
+        const canal = getLeadChannelName(conversation, inbox);
+        const score = getScoreNumber(conversation, tagSettings);
+        const bucket = bucketFromScore(score, normalizeScoreThresholds(tagSettings.scoreThresholds));
+
+        return {
+            "ID Conversacion": conversation.id,
+            "Nombre del Lead": getLeadName(conversation),
+            Canal: canal,
+            Número: getLeadPhone(conversation, canal),
+            Estados: formatBusinessList(getConversationLabels(conversation), " | "),
+            "Historial de mensajes": getMessagePreview(conversation),
+            "URL comercial": getLeadExternalUrl(conversation, canal),
+            "Enlace de conversación": getChatwootUrl(conversation.id),
+            Nivel: SCORE_BUCKET_COPY[bucket].label,
+            Puntaje: formatScoreValue(score),
+            Campaña: getCampaignValue(conversation),
+            "Fecha de ingreso": formatExcelTimestamp(conversation.created_at || conversation.timestamp),
+            "Última interacción": formatExcelTimestamp(conversation.timestamp || conversation.created_at),
+            "Origen del dato": formatDataOrigin(conversation.source),
+        };
+    })
+    .sort((a, b) => {
+        const scoreA = parseNumericScore(a.Puntaje) ?? Number.NEGATIVE_INFINITY;
+        const scoreB = parseNumericScore(b.Puntaje) ?? Number.NEGATIVE_INFINITY;
+        return scoreB - scoreA;
+    });
+
 const rowsFromArray = (items: any[] = [], labelKey = "name", valueKey = "value") =>
     items.map((item) => ({
         Nombre: labelKey === "label"
@@ -221,133 +291,698 @@ const rowsFromArray = (items: any[] = [], labelKey = "name", valueKey = "value")
         Porcentaje: item?.percentage ?? item?.rate ?? item?.winRate ?? "",
     }));
 
-const buildSummarySection = (
+const REPORT_TIME_ZONE = "America/Guayaquil";
+
+const currencyFormatter = new Intl.NumberFormat("es-EC", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+});
+
+const integerFormatter = new Intl.NumberFormat("es-EC", { maximumFractionDigits: 0 });
+
+const decimalFormatter = new Intl.NumberFormat("es-EC", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+});
+
+const formatIntegerValue = (value: unknown) => integerFormatter.format(numberCell(value));
+
+const formatCurrencyValue = (value: unknown) => currencyFormatter.format(numberCell(value));
+
+const formatPercentValue = (value: unknown) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return "";
+    const percent = Math.abs(numeric) > 0 && Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+    return `${decimalFormatter.format(percent)}%`;
+};
+
+const formatDuration = (seconds: unknown) => {
+    const totalSeconds = Math.max(0, Math.round(numberCell(seconds)));
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainingSeconds = totalSeconds % 60;
+    if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes}m`;
+};
+
+const formatReportDateTime = (value: unknown = new Date()) => {
+    const date = value instanceof Date ? value : new Date(parseTimestampMs(value));
+    if (Number.isNaN(date.getTime())) return "";
+    return new Intl.DateTimeFormat("es-EC", {
+        timeZone: REPORT_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+    }).format(date);
+};
+
+const ensureReportRows = (rows: Array<Record<string, unknown>>, message = "Sin datos con los filtros actuales") =>
+    rows.length > 0 ? rows : [{ Estado: "Sin datos", Detalle: message }];
+
+const withSection = (sectionName: string, rows: Array<Record<string, unknown>>) =>
+    ensureReportRows(rows, `Sin datos para ${sectionName}`).map((row) => ({
+        Sección: sectionName,
+        ...row,
+    }));
+
+const safeDivision = (value: number, base: number) => (base > 0 ? value / base : 0);
+
+const getResponsibleValue = (conversation: ResolvedConversation) => {
+    const attrs = getAttrs(conversation);
+    return attrs.responsable || conversation.meta?.assignee?.name || "Sin responsable";
+};
+
+const getConversationRevenue = (conversation: ResolvedConversation, tagSettings: TagConfig) =>
+    getCurrentSaleAmount(conversation, tagSettings);
+
+const getConversationStage = (conversation: ResolvedConversation) =>
+    conversation.resolvedStage || "other";
+
+const getReportMessageTimestampMs = (message: any) =>
+    parseTimestampMs(message?.created_at_chatwoot || message?.created_at || message?.timestamp);
+
+const isIncomingReportMessage = (message: any) =>
+    message?.message_direction === "incoming" ||
+    Number(message?.message_type) === 0 ||
+    cleanText(message?.message_type).toLowerCase() === "incoming" ||
+    cleanText(message?.sender_type).toLowerCase() === "contact";
+
+const hasReportMessageSenderSignal = (message: any) =>
+    message?.message_direction !== undefined ||
+    message?.message_type !== undefined ||
+    message?.sender_type !== undefined;
+
+const getReportConversationMessages = (conversation: ResolvedConversation) =>
+    Array.isArray(conversation.messages)
+        ? [...conversation.messages]
+            .filter((message: any) => !message?.private && !message?.is_private && getReportMessageTimestampMs(message) > 0)
+            .sort((a: any, b: any) => getReportMessageTimestampMs(a) - getReportMessageTimestampMs(b))
+        : [];
+
+const hasUnansweredCustomerMessage = (conversation: ResolvedConversation) => {
+    if ((conversation as any).waiting_since) return true;
+
+    const lastNonActivityMessage = (conversation as any).last_non_activity_message;
+    if (lastNonActivityMessage && hasReportMessageSenderSignal(lastNonActivityMessage)) {
+        return isIncomingReportMessage(lastNonActivityMessage);
+    }
+
+    const messages = getReportConversationMessages(conversation);
+    if (messages.length > 0) {
+        return isIncomingReportMessage(messages[messages.length - 1]);
+    }
+
+    if (lastNonActivityMessage?.content && !conversation.first_reply_created_at) {
+        return true;
+    }
+
+    return !conversation.first_reply_created_at;
+};
+
+const getConversationSummary = (conversations: ResolvedConversation[], tagSettings: TagConfig) => {
+    const totals = {
+        leads: conversations.length,
+        sqls: 0,
+        appointments: 0,
+        sales: 0,
+        unqualified: 0,
+        followups: 0,
+        unresolved: 0,
+        noResponse: 0,
+        revenue: 0,
+        withMessages: 0,
+        scored: 0,
+        scoreSum: 0,
+        missingScore: 0,
+    };
+
+    conversations.forEach((conversation) => {
+        const stage = getConversationStage(conversation);
+        if (stage === "sql") totals.sqls += 1;
+        if (stage === "appointment") totals.appointments += 1;
+        if (isCurrentSale(conversation, tagSettings)) totals.sales += 1;
+        if (stage === "unqualified") totals.unqualified += 1;
+        if (stage === "followup") totals.followups += 1;
+        if (cleanText(conversation.status).toLowerCase() !== "resolved") totals.unresolved += 1;
+        if (hasUnansweredCustomerMessage(conversation)) totals.noResponse += 1;
+        if (Array.isArray(conversation.messages) && conversation.messages.length > 0) totals.withMessages += 1;
+        totals.revenue += getConversationRevenue(conversation, tagSettings);
+
+        const score = getScoreNumber(conversation, tagSettings);
+        if (score === null) {
+            totals.missingScore += 1;
+        } else {
+            totals.scored += 1;
+            totals.scoreSum += score;
+        }
+    });
+
+    return {
+        ...totals,
+        appointmentRate: safeDivision(totals.appointments, totals.leads) * 100,
+        salesRate: safeDivision(totals.sales, totals.leads) * 100,
+        responseRate: safeDivision(totals.withMessages, totals.leads) * 100,
+        averageTicket: safeDivision(totals.revenue, totals.sales),
+        averageScore: totals.scored > 0 ? totals.scoreSum / totals.scored : 0,
+    };
+};
+
+const createBucketCounter = () =>
+    Object.fromEntries(SCORE_BUCKET_ORDER.map((bucket) => [bucket, 0])) as Record<ScoreBucket, number>;
+
+const buildDimensionRows = (
+    conversations: ResolvedConversation[],
+    inboxMap: Map<number, any>,
+    tagSettings: TagConfig,
+    dimensionLabel: string,
+    resolveDimension: (conversation: ResolvedConversation, inboxMap: Map<number, any>) => unknown,
+) => {
+    const thresholds = normalizeScoreThresholds(tagSettings.scoreThresholds);
+    const grouped = new Map<string, {
+        leads: number;
+        sqls: number;
+        appointments: number;
+        sales: number;
+        unanswered: number;
+        revenue: number;
+        scoreSum: number;
+        scored: number;
+        buckets: Record<ScoreBucket, number>;
+    }>();
+
+    conversations.forEach((conversation) => {
+        const key = cleanText(resolveDimension(conversation, inboxMap)) || "Sin dato";
+        const current = grouped.get(key) || {
+            leads: 0,
+            sqls: 0,
+            appointments: 0,
+            sales: 0,
+            unanswered: 0,
+            revenue: 0,
+            scoreSum: 0,
+            scored: 0,
+            buckets: createBucketCounter(),
+        };
+        const stage = getConversationStage(conversation);
+        const score = getScoreNumber(conversation, tagSettings);
+        const bucket = bucketFromScore(score, thresholds);
+
+        current.leads += 1;
+        if (stage === "sql") current.sqls += 1;
+        if (stage === "appointment") current.appointments += 1;
+        if (isCurrentSale(conversation, tagSettings)) current.sales += 1;
+        if (hasUnansweredCustomerMessage(conversation)) current.unanswered += 1;
+        current.revenue += getConversationRevenue(conversation, tagSettings);
+        current.buckets[bucket] += 1;
+        if (score !== null) {
+            current.scoreSum += score;
+            current.scored += 1;
+        }
+        grouped.set(key, current);
+    });
+
+    return Array.from(grouped.entries())
+        .map(([key, value]) => ({
+            [dimensionLabel]: key,
+            Leads: value.leads,
+            SQLs: value.sqls,
+            Citas: value.appointments,
+            Ventas: value.sales,
+            "Sin respuesta": value.unanswered,
+            "Monto ventas": value.revenue,
+            "Tasa cita": formatPercentValue(safeDivision(value.appointments, value.leads) * 100),
+            "Tasa venta": formatPercentValue(safeDivision(value.sales, value.leads) * 100),
+            "Puntaje promedio": value.scored > 0 ? Number((value.scoreSum / value.scored).toFixed(2)) : "",
+            Caliente: value.buckets.hot,
+            Tibio: value.buckets.warm,
+            Frío: value.buckets.cold,
+            Bajo: value.buckets.low,
+        }))
+        .sort((a, b) => numberCell(b.Leads) - numberCell(a.Leads));
+};
+
+const buildStatusRows = (conversations: ResolvedConversation[]) => {
+    const grouped = new Map<string, number>();
+    conversations.forEach((conversation) => {
+        const status = formatConversationStatus(conversation.status) || "Sin estado";
+        grouped.set(status, (grouped.get(status) || 0) + 1);
+    });
+    return Array.from(grouped.entries())
+        .map(([Estado, Leads]) => ({ Estado, Leads }))
+        .sort((a, b) => b.Leads - a.Leads);
+};
+
+const buildStageRows = (conversations: ResolvedConversation[]) => {
+    const grouped = new Map<string, number>();
+    conversations.forEach((conversation) => {
+        const stage = STAGE_LABELS[getConversationStage(conversation)] || "Otro";
+        grouped.set(stage, (grouped.get(stage) || 0) + 1);
+    });
+    return Array.from(grouped.entries())
+        .map(([Etapa, Leads]) => ({ Etapa, Leads }))
+        .sort((a, b) => b.Leads - a.Leads);
+};
+
+const buildLabelRows = (conversations: ResolvedConversation[]) => {
+    const grouped = new Map<string, number>();
+    conversations.forEach((conversation) => {
+        getConversationLabels(conversation).forEach((label) => {
+            const display = formatBusinessLabel(label) || "Sin etiqueta";
+            grouped.set(display, (grouped.get(display) || 0) + 1);
+        });
+    });
+    return Array.from(grouped.entries())
+        .map(([Etiqueta, Leads]) => ({ Etiqueta, Leads }))
+        .sort((a, b) => b.Leads - a.Leads);
+};
+
+const buildSourceRows = (conversations: ResolvedConversation[]) => {
+    const grouped = new Map<string, number>();
+    conversations.forEach((conversation) => {
+        const source = formatDataOrigin(conversation.source) || "Sin origen";
+        grouped.set(source, (grouped.get(source) || 0) + 1);
+    });
+    return Array.from(grouped.entries())
+        .map(([Origen, Leads]) => ({ Origen, Leads }))
+        .sort((a, b) => b.Leads - a.Leads);
+};
+
+const buildQualityDistributionRows = (conversations: ResolvedConversation[], tagSettings: TagConfig) => {
+    const thresholds = normalizeScoreThresholds(tagSettings.scoreThresholds);
+    const bucketCounts = new Map<ScoreBucket, number>(SCORE_BUCKET_ORDER.map((bucket) => [bucket, 0]));
+    let missingScoreCount = 0;
+
+    conversations.forEach((conversation) => {
+        const score = getScoreNumber(conversation, tagSettings);
+        const bucket = bucketFromScore(score, thresholds);
+        bucketCounts.set(bucket, (bucketCounts.get(bucket) || 0) + 1);
+        if (score === null) missingScoreCount += 1;
+    });
+
+    return SCORE_BUCKET_ORDER.map((bucket) => ({
+        Nivel: SCORE_BUCKET_COPY[bucket].label,
+        Rango: getBucketRangeLabel(bucket, thresholds),
+        Leads: bucketCounts.get(bucket) || 0,
+        Porcentaje: formatPercentValue(safeDivision(bucketCounts.get(bucket) || 0, conversations.length) * 100),
+        "Sin puntaje incluidos": bucket === "low" ? missingScoreCount : "",
+    }));
+};
+
+const buildQualityConfigRows = (conversations: ResolvedConversation[], tagSettings: TagConfig) => {
+    const thresholds = normalizeScoreThresholds(tagSettings.scoreThresholds);
+    const scoreField = cleanText(tagSettings.scoreAttributeKey) || "score / lead_score / puntaje";
+    const missingScoreCount = conversations.filter((conversation) => getScoreNumber(conversation, tagSettings) === null).length;
+
+    return [
+        { Metrica: "Campo de puntaje usado", Valor: scoreField },
+        { Metrica: "Total encontrados", Valor: conversations.length },
+        { Metrica: "Sin puntaje incluidos en Bajo", Valor: missingScoreCount },
+        { Metrica: "Desde Caliente", Valor: thresholds.hotMin },
+        { Metrica: "Desde Tibio", Valor: thresholds.warmMin },
+        { Metrica: "Desde Frío", Valor: thresholds.coldMin },
+        { Metrica: "Rangos usados", Valor: SCORE_BUCKET_ORDER.map((bucket) => `${SCORE_BUCKET_COPY[bucket].label}: ${getBucketRangeLabel(bucket, thresholds)}`).join(" | ") },
+    ];
+};
+
+const buildFunnelRows = (items: any[] = [], sectionName: string) =>
+    rowsFromArray(items, "label", "value").map((row, index) => ({
+        Sección: sectionName,
+        Orden: index + 1,
+        Etapa: row.Nombre,
+        Leads: row.Valor,
+        Porcentaje: formatPercentValue(row.Porcentaje),
+    }));
+
+const buildFunnelConversionRows = (items: any[] = []) => {
+    const normalized = rowsFromArray(items, "label", "value");
+    return normalized.slice(1).map((row, index) => {
+        const previous = normalized[index];
+        const current = numberCell(row.Valor);
+        const base = numberCell(previous?.Valor);
+        return {
+            Desde: previous?.Nombre || "",
+            Hacia: row.Nombre,
+            "Base anterior": base,
+            Resultado: current,
+            Conversión: formatPercentValue(safeDivision(current, base) * 100),
+        };
+    });
+};
+
+const buildNamedValueRows = (
+    items: any[] = [],
+    nameLabel: string,
+    valueLabel: string,
+    labelKey = "name",
+    valueKey = "value",
+) => rowsFromArray(items, labelKey, valueKey).map((row) => ({
+    [nameLabel]: row.Nombre,
+    [valueLabel]: row.Valor,
+    Porcentaje: formatPercentValue(row.Porcentaje),
+}));
+
+const getSelectedInboxSummary = (input: DashboardReportInput) => {
+    const selectedIds = input.globalFilters.selectedInboxes || [];
+    if (selectedIds.length === 0) return "Todos los canales";
+    const inboxMap = getInboxMap(input.inboxes);
+    return selectedIds
+        .map((id) => {
+            const inbox = inboxMap.get(Number(id));
+            return inbox ? getInboxChannelName(inbox) || inbox.name || `Inbox ${id}` : `Inbox ${id}`;
+        })
+        .join(", ");
+};
+
+const getTabInterpretation = (tabId: ReportTabId) => {
+    const notes: Record<ReportTabId, string> = {
+        overview: "Lectura gerencial de volumen, oportunidades, citas, ventas y monto para entender el avance comercial.",
+        funnel: "Muestra avance por etapas, conversiones entre pasos y puntos donde se pierden o descartan leads.",
+        operational: "Sirve para controlar respuesta, carga operativa, responsables y leads que requieren acción.",
+        followup: "Resume colas humanas, citas, ventas, montos y leads que deben ser gestionados por el equipo.",
+        performance: "Compara responsables por volumen, citas, ventas, pendientes y conversión.",
+        trends: "Explica de dónde vienen los leads, qué campañas pesan más y cómo evolucionan ingresos y calidad.",
+        scoring: "Clasifica leads en Caliente, Tibio, Frío y Bajo; los leads sin puntaje entran en Bajo.",
+        chats: "Documenta conversaciones, estados, canales, etiquetas y mensajes disponibles para revisión o análisis.",
+    };
+    return notes[tabId];
+};
+
+const buildSummaryRows = (
+    input: DashboardReportInput,
     tabId: ReportTabId,
     conversations: ResolvedConversation[],
+) => {
+    const { start, end } = getRangeLabel(input.globalFilters);
+    const selectedTabs = input.tabIds.map((id) => REPORT_TAB_LABELS[id]).join(", ");
+
+    return [
+        { Campo: "Reporte", Valor: input.title },
+        { Campo: "Pestaña", Valor: REPORT_TAB_LABELS[tabId] },
+        { Campo: "Pestañas solicitadas", Valor: selectedTabs },
+        { Campo: "Periodo", Valor: `${start} a ${end}` },
+        { Campo: "Canales filtrados", Valor: getSelectedInboxSummary(input) },
+        { Campo: "Generado", Valor: formatReportDateTime() },
+        { Campo: "Zona horaria", Valor: REPORT_TIME_ZONE },
+        { Campo: "Total encontrado", Valor: conversations.length },
+        { Campo: "Datos incluidos", Valor: "Resumen ejecutivo, KPIs, análisis por dimensión, cambios relevantes cuando existan y detalle de leads." },
+        { Campo: "Lectura recomendada", Valor: getTabInterpretation(tabId) },
+        { Campo: "Nota de uso", Valor: "Excel y CSV contienen el detalle completo; PDF prioriza lectura ejecutiva y puede recortar tablas largas." },
+    ];
+};
+
+const metricRow = (Metrica: string, Valor: unknown, Formula: string, Interpretación: string) => ({
+    Metrica,
+    Valor,
+    Formula,
+    Interpretación,
+});
+
+const buildKpiRows = (
+    tabId: ReportTabId,
+    conversations: ResolvedConversation[],
+    inboxMap: Map<number, any>,
     dashboardData: any,
     tagSettings: TagConfig,
-): ReportSection[] => {
+) => {
     const kpis = dashboardData?.kpis || {};
     const operational = dashboardData?.operationalMetrics || {};
     const human = dashboardData?.humanMetrics || {};
-    const trends = dashboardData?.trendMetrics || {};
+    const totals = getConversationSummary(conversations, tagSettings);
 
     if (tabId === "overview") {
-        return [{
-            title: "Resumen ejecutivo",
-            rows: [
-                { Metrica: "Total leads", Valor: numberCell(kpis.totalLeads) },
-                { Metrica: "SQLs", Valor: numberCell(kpis.interestedLeads) },
-                { Metrica: "Citas agendadas", Valor: numberCell(kpis.scheduledAppointments) },
-                { Metrica: "Ventas exitosas", Valor: numberCell(kpis.closedSales) },
-                { Metrica: "Monto periodo", Valor: numberCell(kpis.monthlyProfit) },
-                { Metrica: "Monto total", Valor: numberCell(kpis.totalProfit) },
-            ],
-        }];
+        return [
+            metricRow("Total leads", numberCell(kpis.totalLeads || totals.leads), "Leads creados en el periodo filtrado", "Volumen total de oportunidades recibidas."),
+            metricRow("SQLs", numberCell(kpis.interestedLeads || totals.sqls), "Leads en etapa SQL/interesado", "Oportunidades con señal comercial clara."),
+            metricRow("Citas agendadas", numberCell(kpis.scheduledAppointments || totals.appointments), "Leads que llegaron a cita", "Paso clave antes de venta o cierre."),
+            metricRow("Ventas exitosas", numberCell(kpis.closedSales || totals.sales), "Leads cerrados como venta", "Resultado comercial final del periodo."),
+            metricRow("Tasa de cita", formatPercentValue(kpis.schedulingRate || totals.appointmentRate), "Citas / Leads", "Eficiencia para convertir leads en citas."),
+            metricRow("Tasa de venta", formatPercentValue(totals.salesRate), "Ventas / Leads", "Eficiencia general del embudo."),
+            metricRow("Monto periodo", formatCurrencyValue(kpis.monthlyProfit || totals.revenue), "Suma de montos de venta", "Ingreso atribuido al periodo filtrado."),
+            metricRow("Monto total", formatCurrencyValue(kpis.totalProfit || totals.revenue), "Suma total disponible", "Referencia de ingreso acumulado disponible en datos."),
+        ];
     }
 
     if (tabId === "funnel") {
         return [
-            { title: "Embudo actual", rows: rowsFromArray(dashboardData?.funnelData || [], "label", "value") },
-            { title: "Embudo histórico acumulado", rows: rowsFromArray(dashboardData?.historicalFunnelData || [], "label", "value") },
+            metricRow("Leads en embudo", totals.leads, "Total filtrado", "Base sobre la que se calculan las tasas."),
+            metricRow("SQLs", numberCell(kpis.interestedLeads || totals.sqls), "Leads interesados/SQL", "Primer nivel de intención comercial."),
+            metricRow("Citas", numberCell(kpis.scheduledAppointments || totals.appointments), "Leads con cita", "Conversión intermedia relevante."),
+            metricRow("Ventas", numberCell(kpis.closedSales || totals.sales), "Leads con venta", "Cierres comerciales."),
+            metricRow("Descartados", numberCell(kpis.unqualified || totals.unqualified), "Leads no calificados", "Pérdidas o leads fuera de perfil."),
+            metricRow("Conversión lead a venta", formatPercentValue(totals.salesRate), "Ventas / Leads", "Lectura de salud del embudo."),
         ];
     }
 
     if (tabId === "operational") {
-        return [{
-            title: "Metricas operativas",
-            rows: [
-                { Metrica: "Promedio primera respuesta", Valor: `${numberCell(operational.firstResponseAverageSeconds)} segundos` },
-                { Metrica: "Leads con responsable", Valor: numberCell(operational.leadsWithOwnerCount) },
-                { Metrica: "Leads sin respuesta", Valor: numberCell(operational.leadsSinRespuesta) },
-                { Metrica: "Total leads", Valor: numberCell(operational.totalLeads || conversations.length) },
-            ],
-        }];
+        return [
+            metricRow("Promedio primera respuesta", formatDuration(operational.firstResponseAverageSeconds), "Tiempo medio hasta primera respuesta", "Velocidad operativa de atención."),
+            metricRow("Mediana primera respuesta", formatDuration(operational.firstResponseMedianSeconds), "Mediana de muestras válidas", "Referencia menos sensible a casos extremos."),
+            metricRow("Leads con responsable", numberCell(operational.leadsWithOwnerCount), "Leads asignados", "Cobertura de asignación del equipo."),
+            metricRow("Asignación", formatPercentValue(operational.leadsWithOwnerPercentage), "Leads con responsable / total", "Qué tan ordenada está la carga comercial."),
+            metricRow("Leads sin respuesta", numberCell(operational.leadsSinRespuesta ?? totals.noResponse), "Última interacción del cliente sin respuesta posterior", "Misma lógica usada por la tarjeta de Operación."),
+            metricRow("Leads activos", totals.unresolved, "Leads no resueltos", "Carga viva del periodo."),
+        ];
     }
 
     if (tabId === "followup") {
-        return [{
-            title: "Seguimiento humano",
-            rows: [
-                { Metrica: "Cola seguimiento", Valor: numberCell(human.followupCurrent ?? human.followup) },
-                { Metrica: "Conversiones a cita", Valor: numberCell(human.humanAppointmentConversions) },
-                { Metrica: "Ventas humanas", Valor: numberCell(human.salesCount) },
-                { Metrica: "Volumen ventas", Valor: numberCell(human.salesVolume) },
-            ],
-        }];
+        return [
+            metricRow("Cola de seguimiento", numberCell(human.followupCurrent ?? human.followup ?? totals.followups), "Leads con etiquetas de seguimiento", "Trabajo pendiente para gestión humana."),
+            metricRow("Conversiones a cita", numberCell(human.humanAppointmentConversions || human.appointments || totals.appointments), "Seguimientos que pasaron a cita", "Efectividad del equipo humano."),
+            metricRow("Tasa conversión seguimiento", formatPercentValue(human.humanAppointmentConversionRate || human.conversionRate), "Citas humanas / cola gestionada", "Calidad de la gestión humana."),
+            metricRow("Ventas humanas", numberCell(human.salesCount || totals.sales), "Ventas con etiqueta objetivo", "Cierres atribuibles a gestión humana."),
+            metricRow("Volumen ventas", formatCurrencyValue(human.salesVolume || totals.revenue), "Suma de montos de venta", "Impacto económico del seguimiento."),
+            metricRow("Ticket promedio", formatCurrencyValue(human.averageTicket || totals.averageTicket), "Monto ventas / ventas", "Valor medio de cierre."),
+        ];
     }
 
     if (tabId === "performance") {
-        return [{
-            title: "Rendimiento por responsable",
-            rows: (dashboardData?.ownerPerformance || []).map((owner: any) => ({
-                Responsable: owner.name,
-                Leads: owner.leads,
-                Citas: owner.appointments,
-                "Sin respuesta": owner.unanswered,
-                Conversion: `${owner.winRate || 0}%`,
-                Origen: owner.source,
-            })),
-        }];
+        const owners = Array.isArray(dashboardData?.ownerPerformance) ? dashboardData.ownerPerformance : [];
+        const bestOwner = [...owners].sort((a: any, b: any) => numberCell(b.appointments) - numberCell(a.appointments))[0];
+        const followupCount = numberCell(human.followupCurrent ?? human.followup ?? totals.followups);
+        const humanAppointments = numberCell(human.humanAppointmentConversions ?? human.appointments ?? totals.appointments);
+        const humanConversion = human.humanAppointmentConversionRate ?? human.conversionRate ?? safeDivision(humanAppointments, followupCount + humanAppointments) * 100;
+        const humanSales = numberCell(human.salesCount ?? totals.sales);
+        const humanRevenue = human.salesVolume ?? totals.revenue;
+        const humanAverageTicket = human.averageTicket ?? totals.averageTicket;
+        return [
+            metricRow("Responsables con actividad", owners.length || new Set(conversations.map(getResponsibleValue)).size, "Responsables únicos", "Cobertura de trabajo humano."),
+            metricRow("Seguimiento", followupCount, "Leads en seguimiento humano", "Trabajo gestionado por el equipo."),
+            metricRow("Citas humanas", humanAppointments, "Leads que llegaron a cita", "Resultado directo del seguimiento."),
+            metricRow("Conversión", formatPercentValue(humanConversion), "Citas / (seguimiento + citas)", "Mismo cálculo visible en Rendimiento Humano."),
+            metricRow("Ventas", humanSales, "Leads vendidos", "Cierres por equipo."),
+            metricRow("Total vendido", formatCurrencyValue(humanRevenue), "Suma de montos de venta", "Ingreso atribuido a ventas."),
+            metricRow("Ticket promedio", formatCurrencyValue(humanAverageTicket), "Total vendido / ventas", "Valor promedio de cierre."),
+            metricRow("Mejor responsable por citas", bestOwner?.name || "Sin dato", "Ranking por citas", "Referencia rápida del responsable con mayor resultado."),
+        ];
     }
 
     if (tabId === "trends") {
         return [
-            { title: "Leads por canal", rows: rowsFromArray(trends.channelLeads || [], "name", "value") },
-            { title: "Campanas", rows: rowsFromArray(dashboardData?.campaignData || trends.campaignList || [], "name", "leads") },
-            { title: "Ingresos por dia", rows: rowsFromArray(trends.revenuePeaks || [], "date", "value") },
+            metricRow("Leads analizados", totals.leads, "Total filtrado", "Base de tendencias."),
+            metricRow("Canales con leads", new Set(conversations.map((conversation) => getFieldValue("Canal", conversation, inboxMap, tagSettings))).size, "Canales distintos", "Diversidad de origen comercial."),
+            metricRow("Campañas con leads", new Set(conversations.map(getCampaignValue)).size, "Campañas distintas", "Diversidad de campaña/origen."),
+            metricRow("Ingresos detectados", formatCurrencyValue(totals.revenue), "Suma de ventas", "Impacto económico de las tendencias."),
+            metricRow("Puntaje promedio", totals.scored > 0 ? Number(totals.averageScore.toFixed(2)) : "Sin puntajes", "Promedio de leads con score", "Calidad media de leads con dato disponible."),
         ];
     }
 
     if (tabId === "scoring") {
-        const scoreKey = cleanText(tagSettings.scoreAttributeKey) || "score";
-        const highMin = tagSettings.scoreThresholds?.highMin ?? 20;
-        const mediumMin = tagSettings.scoreThresholds?.mediumMin ?? 10;
-        const buckets = { Alto: 0, Medio: 0, Bajo: 0, "Sin score": 0 };
-        conversations.forEach((conversation) => {
-            const attrs = getAttrs(conversation);
-            const score = Number.parseFloat(String(attrs[scoreKey] ?? getScoreValue(conversation, tagSettings) ?? ""));
-            if (!Number.isFinite(score)) buckets["Sin score"] += 1;
-            else if (score >= highMin) buckets.Alto += 1;
-            else if (score >= mediumMin) buckets.Medio += 1;
-            else buckets.Bajo += 1;
+        const thresholds = normalizeScoreThresholds(tagSettings.scoreThresholds);
+        return [
+            metricRow("Leads evaluados", totals.leads, "Total filtrado", "Leads considerados para calidad."),
+            metricRow("Con puntaje", totals.scored, "Leads con score numérico", "Base con dato real de scoring."),
+            metricRow("Sin puntaje", totals.missingScore, "Leads sin score", "Se clasifican como Bajo para no quedar fuera del reporte."),
+            metricRow("Puntaje promedio", totals.scored > 0 ? Number(totals.averageScore.toFixed(2)) : "Sin puntajes", "Promedio de puntajes", "Lectura general de calidad."),
+            metricRow("Rangos activos", `Caliente ${thresholds.hotMin}+ | Tibio ${thresholds.warmMin}-${thresholds.hotMin - 1} | Frío ${thresholds.coldMin}-${thresholds.warmMin - 1} | Bajo <${thresholds.coldMin}`, "Configuración admin", "Rangos usados en tabla, KPIs, gráficas y exportes."),
+        ];
+    }
+
+    return [
+        metricRow("Conversaciones exportadas", totals.leads, "Total filtrado", "Conversaciones incluidas en el reporte."),
+        metricRow("Con mensajes cargados", totals.withMessages, "Conversaciones con historial de mensajes", "Disponibilidad de contexto conversacional."),
+        metricRow("Canales", new Set(conversations.map((conversation) => getFieldValue("Canal", conversation, inboxMap, tagSettings))).size, "Canales distintos", "Cobertura de origen."),
+        metricRow("Estados distintos", new Set(conversations.map((conversation) => formatConversationStatus(conversation.status))).size, "Estados Chatwoot", "Variedad de estados operativos."),
+    ];
+};
+
+const buildAnalysisRows = (
+    tabId: ReportTabId,
+    conversations: ResolvedConversation[],
+    inboxMap: Map<number, any>,
+    dashboardData: any,
+    tagSettings: TagConfig,
+) => {
+    const trends = dashboardData?.trendMetrics || {};
+    const addRows: Array<Record<string, unknown>> = [];
+    const add = (sectionName: string, rows: Array<Record<string, unknown>>) => {
+        addRows.push(...withSection(sectionName, rows));
+    };
+
+    if (tabId === "overview") {
+        add("Embudo resumido", buildFunnelRows(dashboardData?.funnelData || [], "Embudo resumido").map(({ Sección, ...row }) => row));
+        add("Leads por canal", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
+            const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
+            return getLeadChannelName(conversation, inbox);
+        }));
+        add("Detalle comercial por campaña", buildDimensionRows(conversations, inboxMap, tagSettings, "Campaña", getCampaignValue));
+        return addRows;
+    }
+
+    if (tabId === "funnel") {
+        add("Embudo actual", buildFunnelRows(dashboardData?.funnelData || [], "Embudo actual").map(({ Sección, ...row }) => row));
+        add("Embudo histórico", buildFunnelRows(dashboardData?.historicalFunnelData || [], "Embudo histórico").map(({ Sección, ...row }) => row));
+        add("Conversión entre etapas", buildFunnelConversionRows(dashboardData?.funnelData || []));
+        add("Distribución por etapa", buildStageRows(conversations));
+        add("Pérdidas y descalificación", buildNamedValueRows(dashboardData?.disqualificationReasons || trends.disqualificationStats || [], "Motivo", "Leads"));
+        return addRows;
+    }
+
+    if (tabId === "operational") {
+        add("Carga por responsable", buildDimensionRows(conversations, inboxMap, tagSettings, "Responsable", getResponsibleValue));
+        add("Carga por canal", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
+            const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
+            return getLeadChannelName(conversation, inbox);
+        }));
+        add("Estados operativos", buildStatusRows(conversations));
+        add("Origen de datos", buildSourceRows(conversations));
+        return addRows;
+    }
+
+    if (tabId === "followup") {
+        const saleConversations = filterSalesConversations(conversations, { selectedInboxes: [] }, tagSettings);
+        add("Colas por etapa", buildStageRows(conversations));
+        add("Ventas por canal", buildDimensionRows(saleConversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
+            const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
+            return getLeadChannelName(conversation, inbox);
+        }));
+        add("Ventas por día", buildNamedValueRows(dashboardData?.humanMetrics?.salesByDate || [], "Fecha", "Ventas", "date", "sales"));
+        add("Detalle por responsable", buildDimensionRows(conversations, inboxMap, tagSettings, "Responsable", getResponsibleValue));
+        return addRows;
+    }
+
+    if (tabId === "performance") {
+        add("Ranking por responsable", (dashboardData?.ownerPerformance || []).map((owner: any) => ({
+            Responsable: owner.name || "Sin responsable",
+            Leads: owner.leads || 0,
+            Citas: owner.appointments || 0,
+            "Sin respuesta": owner.unanswered || 0,
+            Conversión: formatPercentValue(owner.winRate || 0),
+            Origen: owner.source || "",
+        })));
+        add("Detalle por responsable", buildDimensionRows(conversations, inboxMap, tagSettings, "Responsable", getResponsibleValue));
+        return addRows;
+    }
+
+    if (tabId === "trends") {
+        add("Leads por canal", buildNamedValueRows(trends.channelLeads || dashboardData?.channelData || [], "Canal", "Leads"));
+        add("Campañas", buildNamedValueRows(dashboardData?.campaignData || trends.campaignList || [], "Campaña", "Leads", "name", "leads"));
+        add("Ingresos por periodo", buildNamedValueRows(trends.revenuePeaks || trends.revenuePeakDays || [], "Periodo", "Monto", "date", "value"));
+        add("Calidad por canal", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
+            const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
+            return getLeadChannelName(conversation, inbox);
+        }));
+        return addRows;
+    }
+
+    if (tabId === "scoring") {
+        add("Rangos usados", buildQualityConfigRows(conversations, tagSettings));
+        add("Distribución de calidad", buildQualityDistributionRows(conversations, tagSettings));
+        add("Promedio por canal", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
+            const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
+            return getLeadChannelName(conversation, inbox);
+        }));
+        add("Promedio por campaña", buildDimensionRows(conversations, inboxMap, tagSettings, "Campaña", getCampaignValue));
+        add("Promedio por estado", buildDimensionRows(conversations, inboxMap, tagSettings, "Estado", (conversation) => formatConversationStatus(conversation.status)));
+        return addRows;
+    }
+
+    add("Estados de conversación", buildStatusRows(conversations));
+    add("Canales", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
+        const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
+        return getLeadChannelName(conversation, inbox);
+    }));
+    add("Etiquetas", buildLabelRows(conversations));
+    add("Origen de datos", buildSourceRows(conversations));
+    return addRows;
+};
+
+const getSheetNameForSection = (tabId: ReportTabId, baseName: string, isSingleTab: boolean) =>
+    isSingleTab ? baseName : `${REPORT_TAB_LABELS[tabId]} ${baseName}`;
+
+const buildTabReportSections = (
+    input: DashboardReportInput,
+    tabId: ReportTabId,
+    filteredConversations: ResolvedConversation[],
+    inboxMap: Map<number, any>,
+): ReportSection[] => {
+    const tabLabel = REPORT_TAB_LABELS[tabId];
+    const isSingleTab = input.tabIds.length === 1;
+    const auditEvents = input.commercialAuditEvents || [];
+    const auditRows = buildCommercialAuditRows(filteredConversations, auditEvents, input.tagSettings);
+    const detailRows = tabId === "scoring"
+        ? buildScoringRows(filteredConversations, inboxMap, input.tagSettings)
+        : buildConversationRows(tabId, filteredConversations, inboxMap, input.tagSettings);
+
+    const sections: ReportSection[] = [
+        {
+            title: `${tabLabel} - 00 Resumen`,
+            sheetName: getSheetNameForSection(tabId, "00 Resumen", isSingleTab),
+            kind: "summary",
+            description: "Contexto del reporte, filtros aplicados, fecha de generación y notas de lectura.",
+            rows: ensureReportRows(buildSummaryRows(input, tabId, filteredConversations)),
+        },
+        {
+            title: `${tabLabel} - 01 KPIs`,
+            sheetName: getSheetNameForSection(tabId, "01 KPIs", isSingleTab),
+            kind: "kpi",
+            description: "Métricas principales con fórmula e interpretación para lectura gerencial.",
+            rows: ensureReportRows(buildKpiRows(tabId, filteredConversations, inboxMap, input.dashboardData, input.tagSettings)),
+        },
+        {
+            title: `${tabLabel} - 02 Analisis`,
+            sheetName: getSheetNameForSection(tabId, "02 Analisis", isSingleTab),
+            kind: "analysis",
+            description: "Cortes por canal, campaña, etapa, responsable, estado o calidad según la pestaña.",
+            rows: ensureReportRows(buildAnalysisRows(tabId, filteredConversations, inboxMap, input.dashboardData, input.tagSettings)),
+        },
+    ];
+
+    if (auditRows.length > 0) {
+        sections.push({
+            title: `${tabLabel} - 03 Cambios relevantes`,
+            sheetName: getSheetNameForSection(tabId, "03 Cambios relevantes", isSingleTab),
+            kind: "analysis",
+            description: "Cambios comerciales importantes que ayudan a entender ventas y montos del reporte.",
+            rows: auditRows,
         });
-        return [{
-            title: "Distribución de puntajes",
-            rows: Object.entries(buckets).map(([Nivel, Leads]) => ({ Nivel: Nivel === "Sin score" ? "Sin puntaje" : Nivel, Leads })),
-        }];
     }
 
-    if (tabId === "chats") {
-        return [{
-            title: "Resumen conversaciones",
-            rows: [
-                { Metrica: "Conversaciones exportadas", Valor: conversations.length },
-                { Metrica: "Con mensajes cargados", Valor: conversations.filter((conversation) => Array.isArray(conversation.messages) && conversation.messages.length > 0).length },
-            ],
-        }];
-    }
+    sections.push(
+        {
+            title: `${tabLabel} - 99 Detalle`,
+            sheetName: getSheetNameForSection(tabId, "99 Detalle", isSingleTab),
+            kind: "detail",
+            description: "Filas completas listas para filtrar, revisar o cruzar con otras fuentes.",
+            rows: ensureReportRows(detailRows, "No hay leads en el detalle con los filtros actuales."),
+        },
+    );
 
-    return [];
+    return sections;
 };
 
 export const buildDashboardReportSections = (input: DashboardReportInput): ReportSection[] => {
     const filteredConversations = filterReportConversations(input.conversations, input.globalFilters);
     const inboxMap = getInboxMap(input.inboxes);
 
-    return input.tabIds.flatMap((tabId) => {
-        const tabLabel = REPORT_TAB_LABELS[tabId];
-        const summarySections = buildSummarySection(tabId, filteredConversations, input.dashboardData, input.tagSettings);
-        const detailsSection = {
-            title: `${tabLabel} - detalle de leads`,
-            rows: buildConversationRows(tabId, filteredConversations, inboxMap, input.tagSettings),
-        };
-
-        return [
-            ...summarySections.map((section) => ({ ...section, title: `${tabLabel} - ${section.title}` })),
-            detailsSection,
-        ].filter((section) => section.rows.length > 0);
-    });
+    return input.tabIds.flatMap((tabId) =>
+        buildTabReportSections(input, tabId, filteredConversations, inboxMap)
+    );
 };
 
 const getRangeLabel = (filters: DashboardFilters) => ({
@@ -647,22 +1282,17 @@ const buildQueueRows = (
 });
 
 const getSalesDateMs = (conversation: ResolvedConversation) => {
-    const attrs = getAttrs(conversation);
-    return parseTimestampMs(attrs.fecha_monto_operacion || conversation.created_at || conversation.timestamp);
+    return getCommercialSaleDate(conversation, (value) => new Date(parseTimestampMs(value))).getTime();
 };
 
 const filterSalesConversations = (conversations: ResolvedConversation[], filters: DashboardFilters, tagSettings: TagConfig) => {
     const start = filters.startDate ? startOfLocalDay(filters.startDate).getTime() : null;
     const end = filters.endDate ? endOfLocalDay(filters.endDate).getTime() : null;
     const selectedInboxes = filters.selectedInboxes || [];
-    const saleLabels = [
-        ...(tagSettings.saleTags || []),
-        tagSettings.humanSaleTargetLabel || "venta_exitosa",
-    ].filter(Boolean);
 
     return conversations.filter((conversation) => {
         if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conversation.inbox_id))) return false;
-        if (conversation.resolvedStage !== "sale" && !hasAnyLabel(conversation, saleLabels)) return false;
+        if (!isCurrentSale(conversation, tagSettings)) return false;
 
         const saleDate = getSalesDateMs(conversation);
         if (start !== null && saleDate < start) return false;
@@ -786,10 +1416,15 @@ const csvEscape = (value: unknown) => {
     return text;
 };
 
+const getSectionColumns = (section: ReportSection) =>
+    Array.from(new Set(section.rows.flatMap((row) => Object.keys(row))));
+
 const sectionToCsv = (section: ReportSection) => {
-    const columns = Array.from(new Set(section.rows.flatMap((row) => Object.keys(row))));
+    const columns = getSectionColumns(section);
     const lines = [
-        csvEscape(section.title),
+        [csvEscape("Seccion"), csvEscape(section.title)].join(","),
+        [csvEscape("Tipo"), csvEscape(section.kind || "datos")].join(","),
+        [csvEscape("Descripcion"), csvEscape(section.description || "")].join(","),
         columns.map(csvEscape).join(","),
         ...section.rows.map((row) => columns.map((column) => csvEscape(row[column])).join(",")),
     ];
@@ -801,11 +1436,40 @@ const exportCsv = (sections: ReportSection[], fileName: string) => {
     downloadBlob(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }), fileName);
 };
 
+const getColumnWidths = (rows: Array<Record<string, unknown>>, columns: string[]) =>
+    columns.map((column) => {
+        const maxContentLength = rows.reduce((max, row) => Math.max(max, normalizeCell(row[column]).length), column.length);
+        return { wch: Math.min(48, Math.max(14, maxContentLength + 2)) };
+    });
+
+const getUniqueSheetName = (name: string, usedNames: Set<string>) => {
+    const base = safeSheetName(name).slice(0, 31);
+    if (!usedNames.has(base)) {
+        usedNames.add(base);
+        return base;
+    }
+
+    let index = 2;
+    while (true) {
+        const suffix = ` ${index}`;
+        const candidate = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+        if (!usedNames.has(candidate)) {
+            usedNames.add(candidate);
+            return candidate;
+        }
+        index += 1;
+    }
+};
+
 const exportExcel = (sections: ReportSection[], fileName: string) => {
     const workbook = xlsx.utils.book_new();
+    const usedNames = new Set<string>();
     sections.forEach((section, index) => {
-        const worksheet = xlsx.utils.json_to_sheet(section.rows);
-        xlsx.utils.book_append_sheet(workbook, worksheet, safeSheetName(`${index + 1} ${section.title}`));
+        const columns = getSectionColumns(section);
+        const worksheet = xlsx.utils.json_to_sheet(section.rows, { header: columns });
+        if (worksheet["!ref"]) worksheet["!autofilter"] = { ref: worksheet["!ref"] };
+        worksheet["!cols"] = getColumnWidths(section.rows, columns);
+        xlsx.utils.book_append_sheet(workbook, worksheet, getUniqueSheetName(section.sheetName || `${index + 1} ${section.title}`, usedNames));
     });
     xlsx.writeFile(workbook, fileName);
 };
@@ -838,18 +1502,23 @@ const pdfEscape = (text: string) => text.replace(/\\/g, "\\\\").replace(/\(/g, "
 const sectionsToPdfLines = (title: string, sections: ReportSection[]) => {
     const lines = [
         title,
-        `Generado: ${format(new Date(), "yyyy-MM-dd HH:mm")}`,
+        "Reporte ejecutivo del dashboard",
+        `Generado: ${formatReportDateTime()}`,
+        `Zona horaria: ${REPORT_TIME_ZONE}`,
+        "Nota: el PDF prioriza lectura ejecutiva. El detalle completo y filtrable vive en Excel/CSV.",
         "",
     ];
 
     sections.forEach((section) => {
         lines.push(section.title);
-        const columns = Array.from(new Set(section.rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
+        if (section.description) lines.push(section.description);
+        const columns = getSectionColumns(section).slice(0, section.kind === "detail" ? 8 : 10);
+        const rowLimit = section.kind === "detail" ? 40 : 120;
         if (columns.length > 0) lines.push(columns.join(" | "));
-        section.rows.slice(0, 120).forEach((row) => {
+        section.rows.slice(0, rowLimit).forEach((row) => {
             lines.push(columns.map((column) => normalizeCell(row[column])).join(" | "));
         });
-        if (section.rows.length > 120) lines.push(`... ${section.rows.length - 120} filas adicionales en Excel/CSV`);
+        if (section.rows.length > rowLimit) lines.push(`... ${section.rows.length - rowLimit} filas adicionales en Excel/CSV`);
         lines.push("");
     });
 

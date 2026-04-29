@@ -39,6 +39,50 @@ const resolveConversationChannel = (conversation: any, attrs: Record<string, any
     return resolved !== 'Otro' ? resolved : cleanChannel(attrs.canal) || null;
 };
 
+const TRACKED_COMMERCIAL_ATTRIBUTE_KEYS = [
+    'monto_operacion',
+    'fecha_monto_operacion',
+    'score_interes',
+    'score',
+    'lead_score',
+    'puntaje',
+    'responsable',
+    'campana',
+    'utm_campaign',
+    'business_stage'
+];
+
+const asObject = (value: unknown): Record<string, any> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+
+const emptyToNull = (value: unknown) =>
+    value === undefined || value === null || value === '' ? null : value;
+
+const stableJson = (value: unknown) => JSON.stringify(value ?? null);
+
+const buildAttributeHistoryRows = (
+    conversationId: number,
+    previousAttrs: Record<string, any>,
+    nextAttrs: Record<string, any>,
+    changedAt: string
+) => TRACKED_COMMERCIAL_ATTRIBUTE_KEYS
+    .map((attributeKey) => {
+        const oldValue = emptyToNull(previousAttrs?.[attributeKey]);
+        const newValue = emptyToNull(nextAttrs?.[attributeKey]);
+        if (stableJson(oldValue) === stableJson(newValue)) return null;
+
+        return {
+            chatwoot_conversation_id: conversationId,
+            attribute_key: attributeKey,
+            old_value: oldValue,
+            new_value: newValue,
+            changed_at: changedAt,
+            change_source: 'sync',
+            event_key: ['sync', conversationId, attributeKey, changedAt, stableJson(oldValue), stableJson(newValue)].join(':')
+        };
+    })
+    .filter(Boolean);
+
 export const SupabaseSyncService = {
     // Helper to safely parse any incoming custom attribute to a valid database numeric or null
     parseNumber(val: any): number | null {
@@ -210,17 +254,20 @@ export const SupabaseSyncService = {
     async upsertConversations(conversations: any[]) {
         const conversationIds = conversations.map(conv => Number(conv.id)).filter(Boolean);
         const previousLabelsById = new Map<number, string[]>();
+        const previousRowsById = new Map<number, Record<string, any>>();
 
         if (conversationIds.length > 0) {
             const { data, error } = await supabase
                 .schema('cw')
                 .from('conversations_current')
-                .select('chatwoot_conversation_id, labels')
+                .select('chatwoot_conversation_id, labels, custom_attributes, conversation_custom_attributes, contact_custom_attributes')
                 .in('chatwoot_conversation_id', conversationIds);
 
             if (error) throw error;
             (data || []).forEach((row: any) => {
-                previousLabelsById.set(Number(row.chatwoot_conversation_id), row.labels || []);
+                const conversationId = Number(row.chatwoot_conversation_id);
+                previousLabelsById.set(conversationId, row.labels || []);
+                previousRowsById.set(conversationId, row);
             });
         }
 
@@ -278,7 +325,7 @@ export const SupabaseSyncService = {
                 snoozed_until: conv.snoozed_until ? new Date(conv.snoozed_until * 1000).toISOString() : null,
                 unread_count: conv.unread_count,
                 labels: conv.labels || [],
-                business_stage_current: attrs.business_stage,
+                business_stage_current: emptyToNull(attrs.business_stage),
                 additional_attributes: conv.additional_attributes || {},
                 contact_custom_attributes: contactAttrs,
                 conversation_custom_attributes: convAttrs,
@@ -286,19 +333,19 @@ export const SupabaseSyncService = {
                 meta: conv.meta || {},
 
                 // Mapped Business Attributes
-                nombre_completo: attrs.nombre_completo,
-                fecha_visita: attrs.fecha_visita,
-                hora_visita: attrs.hora_visita,
-                agencia: attrs.agencia,
-                celular: attrs.celular,
-                correo: attrs.correo,
-                campana: attrs.campana,
-                ciudad: attrs.ciudad,
-                edad: attrs.edad,
+                nombre_completo: emptyToNull(attrs.nombre_completo),
+                fecha_visita: emptyToNull(attrs.fecha_visita),
+                hora_visita: emptyToNull(attrs.hora_visita),
+                agencia: emptyToNull(attrs.agencia),
+                celular: emptyToNull(attrs.celular),
+                correo: emptyToNull(attrs.correo),
+                campana: emptyToNull(attrs.campana),
+                ciudad: emptyToNull(attrs.ciudad),
+                edad: emptyToNull(attrs.edad),
                 canal,
-                agente: attrs.agente === true || attrs.agente === 'true',
+                agente: emptyToNull(attrs.agente) === null ? null : attrs.agente === true || attrs.agente === 'true',
                 score_interes: SupabaseSyncService.parseNumber(attrs.score_interes),
-                monto_operacion: SupabaseSyncService.parseNumber(attrs.monto_operacion),
+                monto_operacion: emptyToNull(attrs.monto_operacion),
                 fecha_monto_operacion: attrs.fecha_monto_operacion ? SupabaseSyncService.parseDateIso(attrs.fecha_monto_operacion) : null,
 
                 applied_sla: conv.applied_sla || {},
@@ -306,10 +353,40 @@ export const SupabaseSyncService = {
                 last_activity_at_chatwoot: conv.last_activity_at ? new Date(conv.last_activity_at * 1000).toISOString() : null,
                 created_at_chatwoot: conv.created_at ? SupabaseSyncService.parseDateIso(conv.created_at) : (conv.timestamp ? new Date(conv.timestamp * 1000).toISOString() : null),
                 updated_at_chatwoot: SupabaseSyncService.parseDateIso(conv.updated_at || conv.last_activity_at || conv.timestamp),
+                first_reply_created_at_chatwoot: conv.first_reply_created_at ? SupabaseSyncService.parseDateIso(conv.first_reply_created_at) : null,
+                waiting_since_chatwoot: conv.waiting_since ? SupabaseSyncService.parseDateIso(conv.waiting_since) : null,
                 raw_payload: conv,
                 updated_at: new Date().toISOString()
             };
         });
+
+        const attributeHistoryRows = conversations.flatMap((conv) => {
+            const conversationId = Number(conv.id);
+            const previousRow = previousRowsById.get(conversationId);
+            if (!previousRow) return [];
+
+            const contactAttrs = conv.meta?.sender?.custom_attributes || {};
+            const convAttrs = conv.custom_attributes || {};
+            const attrs = { ...contactAttrs, ...convAttrs };
+            const canal = resolveConversationChannel(conv, attrs);
+            const nextAttrs = canal ? { ...attrs, canal } : attrs;
+            const previousAttrs = {
+                ...asObject(previousRow.contact_custom_attributes),
+                ...asObject(previousRow.conversation_custom_attributes),
+                ...asObject(previousRow.custom_attributes)
+            };
+            const changedAt = SupabaseSyncService.parseDateIso(conv.updated_at || conv.last_activity_at || conv.timestamp);
+            return buildAttributeHistoryRows(conversationId, previousAttrs, nextAttrs, changedAt);
+        });
+
+        if (attributeHistoryRows.length > 0) {
+            const { error } = await supabase
+                .schema('cw')
+                .from('conversation_attribute_history')
+                .upsert(attributeHistoryRows, { onConflict: 'event_key', ignoreDuplicates: true });
+
+            if (error) throw error;
+        }
 
         const { error } = await supabase
             .schema('cw')

@@ -29,20 +29,41 @@ import {
 } from "@/components/ui/select";
 import {
     ChatwootAttributeDefinition,
-    ScoreThresholds,
     useDashboardContext
 } from "@/context/DashboardDataContext";
 import {
     formatDateTime,
     getAttrs,
+    getChatwootUrl,
+    getInitials,
     getLeadChannelName,
+    getLeadExternalUrl,
     getLeadName,
     getLeadPhone,
+    getMessagePreview,
+    getMessageTimestamp,
+    getRawLeadPhone,
+    normalize,
 } from "@/lib/leadDisplay";
 import { formatBusinessLabel, formatFieldLabel } from "@/lib/displayCopy";
-import { MinifiedConversation } from "@/services/StorageService";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { cn } from "@/lib/utils";
+import {
+    bucketFromScore,
+    DEFAULT_SCORE_THRESHOLDS,
+    formatScoreValue,
+    getBucketRangeLabel,
+    normalizeScoreThresholds,
+    parseNumericScore,
+    SCORE_BUCKET_COPY,
+    SCORE_BUCKET_ORDER,
+    type ScoreBucket,
+} from "@/lib/leadScoreClassification";
+import {
+    buildWindowedListState,
+    WINDOWED_LIST_VISIBLE_ROWS,
+    WINDOWED_TABLE_MAX_HEIGHT_PX,
+} from "@/lib/windowedList";
 import {
     Bar,
     BarChart,
@@ -60,14 +81,16 @@ import {
     Check,
     ChevronDown,
     ChevronsUpDown,
+    Clock,
+    ExternalLink,
     Gauge,
     Loader2,
+    Search,
     Settings2,
     Target,
     TrendingUp
 } from "lucide-react";
 
-type ScoreBucket = "high" | "medium" | "low";
 type ScoreDimension = "label" | "campaign";
 
 interface ScoreAttributeOption {
@@ -80,7 +103,7 @@ interface ScoreAttributeOption {
 interface PreparedLead {
     lead: any;
     score: number | null;
-    bucket: ScoreBucket | null;
+    bucket: ScoreBucket;
     bucketLabel: string;
     channel: string;
     campaign: string;
@@ -89,19 +112,12 @@ interface PreparedLead {
     attributeLabel: string;
 }
 
-const BUCKET_ORDER: ScoreBucket[] = ["high", "medium", "low"];
-const BUCKET_COPY: Record<ScoreBucket, { label: string; color: string; bg: string }> = {
-    high: { label: "Alta", color: "#059669", bg: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    medium: { label: "Media", color: "#d97706", bg: "bg-amber-50 text-amber-700 border-amber-200" },
-    low: { label: "Baja", color: "#dc2626", bg: "bg-red-50 text-red-700 border-red-200" }
-};
-const DEFAULT_SCORE_THRESHOLDS: ScoreThresholds = {
-    highMin: 20,
-    mediumMin: 10
-};
-
 const unique = (values: string[]) =>
     Array.from(new Set(values.map(value => value?.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+
+const BUCKET_ORDER = SCORE_BUCKET_ORDER;
+const BUCKET_COPY = SCORE_BUCKET_COPY;
+const normalizeThresholds = normalizeScoreThresholds;
 
 const parseDate = (value: unknown) => {
     if (!value) return new Date(0);
@@ -111,52 +127,11 @@ const parseDate = (value: unknown) => {
     return Number.isNaN(date.getTime()) ? new Date(0) : date;
 };
 
-const parseNumericScore = (value: unknown): number | null => {
-    if (value === null || value === undefined || value === "") return null;
-    if (typeof value === "number") return Number.isFinite(value) ? value : null;
-
-    const normalized = String(value)
-        .trim()
-        .replace(",", ".")
-        .replace(/[^0-9.-]/g, "");
-    if (!normalized) return null;
-
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : null;
-};
-
 const scoreAverage = (items: PreparedLead[]) =>
     items.length > 0 ? Math.round((items.reduce((sum, item) => sum + (item.score || 0), 0) / items.length) * 10) / 10 : 0;
 
 const percent = (count: number, total: number) =>
     total > 0 ? Math.round((count / total) * 100) : 0;
-
-const normalizeThresholds = (thresholds?: Partial<ScoreThresholds> | null): ScoreThresholds => {
-    const parsedHigh = Number(thresholds?.highMin);
-    const parsedMedium = Number(thresholds?.mediumMin);
-    const highMin = Number.isFinite(parsedHigh) ? parsedHigh : DEFAULT_SCORE_THRESHOLDS.highMin;
-    const mediumMin = Number.isFinite(parsedMedium) ? parsedMedium : DEFAULT_SCORE_THRESHOLDS.mediumMin;
-
-    if (highMin <= mediumMin) {
-        return DEFAULT_SCORE_THRESHOLDS;
-    }
-
-    return { highMin, mediumMin };
-};
-
-const bucketFromScore = (score: number, thresholds: ScoreThresholds): ScoreBucket => {
-    if (score >= thresholds.highMin) return "high";
-    if (score >= thresholds.mediumMin) return "medium";
-    return "low";
-};
-
-const formatThresholdValue = (value: number) => Number.isInteger(value) ? String(value) : value.toString();
-
-const getBucketRangeLabel = (bucket: ScoreBucket, thresholds: ScoreThresholds) => {
-    if (bucket === "high") return `Desde ${formatThresholdValue(thresholds.highMin)}`;
-    if (bucket === "medium") return `Desde ${formatThresholdValue(thresholds.mediumMin)} y antes de ${formatThresholdValue(thresholds.highMin)}`;
-    return `Menor a ${formatThresholdValue(thresholds.mediumMin)}`;
-};
 
 const isNumericAttributeDefinition = (definition: ChatwootAttributeDefinition) => {
     const type = String(definition.attribute_display_type || "").trim().toLowerCase();
@@ -204,14 +179,16 @@ const LeadScoringLayer = () => {
     const [labelFilters, setLabelFilters] = useState<string[]>([]);
     const [ownerFilter, setOwnerFilter] = useState("all");
     const [bucketFilter, setBucketFilter] = useState("all");
+    const [detailSearch, setDetailSearch] = useState("");
     const [scoreDimension, setScoreDimension] = useState<ScoreDimension>("label");
     const [configOpen, setConfigOpen] = useState(() => !tagSettings.scoreAttributeKey);
     const [settingsDirty, setSettingsDirty] = useState(false);
     const [savingSettings, setSavingSettings] = useState(false);
     const [scoreAttributeKeyDraft, setScoreAttributeKeyDraft] = useState("");
     const [appointmentLabelsDraft, setAppointmentLabelsDraft] = useState<string[]>([]);
-    const [thresholdHighDraft, setThresholdHighDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.highMin));
-    const [thresholdMediumDraft, setThresholdMediumDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.mediumMin));
+    const [thresholdHotDraft, setThresholdHotDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.hotMin));
+    const [thresholdWarmDraft, setThresholdWarmDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.warmMin));
+    const [thresholdColdDraft, setThresholdColdDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.coldMin));
 
     const inboxMap = useMemo(
         () => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])),
@@ -272,8 +249,9 @@ const LeadScoringLayer = () => {
         if (!settingsDirty) {
             setScoreAttributeKeyDraft(effectiveScoreAttributeKey);
             setAppointmentLabelsDraft(effectiveAppointmentLabels);
-            setThresholdHighDraft(String(effectiveScoreThresholds.highMin));
-            setThresholdMediumDraft(String(effectiveScoreThresholds.mediumMin));
+            setThresholdHotDraft(String(effectiveScoreThresholds.hotMin));
+            setThresholdWarmDraft(String(effectiveScoreThresholds.warmMin));
+            setThresholdColdDraft(String(effectiveScoreThresholds.coldMin));
         }
     }, [effectiveScoreAttributeKey, effectiveAppointmentLabels, effectiveScoreThresholds, settingsDirty]);
 
@@ -284,26 +262,28 @@ const LeadScoringLayer = () => {
     );
     const activeScoreThresholds = useMemo(
         () => normalizeThresholds({
-            highMin: Number(settingsDirty ? thresholdHighDraft : effectiveScoreThresholds.highMin),
-            mediumMin: Number(settingsDirty ? thresholdMediumDraft : effectiveScoreThresholds.mediumMin)
+            hotMin: Number(settingsDirty ? thresholdHotDraft : effectiveScoreThresholds.hotMin),
+            warmMin: Number(settingsDirty ? thresholdWarmDraft : effectiveScoreThresholds.warmMin),
+            coldMin: Number(settingsDirty ? thresholdColdDraft : effectiveScoreThresholds.coldMin)
         }),
-        [settingsDirty, thresholdHighDraft, thresholdMediumDraft, effectiveScoreThresholds]
+        [settingsDirty, thresholdHotDraft, thresholdWarmDraft, thresholdColdDraft, effectiveScoreThresholds]
     );
 
     const thresholdValidationError = useMemo(() => {
-        const parsedHigh = Number(thresholdHighDraft);
-        const parsedMedium = Number(thresholdMediumDraft);
+        const parsedHot = Number(thresholdHotDraft);
+        const parsedWarm = Number(thresholdWarmDraft);
+        const parsedCold = Number(thresholdColdDraft);
 
-        if (!Number.isFinite(parsedHigh) || !Number.isFinite(parsedMedium)) {
-            return "Ingresa valores numéricos válidos para Alta y Media.";
+        if (!Number.isFinite(parsedHot) || !Number.isFinite(parsedWarm) || !Number.isFinite(parsedCold)) {
+            return "Ingresa valores numéricos válidos para Caliente, Tibio y Frío.";
         }
 
-        if (parsedHigh <= parsedMedium) {
-            return "El valor de Alta debe ser mayor que el valor de Media.";
+        if (parsedHot <= parsedWarm || parsedWarm <= parsedCold) {
+            return "Los rangos deben quedar en orden: Caliente mayor que Tibio, y Tibio mayor que Frío.";
         }
 
         return null;
-    }, [thresholdHighDraft, thresholdMediumDraft]);
+    }, [thresholdHotDraft, thresholdWarmDraft, thresholdColdDraft]);
 
     const selectedScoreAttribute = useMemo(
         () => scoreAttributeOptions.find(option => option.key === activeScoreAttributeKey) || null,
@@ -327,8 +307,9 @@ const LeadScoringLayer = () => {
                 scoreAttributeKey: scoreAttributeKeyDraft,
                 scoreAppointmentLabels: unique(appointmentLabelsDraft.filter(label => actualLabels.includes(label))),
                 scoreThresholds: {
-                    highMin: Number(thresholdHighDraft),
-                    mediumMin: Number(thresholdMediumDraft)
+                    hotMin: Number(thresholdHotDraft),
+                    warmMin: Number(thresholdWarmDraft),
+                    coldMin: Number(thresholdColdDraft)
                 }
             });
             setSettingsDirty(false);
@@ -346,8 +327,9 @@ const LeadScoringLayer = () => {
         setSettingsDirty(true);
         setScoreAttributeKeyDraft(defaultScoreAttributeKey);
         setAppointmentLabelsDraft(defaultAppointmentLabels);
-        setThresholdHighDraft(String(DEFAULT_SCORE_THRESHOLDS.highMin));
-        setThresholdMediumDraft(String(DEFAULT_SCORE_THRESHOLDS.mediumMin));
+        setThresholdHotDraft(String(DEFAULT_SCORE_THRESHOLDS.hotMin));
+        setThresholdWarmDraft(String(DEFAULT_SCORE_THRESHOLDS.warmMin));
+        setThresholdColdDraft(String(DEFAULT_SCORE_THRESHOLDS.coldMin));
     };
 
     const toggleAppointmentLabel = (label: string) => {
@@ -379,13 +361,13 @@ const LeadScoringLayer = () => {
         return dateFilteredLeads.map((lead: any) => {
             const inbox = lead.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
             const score = activeScoreAttributeKey ? parseNumericScore(lead.resolvedAttrs[activeScoreAttributeKey]) : null;
-            const bucket = score === null ? null : bucketFromScore(score, activeScoreThresholds);
+            const bucket = bucketFromScore(score, activeScoreThresholds);
 
             return {
                 lead,
                 score,
                 bucket,
-                bucketLabel: bucket ? BUCKET_COPY[bucket].label : "Sin puntaje",
+                bucketLabel: BUCKET_COPY[bucket].label,
                 channel: getLeadChannelName(lead, inbox),
                 campaign: resolveLeadCampaign(lead),
                 owner: String(lead.resolvedAttrs.responsable || lead.meta?.assignee?.name || "").trim() || "Sin responsable",
@@ -396,7 +378,7 @@ const LeadScoringLayer = () => {
     }, [dateFilteredLeads, inboxMap, activeScoreAttributeKey, activeScoreThresholds, selectedScoreAttribute]);
 
     const scorablePreparedLeads = useMemo(
-        () => preparedLeads.filter((item): item is PreparedLead & { score: number; bucket: ScoreBucket } => item.score !== null && item.bucket !== null),
+        () => preparedLeads.filter((item): item is PreparedLead & { score: number; bucket: ScoreBucket } => item.score !== null),
         [preparedLeads]
     );
 
@@ -435,18 +417,17 @@ const LeadScoringLayer = () => {
         });
     }, [preparedLeads, campaignFilter, labelFilters, ownerFilter]);
 
-    const missingScoreCount = visiblePreparedLeads.filter(item => item.score === null).length;
-
     const filteredLeads = useMemo(
-        () => visiblePreparedLeads.filter((item): item is PreparedLead & { score: number; bucket: ScoreBucket } => {
-            if (item.score === null || !item.bucket) return false;
+        () => visiblePreparedLeads.filter((item): item is PreparedLead & { bucket: ScoreBucket } => {
             if (bucketFilter !== "all" && item.bucket !== bucketFilter) return false;
             return true;
         }),
         [visiblePreparedLeads, bucketFilter]
     );
 
-    const scoredLeadCount = filteredLeads.length;
+    const scoredFilteredLeads = filteredLeads.filter((item): item is PreparedLead & { score: number; bucket: ScoreBucket } => item.score !== null);
+    const scoredLeadCount = scoredFilteredLeads.length;
+    const filteredMissingScoreCount = filteredLeads.filter(item => item.score === null).length;
 
     const isAppointmentLead = (lead: any) => {
         const hasAppointmentLabel = activeAppointmentLabels.length > 0 && lead.resolvedLabels.some((l: string) => activeAppointmentLabels.includes(l));
@@ -461,12 +442,12 @@ const LeadScoringLayer = () => {
         fill: BUCKET_COPY[bucket].color
     }));
 
-    const highLeads = filteredLeads.filter(item => item.bucket === "high");
+    const hotLeads = filteredLeads.filter(item => item.bucket === "hot");
     const lowLeads = filteredLeads.filter(item => item.bucket === "low");
-    const highAppointments = highLeads.filter(item => isAppointmentLead(item.lead)).length;
+    const hotAppointments = hotLeads.filter(item => isAppointmentLead(item.lead)).length;
 
     const averageByChannel = Array.from(
-        filteredLeads.reduce((map, item) => {
+        scoredFilteredLeads.reduce((map, item) => {
             const row = map.get(item.channel) || { name: item.channel, total: 0, count: 0 };
             row.total += item.score;
             row.count += 1;
@@ -480,12 +461,12 @@ const LeadScoringLayer = () => {
     })).sort((a, b) => b.score - a.score || b.leads - a.leads);
 
     const averageByDimension = Array.from(
-        filteredLeads.reduce((map, item) => {
+        scoredFilteredLeads.reduce((map, item) => {
             const keys = scoreDimension === "campaign"
                 ? (item.campaign !== "Sin campaña" ? [item.campaign] : [])
                 : extractLeadLabels(item.lead).filter(label => scoreVisibleLabels.includes(label)).length > 0
                     ? extractLeadLabels(item.lead).filter(label => scoreVisibleLabels.includes(label))
-                    : ["Sin estado actual"];
+                    : ["Sin estado"];
 
             keys.forEach((key) => {
                 const row = map.get(key) || { name: key, total: 0, count: 0 };
@@ -503,7 +484,7 @@ const LeadScoringLayer = () => {
     })).sort((a, b) => b.score - a.score || b.leads - a.leads).slice(0, 8);
 
     const dimensionCardTitle = scoreDimension === "label"
-        ? "Puntaje promedio según estado actual"
+        ? "Puntaje promedio según estado del lead"
         : "Puntaje promedio según campaña";
     const dimensionCardDescription = scoreDimension === "label"
         ? "Muestra el puntaje promedio de los leads que hoy tienen cada estado visible."
@@ -511,7 +492,7 @@ const LeadScoringLayer = () => {
 
     const scoreDomain = useMemo(() => {
         const values = [
-            ...filteredLeads.map(item => item.score),
+            ...scoredFilteredLeads.map(item => item.score),
             ...averageByChannel.map(item => item.score),
             ...averageByDimension.map(item => item.score)
         ].filter((value): value is number => Number.isFinite(value));
@@ -524,7 +505,7 @@ const LeadScoringLayer = () => {
         const padding = Math.max(2, Math.ceil((spread || Math.max(Math.abs(max), 10)) * 0.1));
 
         return [Math.min(0, min - padding), max + padding];
-    }, [filteredLeads, averageByChannel, averageByDimension]);
+    }, [scoredFilteredLeads, averageByChannel, averageByDimension]);
 
     const conversionByBucket = BUCKET_ORDER.map(bucket => {
         const bucketLeads = filteredLeads.filter(item => item.bucket === bucket);
@@ -541,15 +522,72 @@ const LeadScoringLayer = () => {
     });
 
     const kpis = {
-        averageScore: scoreAverage(filteredLeads),
-        highPercentage: percent(highLeads.length, filteredLeads.length),
-        highAppointmentConversion: percent(highAppointments, highLeads.length),
+        averageScore: scoreAverage(scoredFilteredLeads),
+        hotPercentage: percent(hotLeads.length, filteredLeads.length),
+        hotAppointmentConversion: percent(hotAppointments, hotLeads.length),
         lowPercentage: percent(lowLeads.length, filteredLeads.length)
     };
 
     const detailRows = [...filteredLeads]
-        .sort((a, b) => b.score - a.score || (b.lead.timestamp || 0) - (a.lead.timestamp || 0))
-        .slice(0, 10);
+        .sort((a, b) => (b.score ?? Number.NEGATIVE_INFINITY) - (a.score ?? Number.NEGATIVE_INFINITY) || (b.lead.timestamp || 0) - (a.lead.timestamp || 0));
+
+    const searchedDetailRows = useMemo(() => {
+        const query = normalize(detailSearch);
+        if (!query) return detailRows;
+
+        return detailRows.filter((item) => {
+            const labels = extractLeadLabels(item.lead);
+            const phone = getLeadPhone(item.lead, item.channel);
+            const haystack = [
+                item.lead.id,
+                getLeadName(item.lead),
+                phone,
+                getRawLeadPhone(item.lead),
+                item.channel,
+                item.campaign,
+                item.owner,
+                item.bucketLabel,
+                item.score,
+                formatScoreValue(item.score),
+                getMessagePreview(item.lead),
+                formatDateTime(item.lead.created_at || item.lead.timestamp),
+                formatDateTime(item.lead.timestamp || item.lead.created_at),
+                ...labels,
+                ...labels.map(formatBusinessLabel),
+            ].map(normalize).join(" ");
+
+            return haystack.includes(query);
+        });
+    }, [detailRows, detailSearch]);
+
+    const windowedDetailRows = useMemo(
+        () => buildWindowedListState(searchedDetailRows),
+        [searchedDetailRows]
+    );
+
+    const scoreFieldLabel = selectedScoreAttribute?.label || formatFieldLabel(activeScoreAttributeKey) || "ningún campo";
+
+    const activeFilterSummary = useMemo(() => {
+        const filters: string[] = [];
+        if (globalFilters.startDate || globalFilters.endDate) {
+            filters.push(`Fecha: ${globalFilters.startDate ? globalFilters.startDate.toLocaleDateString("es-EC") : "inicio"} a ${globalFilters.endDate ? globalFilters.endDate.toLocaleDateString("es-EC") : "hoy"}`);
+        }
+        if ((globalFilters.selectedInboxes || []).length > 0) {
+            const channels = (globalFilters.selectedInboxes || [])
+                .map((id) => inboxMap.get(Number(id))?.name || `Canal ${id}`);
+            filters.push(`Canales: ${channels.join(", ")}`);
+        }
+        if (campaignFilter !== "all") filters.push(`Campaña: ${campaignFilter}`);
+        if (labelFilters.length > 0) filters.push(`Estados: ${labelFilters.map(formatBusinessLabel).join(", ")}`);
+        if (ownerFilter !== "all") filters.push(`Responsable: ${ownerFilter}`);
+        if (bucketFilter !== "all") filters.push(`Nivel: ${BUCKET_COPY[bucketFilter as ScoreBucket]?.label || bucketFilter}`);
+        if (detailSearch.trim()) filters.push(`Búsqueda: ${detailSearch.trim()}`);
+        return filters.length > 0 ? filters.join(" | ") : "Sin filtros internos; usando fecha y canal global si están seleccionados.";
+    }, [globalFilters.startDate, globalFilters.endDate, globalFilters.selectedInboxes, inboxMap, campaignFilter, labelFilters, ownerFilter, bucketFilter, detailSearch]);
+
+    const detailShowingLabel = windowedDetailRows.total > WINDOWED_LIST_VISIBLE_ROWS
+        ? `Mostrando hasta ${windowedDetailRows.visibleItems.length} de ${windowedDetailRows.total}`
+        : `Mostrando ${windowedDetailRows.visibleItems.length} de ${windowedDetailRows.total}`;
 
     const noScoringAttributeAvailable = scoreAttributeOptions.length === 0;
 
@@ -581,7 +619,7 @@ const LeadScoringLayer = () => {
                                         Configurar puntajes
                                     </CardTitle>
                                     <CardDescription>
-                                        Elige el campo numérico oficial del puntaje y define qué estados cuentan como cita para validar la calidad alta.
+                                        Elige el campo numérico oficial del puntaje, ajusta los rangos y define qué estados cuentan como cita.
                                     </CardDescription>
                                 </div>
                                 <CollapsibleTrigger asChild>
@@ -667,7 +705,7 @@ const LeadScoringLayer = () => {
                                                 <label className="text-sm font-semibold">Estados que contarán como cita</label>
                                                 <div className="rounded-lg border">
                                                     <div className="border-b bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                                                        Selecciona los estados que cuentan como cita o avance comercial para medir qué porcentaje de leads de nivel alto ya llegó a ese punto.
+                                                        Selecciona los estados que cuentan como cita o avance comercial para medir qué porcentaje de leads calientes ya llegó a ese punto.
                                                     </div>
                                                     <div className="max-h-[220px] space-y-2 overflow-y-auto p-3">
                                                         {actualLabels.length === 0 ? (
@@ -691,7 +729,7 @@ const LeadScoringLayer = () => {
                                         <div className="rounded-lg border bg-muted/10 p-4">
                                             <div className="mb-3 flex items-center justify-between gap-3">
                                                 <div>
-                                                    <div className="text-sm font-semibold">Rangos para Alta, Media y Baja</div>
+                                                    <div className="text-sm font-semibold">Rangos para Caliente, Tibio, Frío y Bajo</div>
                                                     <p className="text-xs text-muted-foreground">
                                                         El tablero clasificará el puntaje según estos cortes.
                                                     </p>
@@ -705,31 +743,44 @@ const LeadScoringLayer = () => {
                                                 </div>
                                             </div>
 
-                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                                                 <div className="space-y-2">
-                                                    <label className="text-sm font-semibold">Desde Alta</label>
+                                                    <label className="text-sm font-semibold">Desde Caliente</label>
                                                     <Input
                                                         type="number"
                                                         inputMode="decimal"
-                                                        value={thresholdHighDraft}
+                                                        value={thresholdHotDraft}
                                                         onChange={(event) => {
                                                             setSettingsDirty(true);
-                                                            setThresholdHighDraft(event.target.value);
+                                                            setThresholdHotDraft(event.target.value);
                                                         }}
-                                                        placeholder="20"
+                                                        placeholder="70"
                                                     />
                                                 </div>
                                                 <div className="space-y-2">
-                                                    <label className="text-sm font-semibold">Desde Media</label>
+                                                    <label className="text-sm font-semibold">Desde Tibio</label>
                                                     <Input
                                                         type="number"
                                                         inputMode="decimal"
-                                                        value={thresholdMediumDraft}
+                                                        value={thresholdWarmDraft}
                                                         onChange={(event) => {
                                                             setSettingsDirty(true);
-                                                            setThresholdMediumDraft(event.target.value);
+                                                            setThresholdWarmDraft(event.target.value);
                                                         }}
-                                                        placeholder="10"
+                                                        placeholder="45"
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <label className="text-sm font-semibold">Desde Frío</label>
+                                                    <Input
+                                                        type="number"
+                                                        inputMode="decimal"
+                                                        value={thresholdColdDraft}
+                                                        onChange={(event) => {
+                                                            setSettingsDirty(true);
+                                                            setThresholdColdDraft(event.target.value);
+                                                        }}
+                                                        placeholder="20"
                                                     />
                                                 </div>
                                             </div>
@@ -785,45 +836,44 @@ const LeadScoringLayer = () => {
                 </CardContent>
             </Card>
 
-            {noScoringAttributeAvailable ? null : (
-                <>
+            <>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <KPICard
                             icon={Gauge}
                             title="Puntaje promedio"
                             value={`${kpis.averageScore}`}
-                            subtitle={`${scoredLeadCount} leads con puntaje - ${missingScoreCount} sin puntaje`}
+                            subtitle={`${scoredLeadCount} con puntaje - ${filteredMissingScoreCount} sin puntaje`}
                             variant="primary"
                         />
                         <KPICard
                             icon={BadgeCheck}
-                            title="% leads de alta calidad"
-                            value={`${kpis.highPercentage}%`}
-                            subtitle={`${highLeads.length} leads en nivel alto`}
+                            title="% leads calientes"
+                            value={`${kpis.hotPercentage}%`}
+                            subtitle={`${hotLeads.length} leads en nivel Caliente`}
                             variant="success"
                         />
                         <KPICard
                             icon={TrendingUp}
-                            title="Leads altos que llegan a cita"
-                            value={`${kpis.highAppointmentConversion}%`}
+                            title="Calientes que llegan a cita"
+                            value={`${kpis.hotAppointmentConversion}%`}
                             subtitle={activeAppointmentLabels.length === 0
                                 ? "Primero configura qué estados cuentan como cita."
-                                : `${highAppointments} de ${highLeads.length} leads altos ya llegaron a cita`}
+                                : `${hotAppointments} de ${hotLeads.length} leads calientes ya llegaron a cita`}
                             variant="success"
                         />
                         <KPICard
                             icon={Activity}
-                            title="% leads de baja calidad"
+                            title="% leads bajos"
                             value={`${kpis.lowPercentage}%`}
-                            subtitle={`${lowLeads.length} leads en nivel bajo`}
+                            subtitle={`${lowLeads.length} leads en nivel Bajo, incluidos los sin puntaje`}
                             variant="destructive"
                         />
                     </div>
 
                     <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                        <ChartCard title="Distribución por nivel de puntaje" description="Reparte los leads con puntaje entre baja, media y alta calidad.">
+                        <ChartCard title="Distribución por nivel de puntaje" description="Reparte los leads entre Caliente, Tibio, Frío y Bajo. Los sin puntaje entran en Bajo.">
                             {filteredLeads.length === 0 ? (
-                                <EmptyState text={missingScoreCount > 0 ? "Los leads visibles no tienen puntaje en el campo seleccionado." : "No hay leads con estos filtros."} />
+                                <EmptyState text="No hay leads con estos filtros." />
                             ) : (
                                 <ResponsiveContainer width="100%" height={300}>
                                     <BarChart data={bucketDistribution} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
@@ -867,7 +917,7 @@ const LeadScoringLayer = () => {
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="label">Estado actual</SelectItem>
+                                        <SelectItem value="label">Estado del lead</SelectItem>
                                         <SelectItem value="campaign">Campaña</SelectItem>
                                     </SelectContent>
                                 </Select>
@@ -894,12 +944,12 @@ const LeadScoringLayer = () => {
 
                         <ChartCard
                             title="Leads con cita según nivel de puntaje"
-                            description="Muestra qué porcentaje de leads con puntaje alto, medio o bajo ya llegó a los estados de cita configurados."
+                            description="Muestra qué porcentaje de leads por nivel ya llegó a los estados de cita configurados."
                         >
                             {activeAppointmentLabels.length === 0 ? (
                                 <EmptyState text="Primero configura qué estados cuentan como cita." />
                             ) : filteredLeads.length === 0 ? (
-                                <EmptyState text="No hay leads con puntaje para esta vista y estos filtros." />
+                                <EmptyState text="No hay leads para esta vista y estos filtros." />
                             ) : (
                                 <ResponsiveContainer width="100%" height={300}>
                                     <BarChart data={conversionByBucket} margin={{ top: 20, right: 24, left: 0, bottom: 10 }}>
@@ -918,72 +968,151 @@ const LeadScoringLayer = () => {
                     </div>
 
                     <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2 text-base">
-                                <Target className="h-5 w-5 text-primary" />
-                                Leads evaluados
-                            </CardTitle>
-                            <CardDescription>
-                                Top 10 por puntaje dentro de los filtros seleccionados. El puntaje sale de {selectedScoreAttribute?.label || formatFieldLabel(activeScoreAttributeKey) || "ningún campo"}.
-                            </CardDescription>
+                        <CardHeader className="border-b pb-4">
+                            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="space-y-2">
+                                    <CardTitle className="flex items-center gap-2 text-base">
+                                        <Target className="h-5 w-5 text-primary" />
+                                        Leads evaluados
+                                    </CardTitle>
+                                    <CardDescription className="space-y-1">
+                                        <span className="block">
+                                            El puntaje sale de <span className="font-semibold text-foreground">{scoreFieldLabel}</span>. {activeFilterSummary}
+                                        </span>
+                                        <span className="block">
+                                            Total encontrados: <span className="font-semibold text-foreground">{windowedDetailRows.total}</span> · {detailShowingLabel}
+                                        </span>
+                                    </CardDescription>
+                                </div>
+                                <div className="relative min-w-[260px]">
+                                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                    <Input
+                                        value={detailSearch}
+                                        onChange={(event) => setDetailSearch(event.target.value)}
+                                        placeholder="Buscar lead, canal, estado, campaña o nivel..."
+                                        className="h-9 pl-9 text-sm"
+                                    />
+                                </div>
+                            </div>
                         </CardHeader>
-                        <CardContent>
-                            <div className="overflow-x-auto rounded-xl border">
-                                <table className="w-full min-w-[820px] text-left text-sm">
-                                    <thead className="border-b bg-muted/30 text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <CardContent className="pt-6">
+                            <div className="rounded-xl border bg-background shadow-sm">
+                                <div
+                                    className={windowedDetailRows.hasVerticalScroll ? "overflow-auto overscroll-contain" : "overflow-x-auto"}
+                                    style={windowedDetailRows.hasVerticalScroll ? { maxHeight: `${WINDOWED_TABLE_MAX_HEIGHT_PX}px` } : undefined}
+                                >
+                                <table className="w-full min-w-[1480px] text-left text-sm">
+                                    <thead className="sticky top-0 z-10 border-b bg-muted/95 text-[10px] uppercase tracking-wider text-muted-foreground backdrop-blur">
                                         <tr>
-                                            <th className="px-4 py-3">Lead</th>
+                                            <th className="px-4 py-3">Nombre del lead</th>
                                             <th className="px-4 py-3">Nivel</th>
                                             <th className="px-4 py-3">Puntaje</th>
                                             <th className="px-4 py-3">Canal</th>
+                                            <th className="px-4 py-3">Número</th>
+                                            <th className="px-4 py-3">Estado</th>
+                                            <th className="px-4 py-3">Historial de mensajes</th>
+                                            <th className="px-4 py-3">URL</th>
                                             <th className="px-4 py-3">Campaña</th>
-                                            <th className="px-4 py-3">Campo usado</th>
-                                            <th className="px-4 py-3">Fecha</th>
+                                            <th className="px-4 py-3">Fecha de ingreso</th>
+                                            <th className="px-4 py-3">Última interacción</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y">
-                                        {detailRows.length === 0 ? (
+                                        {windowedDetailRows.visibleItems.length === 0 ? (
                                             <tr>
-                                                <td className="px-4 py-12 text-center text-muted-foreground" colSpan={7}>
-                                                    No hay leads con puntaje para mostrar.
+                                                <td className="px-4 py-12 text-center text-muted-foreground" colSpan={11}>
+                                                    No hay leads para mostrar con estos filtros.
                                                 </td>
                                             </tr>
                                         ) : (
-                                            detailRows.map(item => (
-                                                <tr key={item.lead.id} className="hover:bg-muted/20">
-                                                    <td className="px-4 py-3">
-                                                        <div className="font-semibold">{getLeadName(item.lead)}</div>
-                                                        <div className="text-[10px] text-muted-foreground">
-                                                            ID {item.lead.id} - {getLeadPhone(item.lead, item.channel) || "Sin número"}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <Badge variant="outline" className={BUCKET_COPY[item.bucket].bg}>{item.bucketLabel}</Badge>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="font-bold">{item.score}</div>
-                                                        <div className="text-[10px] text-muted-foreground">
-                                                            {item.bucket === "high" ? "Alta calidad" : item.bucket === "medium" ? "Calidad media" : "Baja calidad"}
-                                                        </div>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="font-medium">{item.channel}</div>
-                                                    </td>
-                                                    <td className="px-4 py-3">{item.campaign}</td>
-                                                    <td className="px-4 py-3">
-                                                        <div className="font-medium">{item.attributeLabel}</div>
-                                                    </td>
-                                                    <td className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(item.lead.created_at || item.lead.timestamp)}</td>
-                                                </tr>
-                                            ))
+                                            windowedDetailRows.visibleItems.map(item => {
+                                                const labels = extractLeadLabels(item.lead);
+                                                const phone = getLeadPhone(item.lead, item.channel);
+                                                const lastMessageDate = formatDateTime(getMessageTimestamp(item.lead));
+                                                const externalUrl = getLeadExternalUrl(item.lead, item.channel);
+
+                                                return (
+                                                    <tr key={item.lead.id} className="hover:bg-muted/20">
+                                                        <td className="px-4 py-3">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold uppercase text-primary shadow-sm">
+                                                                    {getInitials(getLeadName(item.lead))}
+                                                                </div>
+                                                                <div className="min-w-0">
+                                                                    <div className="truncate font-semibold">{getLeadName(item.lead)}</div>
+                                                                    <div className="truncate text-[10px] text-muted-foreground">ID {item.lead.id}</div>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            <Badge variant="outline" className={BUCKET_COPY[item.bucket].bg}>{item.bucketLabel}</Badge>
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            <div className="font-bold">{formatScoreValue(item.score)}</div>
+                                                            <div className="text-[10px] text-muted-foreground">{BUCKET_COPY[item.bucket].description}</div>
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            <Badge variant="secondary" className="px-2 py-0 text-[10px] font-bold uppercase">
+                                                                {item.channel}
+                                                            </Badge>
+                                                        </td>
+                                                        <td className="px-4 py-3 text-xs text-muted-foreground">
+                                                            {phone || "Sin número"}
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            <div className="flex max-w-[260px] flex-wrap gap-1">
+                                                                {labels.length > 0 ? (
+                                                                    labels.map((label) => (
+                                                                        <Badge key={`${item.lead.id}-${label}`} variant="outline" className="h-5 px-2 text-[9px] font-bold">
+                                                                            {formatBusinessLabel(label)}
+                                                                        </Badge>
+                                                                    ))
+                                                                ) : (
+                                                                    <span className="text-xs text-muted-foreground">Sin estado</span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            <a
+                                                                href={getChatwootUrl(item.lead.id)}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="flex max-w-[340px] flex-col text-left hover:text-primary"
+                                                            >
+                                                                <span className="truncate text-xs font-medium text-foreground">{getMessagePreview(item.lead)}</span>
+                                                                <span className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+                                                                    <Clock className="h-3 w-3" />
+                                                                    {lastMessageDate}
+                                                                </span>
+                                                                <span className="mt-1 text-[10px] text-primary">Abrir conversación</span>
+                                                            </a>
+                                                        </td>
+                                                        <td className="px-4 py-3">
+                                                            {externalUrl ? (
+                                                                <a href={externalUrl} target="_blank" rel="noreferrer">
+                                                                    <Button size="sm" variant="outline" className="h-8 gap-2 text-xs">
+                                                                        <ExternalLink className="h-3.5 w-3.5" />
+                                                                        Abrir URL
+                                                                    </Button>
+                                                                </a>
+                                                            ) : (
+                                                                <span className="text-xs text-muted-foreground">Sin URL</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-3">{item.campaign}</td>
+                                                        <td className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(item.lead.created_at || item.lead.timestamp)}</td>
+                                                        <td className="px-4 py-3 text-xs text-muted-foreground">{formatDateTime(item.lead.timestamp || item.lead.created_at)}</td>
+                                                    </tr>
+                                                );
+                                            })
                                         )}
                                     </tbody>
                                 </table>
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
-                </>
-            )}
+            </>
         </div>
     );
 };

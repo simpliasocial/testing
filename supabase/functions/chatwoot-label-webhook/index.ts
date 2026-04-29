@@ -119,8 +119,54 @@ const resolveAttributeSnapshots = (conversation: Record<string, any>) => {
     };
 };
 
-const compactObject = (obj: Record<string, unknown>) =>
-    Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined && value !== null && value !== ""));
+const TRACKED_COMMERCIAL_ATTRIBUTE_KEYS = [
+    "monto_operacion",
+    "fecha_monto_operacion",
+    "score_interes",
+    "score",
+    "lead_score",
+    "puntaje",
+    "responsable",
+    "campana",
+    "utm_campaign",
+    "business_stage",
+];
+
+const emptyToNull = (value: unknown) =>
+    value === undefined || value === null || value === "" ? null : value;
+
+const stableJson = (value: unknown) => JSON.stringify(value ?? null);
+
+const buildAttributeHistoryRows = (
+    conversationId: number,
+    previousAttrs: Record<string, any>,
+    nextAttrs: Record<string, any>,
+    changedAt: string,
+    changeSource: "sync" | "webhook" | "repair" | "manual",
+) => TRACKED_COMMERCIAL_ATTRIBUTE_KEYS
+    .map((attributeKey) => {
+        const oldValue = emptyToNull(previousAttrs?.[attributeKey]);
+        const newValue = emptyToNull(nextAttrs?.[attributeKey]);
+        if (stableJson(oldValue) === stableJson(newValue)) return null;
+
+        return {
+            chatwoot_conversation_id: conversationId,
+            attribute_key: attributeKey,
+            old_value: oldValue,
+            new_value: newValue,
+            changed_at: changedAt,
+            change_source: changeSource,
+            event_key: [
+                changeSource,
+                conversationId,
+                attributeKey,
+                changedAt,
+                stableJson(oldValue),
+                stableJson(newValue),
+            ].join(":"),
+        };
+    })
+    .filter(Boolean);
 
 const normalizeLabels = (labels: unknown): string[] => {
     if (!Array.isArray(labels)) return [];
@@ -204,22 +250,20 @@ const buildConversationUpsertRow = (conversation: Record<string, any>, inbox?: R
         last_non_activity_message_preview: lastNonActivity.content || null,
         last_message_at: toIso(lastNonActivity.created_at || conversation.last_activity_at || conversation.timestamp),
         raw_payload: conversation,
-        ...compactObject({
-            nombre_completo: attrs.nombre_completo,
-            fecha_visita: attrs.fecha_visita,
-            hora_visita: attrs.hora_visita,
-            agencia: attrs.agencia,
-            celular: attrs.celular,
-            correo: attrs.correo,
-            campana: attrs.campana,
-            ciudad: attrs.ciudad,
-            edad: attrs.edad,
-            canal,
-            agente: attrs.agente === true || attrs.agente === "true",
-            score_interes: parseNumber(attrs.score_interes),
-            monto_operacion: attrs.monto_operacion,
-            fecha_monto_operacion: toIso(attrs.fecha_monto_operacion),
-        }),
+        nombre_completo: emptyToNull(attrs.nombre_completo),
+        fecha_visita: emptyToNull(attrs.fecha_visita),
+        hora_visita: emptyToNull(attrs.hora_visita),
+        agencia: emptyToNull(attrs.agencia),
+        celular: emptyToNull(attrs.celular),
+        correo: emptyToNull(attrs.correo),
+        campana: emptyToNull(attrs.campana),
+        ciudad: emptyToNull(attrs.ciudad),
+        edad: emptyToNull(attrs.edad),
+        canal,
+        agente: emptyToNull(attrs.agente) === null ? null : attrs.agente === true || attrs.agente === "true",
+        score_interes: parseNumber(attrs.score_interes),
+        monto_operacion: emptyToNull(attrs.monto_operacion),
+        fecha_monto_operacion: toIso(attrs.fecha_monto_operacion),
         updated_at: new Date().toISOString(),
     };
 };
@@ -313,7 +357,7 @@ serve(async (req) => {
         const { data: existingRow, error: existingError } = await supabase
             .schema("cw")
             .from("conversations_current")
-            .select("labels")
+            .select("labels, custom_attributes, conversation_custom_attributes, contact_custom_attributes")
             .eq("chatwoot_conversation_id", conversationId)
             .maybeSingle();
 
@@ -390,6 +434,31 @@ serve(async (req) => {
         const conversationUpsertRow = buildConversationUpsertRow(conversation, inboxForConversation);
 
         if (conversationUpsertRow) {
+            if (existingRow) {
+                const occurredAt = toIsoOrNow(body.event_created_at || body.created_at || body.updated_at || conversation?.updated_at || conversation?.timestamp);
+                const previousAttrs = {
+                    ...asObject(existingRow.contact_custom_attributes),
+                    ...asObject(existingRow.conversation_custom_attributes),
+                    ...asObject(existingRow.custom_attributes),
+                };
+                const historyRows = buildAttributeHistoryRows(
+                    conversationId,
+                    previousAttrs,
+                    asObject(conversationUpsertRow.custom_attributes),
+                    occurredAt,
+                    "webhook",
+                );
+
+                if (historyRows.length > 0) {
+                    const { error: attributeHistoryError } = await supabase
+                        .schema("cw")
+                        .from("conversation_attribute_history")
+                        .upsert(historyRows, { onConflict: "event_key", ignoreDuplicates: true });
+
+                    if (attributeHistoryError) throw attributeHistoryError;
+                }
+            }
+
             const { error: conversationError } = await supabase
                 .schema("cw")
                 .from("conversations_current")

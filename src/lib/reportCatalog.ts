@@ -127,6 +127,7 @@ export const REPORT_COLUMN_OPTIONS = [
     "Campana",
     "Ciudad",
     "Responsable",
+    "Nivel",
     "Puntaje",
     "Ultimo Mensaje",
     "URL Red Social",
@@ -165,7 +166,7 @@ export const DEFAULT_REPORT_COLUMN_FIELDS: Record<ReportTabId, string[]> = {
     followup: ["ID", "Nombre", "Telefono", "Canal", "Estados", "Etapa", "Agencia", "Fecha Monto", "Monto", "Ultimo Mensaje", "Enlace de conversación"],
     performance: ["ID", "Nombre", "Canal", "Responsable", "Estados", "Etapa", "Monto", "Fecha Monto", "Ultima Interaccion"],
     trends: ["ID", "Nombre", "Canal", "Campana", "Ciudad", "Estados", "Etapa", "Monto", "Fecha Ingreso"],
-    scoring: ["ID", "Nombre", "Canal", "Puntaje", "Estados", "Etapa", "Responsable", "Ultima Interaccion"],
+    scoring: ["ID", "Nombre", "Canal", "Telefono", "Estados", "Ultimo Mensaje", "URL Red Social", "Nivel", "Puntaje", "Campana", "Fecha Ingreso", "Ultima Interaccion"],
     chats: ["ID", "Nombre", "Telefono", "Canal", "Ultimo Mensaje", "Estados", "Enlace de conversación", "Ultima Interaccion"],
 };
 

@@ -5,6 +5,7 @@ export interface MinifiedConversation {
     timestamp: number;
     created_at?: number;
     first_reply_created_at?: number;
+    waiting_since?: number;
     meta: {
         sender: {
             id?: number;

@@ -13,6 +13,14 @@ const RESEND_API_URL = "https://api.resend.com/emails";
 type ReportFormat = "excel" | "pdf" | "csv";
 type ReportScope = "tab" | "critical_profile";
 
+type ReportSection = {
+    title: string;
+    rows: any[];
+    kind?: "summary" | "kpi" | "analysis" | "detail";
+    sheetName?: string;
+    description?: string;
+};
+
 const TAB_LABELS: Record<string, string> = {
     overview: "Estrategia",
     funnel: "Embudo",
@@ -20,7 +28,7 @@ const TAB_LABELS: Record<string, string> = {
     followup: "Seguimiento",
     performance: "Rendimiento Humano",
     trends: "Tendencias",
-    scoring: "Scores",
+    scoring: "Calidad",
     chats: "Conversaciones",
 };
 
@@ -48,6 +56,58 @@ const CRITICAL_PROFILES: Record<string, { label: string; tabIds: string[]; forma
 };
 
 const cleanText = (value: unknown) => String(value ?? "").trim();
+
+const SCORE_BUCKETS = ["hot", "warm", "cold", "low"] as const;
+type ScoreBucket = typeof SCORE_BUCKETS[number];
+
+const SCORE_BUCKET_LABELS: Record<ScoreBucket, string> = {
+    hot: "Caliente",
+    warm: "Tibio",
+    cold: "Frio",
+    low: "Bajo",
+};
+
+const getScoreThresholds = (report: any = {}) => {
+    const source = asObject(report.score_thresholds || report.scoreThresholds || report.filters?.scoreThresholds);
+    const hotMin = Number(source.hotMin ?? source.highMin ?? 70);
+    const warmMin = Number(source.warmMin ?? source.mediumMin ?? 45);
+    const coldMin = Number(source.coldMin ?? 20);
+
+    return {
+        hotMin: Number.isFinite(hotMin) ? hotMin : 70,
+        warmMin: Number.isFinite(warmMin) ? warmMin : 45,
+        coldMin: Number.isFinite(coldMin) ? coldMin : 20,
+    };
+};
+
+const parseScore = (value: unknown) => {
+    if (value === null || value === undefined || cleanText(value) === "") return null;
+    const parsed = Number.parseFloat(cleanText(value).replace(",", ".").replace(/[^0-9.-]/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const scoreValue = (row: any) => {
+    const attrs = resolvedAttrs(row);
+    return parseScore(attrs.score ?? attrs.lead_score ?? attrs.puntaje ?? row.score ?? row.lead_score ?? row.puntaje);
+};
+
+const scoreBucket = (row: any, report: any = {}): ScoreBucket => {
+    const score = scoreValue(row);
+    const thresholds = getScoreThresholds(report);
+    if (score === null) return "low";
+    if (score >= thresholds.hotMin) return "hot";
+    if (score >= thresholds.warmMin) return "warm";
+    if (score >= thresholds.coldMin) return "cold";
+    return "low";
+};
+
+const scoreRangeLabel = (bucket: ScoreBucket, report: any = {}) => {
+    const thresholds = getScoreThresholds(report);
+    if (bucket === "hot") return `${thresholds.hotMin} o mas`;
+    if (bucket === "warm") return `${thresholds.warmMin} a ${thresholds.hotMin - 1}`;
+    if (bucket === "cold") return `${thresholds.coldMin} a ${thresholds.warmMin - 1}`;
+    return `Menor a ${thresholds.coldMin} o sin puntaje`;
+};
 
 const asObject = (value: unknown): Record<string, any> =>
     value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
@@ -274,6 +334,24 @@ const fetchConversationRows = async (supabase: any, report: any, range: { sinceI
     return rows;
 };
 
+const fetchCommercialAuditEvents = async (supabase: any, range: { sinceIso: string; untilIso: string }) => {
+    const { data, error } = await supabase
+        .schema("cw")
+        .from("commercial_audit_events")
+        .select("*")
+        .gte("changed_at", range.sinceIso)
+        .lte("changed_at", range.untilIso)
+        .order("changed_at", { ascending: false })
+        .limit(5000);
+
+    if (error) {
+        console.warn("commercial_audit_events unavailable for scheduled report:", error);
+        return [];
+    }
+
+    return data || [];
+};
+
 const resolvedAttrs = (row: any) => ({
     ...asObject(row.contact_custom_attributes),
     ...asObject(row.conversation_custom_attributes),
@@ -288,6 +366,21 @@ const parseAmount = (value: unknown) => {
     return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const formatMoney = (value: unknown) =>
+    new Intl.NumberFormat("es-EC", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(Number(value) || 0);
+
+const formatPercent = (value: unknown) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return "";
+    const percent = Math.abs(numeric) > 0 && Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+    return `${new Intl.NumberFormat("es-EC", { maximumFractionDigits: 2 }).format(percent)}%`;
+};
+
+const generatedAtLocal = () => {
+    const current = localParts();
+    return `${current.dateKey} ${current.timeKey}`;
+};
+
 const rowLabelArray = (row: any) => Array.isArray(row.labels)
     ? row.labels.map((label: unknown) => cleanText(label)).filter(Boolean)
     : [];
@@ -295,6 +388,51 @@ const rowLabelArray = (row: any) => Array.isArray(row.labels)
 const hasAnyRowLabel = (row: any, expectedLabels: string[]) => {
     const labelSet = new Set(rowLabelArray(row));
     return expectedLabels.some((label) => labelSet.has(label));
+};
+
+const saleLabelsForReport = (report: any = {}) => Array.from(new Set([
+    ...(Array.isArray(report.filters?.saleTags) ? report.filters.saleTags : []),
+    report.filters?.humanSaleTargetLabel,
+    "venta_exitosa",
+    "venta",
+].map(cleanText).filter(Boolean)));
+
+const currentSaleAmount = (row: any, report: any = {}) =>
+    hasAnyRowLabel(row, saleLabelsForReport(report))
+        ? parseAmount(row.monto_operacion ?? resolvedAttrs(row).monto_operacion)
+        : 0;
+
+const isCurrentSaleRow = (row: any, report: any = {}) => currentSaleAmount(row, report) > 0;
+
+const saleDateForRow = (row: any) => {
+    const attrs = resolvedAttrs(row);
+    return row.fecha_monto_operacion || attrs.fecha_monto_operacion || row.created_at_chatwoot || row.created_at || "";
+};
+
+const commercialStatusForRow = (row: any, report: any = {}) => {
+    const amount = parseAmount(row.monto_operacion ?? resolvedAttrs(row).monto_operacion);
+    if (isCurrentSaleRow(row, report)) {
+        return {
+            "Se suma en ventas": "Si",
+            "Explicacion ventas": "Esta marcada como venta y tiene monto registrado.",
+            "Monto que suma en ventas": amount,
+            "Monto registrado": amount,
+        };
+    }
+    if (amount > 0) {
+        return {
+            "Se suma en ventas": "No",
+            "Explicacion ventas": "Tiene monto registrado, pero no esta marcada como venta.",
+            "Monto que suma en ventas": 0,
+            "Monto registrado": amount,
+        };
+    }
+    return {
+        "Se suma en ventas": "No",
+        "Explicacion ventas": "No tiene monto registrado.",
+        "Monto que suma en ventas": 0,
+        "Monto registrado": "",
+    };
 };
 
 const labels = (row: any) => Array.isArray(row.labels) ? row.labels.join(", ") : "";
@@ -305,10 +443,11 @@ const stage = (row: any) => {
     if (rowLabels.includes("cita_agendada") || rowLabels.includes("cita_agendada_humano") || rowLabels.includes("cita")) return "Cita agendada";
     if (rowLabels.includes("seguimiento_humano")) return "Seguimiento humano";
     if (rowLabels.includes("interesado")) return "SQL";
+    if (rowLabels.some((label: string) => ["desinteresado", "no_calificado", "rechazo", "rechazado"].includes(label))) return "No calificado";
     return "Otro";
 };
 
-const detailRow = (row: any) => {
+const detailRow = (row: any, report: any = {}) => {
     const attrs = resolvedAttrs(row);
     return {
         ID: row.chatwoot_conversation_id || row.id,
@@ -317,6 +456,7 @@ const detailRow = (row: any) => {
         Canal: resolveRowChannel(row, attrs),
         Etiquetas: labels(row),
         Etapa: stage(row),
+        Estado: row.status || row.conversation_status || "",
         Correo: row.correo || row.meta?.sender?.email || attrs.correo || "",
         Monto: parseAmount(row.monto_operacion ?? attrs.monto_operacion),
         "Fecha Monto": row.fecha_monto_operacion || attrs.fecha_monto_operacion || "",
@@ -326,6 +466,18 @@ const detailRow = (row: any) => {
         "Fecha Ingreso": row.created_at_chatwoot || "",
         "Ultima Interaccion": row.last_activity_at_chatwoot || row.updated_at_chatwoot || "",
         "Origen Dato": row.source || "supabase",
+    };
+};
+
+const qualityDetailRow = (row: any, report: any) => {
+    const detail = detailRow(row, report);
+    const score = scoreValue(row);
+    const bucket = scoreBucket(row, report);
+    return {
+        ...detail,
+        Nivel: SCORE_BUCKET_LABELS[bucket],
+        Puntaje: score === null ? "Sin puntaje" : score,
+        Rango: scoreRangeLabel(bucket, report),
     };
 };
 
@@ -427,120 +579,596 @@ const groupSalesByMonth = (salesRows: any[]) => {
     return Array.from(map.values());
 };
 
-const summaryRows = (tabId: string, rows: any[]) => {
-    const total = rows.length;
-    const sales = rows.filter((row) => stage(row) === "Venta exitosa");
-    const appointments = rows.filter((row) => stage(row) === "Cita agendada");
-    const revenue = sales.reduce((sum, row) => sum + parseAmount(row.monto_operacion ?? resolvedAttrs(row).monto_operacion), 0);
-    const byChannel = new Map<string, number>();
+const ensureRows = (rows: any[], message = "Sin datos para los filtros del reporte") =>
+    rows.length > 0 ? rows : [{ Estado: "Sin datos", Detalle: message }];
+
+const withReportSection = (section: string, rows: any[]) =>
+    ensureRows(rows, `Sin datos para ${section}`).map((row) => ({ Seccion: section, ...row }));
+
+const ratio = (value: number, base: number) => base > 0 ? value / base : 0;
+
+const isIncomingRowMessage = (message: any) =>
+    message?.message_direction === "incoming" ||
+    Number(message?.message_type) === 0 ||
+    cleanText(message?.message_type).toLowerCase() === "incoming" ||
+    cleanText(message?.sender_type).toLowerCase() === "contact";
+
+const hasRowMessageSenderSignal = (message: any) =>
+    message?.message_direction !== undefined ||
+    message?.message_type !== undefined ||
+    message?.sender_type !== undefined;
+
+const hasUnansweredRow = (row: any) => {
+    if (row.waiting_since_chatwoot || row.raw_payload?.waiting_since) return true;
+
+    const lastNonActivity = row.raw_payload?.last_non_activity_message;
+    if (lastNonActivity && hasRowMessageSenderSignal(lastNonActivity)) {
+        return isIncomingRowMessage(lastNonActivity);
+    }
+
+    const messages = Array.isArray(row.raw_payload?.messages) ? row.raw_payload.messages : [];
+    const publicMessages = messages
+        .filter((message: any) => !message?.private && !message?.is_private && (message.created_at || message.created_at_chatwoot))
+        .sort((a: any, b: any) => Number(a.created_at || 0) - Number(b.created_at || 0));
+    if (publicMessages.length > 0) {
+        return isIncomingRowMessage(publicMessages[publicMessages.length - 1]);
+    }
+
+    if ((row.last_non_activity_message_preview || lastNonActivity?.content) && !row.first_reply_created_at_chatwoot) {
+        return true;
+    }
+
+    return !row.first_reply_created_at_chatwoot;
+};
+
+const summarizeRows = (rows: any[], report: any) => {
+    const summary = {
+        leads: rows.length,
+        sqls: 0,
+        appointments: 0,
+        sales: 0,
+        followup: 0,
+        unqualified: 0,
+        unanswered: 0,
+        revenue: 0,
+        scored: 0,
+        missingScore: 0,
+        scoreSum: 0,
+    };
+
     rows.forEach((row) => {
-        const channel = detailRow(row).Canal || "Otro";
-        byChannel.set(channel, (byChannel.get(channel) || 0) + 1);
+        const rowStage = stage(row);
+        if (rowStage === "SQL") summary.sqls += 1;
+        if (rowStage === "Cita agendada") summary.appointments += 1;
+        if (isCurrentSaleRow(row, report)) summary.sales += 1;
+        if (rowStage === "Seguimiento humano") summary.followup += 1;
+        if (rowStage === "No calificado") summary.unqualified += 1;
+        if (hasUnansweredRow(row)) summary.unanswered += 1;
+        summary.revenue += currentSaleAmount(row, report);
+
+        const score = scoreValue(row);
+        if (score === null) {
+            summary.missingScore += 1;
+        } else {
+            summary.scored += 1;
+            summary.scoreSum += score;
+        }
     });
 
-    if (["trends", "overview", "operational"].includes(tabId)) {
+    return {
+        ...summary,
+        appointmentRate: ratio(summary.appointments, summary.leads) * 100,
+        salesRate: ratio(summary.sales, summary.leads) * 100,
+        averageTicket: ratio(summary.revenue, summary.sales),
+        averageScore: summary.scored > 0 ? summary.scoreSum / summary.scored : 0,
+        thresholds: getScoreThresholds(report),
+    };
+};
+
+const reportFilterText = (report: any) => {
+    const filters = asObject(report.filters);
+    const inboxes = Array.isArray(filters.selectedInboxes) ? filters.selectedInboxes : [];
+    return inboxes.length > 0 ? `Bandejas seleccionadas: ${inboxes.join(", ")}` : "Todas las bandejas disponibles";
+};
+
+const tabInterpretation = (tabId: string) => {
+    const notes: Record<string, string> = {
+        overview: "Lectura gerencial de leads, citas, ventas, monto y conversiones principales.",
+        funnel: "Revisa avance entre etapas, conversiones y puntos de perdida o descalificacion.",
+        operational: "Control operativo de carga, estados, canales, responsables y datos accionables.",
+        followup: "Seguimiento humano: colas, citas, ventas, montos y pendientes relevantes.",
+        performance: "Comparativo por responsable para entender carga, citas, ventas y conversion.",
+        trends: "Origenes, campanas, ingresos por periodo y calidad por canal.",
+        scoring: "Calidad de lead con Caliente, Tibio, Frio y Bajo; sin puntaje cuenta como Bajo.",
+        chats: "Revision de conversaciones, etiquetas, estados, canales y detalle exportable.",
+    };
+    return notes[tabId] || "Reporte operativo del dashboard.";
+};
+
+const metadataRows = (report: any, tabId: string, rows: any[], rangeLabel: string) => [
+    { Campo: "Reporte", Valor: report.name || "Reporte programado" },
+    { Campo: "Pestana", Valor: TAB_LABELS[tabId] || tabId },
+    { Campo: "Periodo cerrado", Valor: rangeLabel },
+    { Campo: "Filtros aplicados", Valor: reportFilterText(report) },
+    { Campo: "Generado", Valor: generatedAtLocal() },
+    { Campo: "Zona horaria", Valor: TIMEZONE },
+    { Campo: "Total encontrado", Valor: rows.length },
+    { Campo: "Datos incluidos", Valor: "Resumen, KPIs, analisis por dimension, cambios relevantes cuando existan y detalle de leads." },
+    { Campo: "Lectura recomendada", Valor: tabInterpretation(tabId) },
+    { Campo: "Nota", Valor: "PDF resume la lectura ejecutiva; Excel/CSV contienen detalle filtrable." },
+];
+
+const metricRow = (Metrica: string, Valor: unknown, Formula: string, Interpretacion: string) => ({
+    Metrica,
+    Valor,
+    Formula,
+    Interpretacion,
+});
+
+const kpiRows = (tabId: string, rows: any[], report: any) => {
+    const summary = summarizeRows(rows, report);
+    if (tabId === "scoring") {
         return [
-            { Metrica: "Total leads", Valor: total },
-            { Metrica: "Citas agendadas", Valor: appointments.length },
-            { Metrica: "Ventas exitosas", Valor: sales.length },
-            { Metrica: "Monto ventas", Valor: revenue },
-            ...Array.from(byChannel.entries()).map(([channel, count]) => ({ Metrica: `Canal ${channel}`, Valor: count })),
+            metricRow("Leads evaluados", summary.leads, "Total filtrado", "Leads incluidos en calidad."),
+            metricRow("Con puntaje", summary.scored, "Score numerico disponible", "Base con puntaje real."),
+            metricRow("Sin puntaje", summary.missingScore, "Score vacio o no numerico", "Se clasifican como Bajo."),
+            metricRow("Puntaje promedio", summary.scored > 0 ? Number(summary.averageScore.toFixed(2)) : "Sin puntajes", "Promedio de puntajes", "Calidad media de leads con dato."),
+            metricRow("Rangos usados", `Caliente ${summary.thresholds.hotMin}+ | Tibio ${summary.thresholds.warmMin}-${summary.thresholds.hotMin - 1} | Frio ${summary.thresholds.coldMin}-${summary.thresholds.warmMin - 1} | Bajo <${summary.thresholds.coldMin}`, "Configuracion del reporte o default", "Rangos usados en el adjunto programado."),
+        ];
+    }
+
+    if (tabId === "followup") {
+        return [
+            metricRow("Cola seguimiento", summary.followup, "Leads en etapa seguimiento", "Trabajo humano pendiente."),
+            metricRow("Citas agendadas", summary.appointments, "Leads con cita", "Conversiones intermedias."),
+            metricRow("Ventas exitosas", summary.sales, "Leads vendidos", "Cierres del periodo."),
+            metricRow("Monto ventas", formatMoney(summary.revenue), "Suma de montos", "Impacto economico del seguimiento."),
+            metricRow("Ticket promedio", formatMoney(summary.averageTicket), "Monto / ventas", "Valor promedio de cierre."),
+        ];
+    }
+
+    if (tabId === "operational") {
+        return [
+            metricRow("Leads operativos", summary.leads, "Total filtrado", "Carga del periodo."),
+            metricRow("Leads sin respuesta", summary.unanswered, "Ultima interaccion del cliente sin respuesta posterior", "Misma logica visible en Operacion."),
+            metricRow("Seguimiento humano", summary.followup, "Leads en seguimiento", "Trabajo que requiere gestion."),
+            metricRow("Citas", summary.appointments, "Leads con cita", "Resultado de gestion."),
+            metricRow("Ventas", summary.sales, "Leads vendidos", "Cierres detectados."),
+            metricRow("Conversion a cita", formatPercent(summary.appointmentRate), "Citas / leads", "Efectividad operativa."),
+        ];
+    }
+
+    if (tabId === "performance") {
+        const humanConversion = ratio(summary.appointments, summary.followup + summary.appointments) * 100;
+        return [
+            metricRow("Seguimiento", summary.followup, "Leads en seguimiento humano", "Trabajo gestionado por el equipo."),
+            metricRow("Citas humanas", summary.appointments, "Leads que llegaron a cita", "Resultado directo del seguimiento."),
+            metricRow("Conversion", formatPercent(humanConversion), "Citas / (seguimiento + citas)", "Mismo enfoque visible en Rendimiento Humano."),
+            metricRow("Ventas", summary.sales, "Leads vendidos", "Cierres del periodo."),
+            metricRow("Total vendido", formatMoney(summary.revenue), "Suma de montos de venta", "Ingreso atribuido a ventas."),
+            metricRow("Ticket promedio", formatMoney(summary.averageTicket), "Total vendido / ventas", "Valor promedio de cierre."),
         ];
     }
 
     return [
-        { Metrica: "Total leads", Valor: total },
-        { Metrica: "Citas agendadas", Valor: appointments.length },
-        { Metrica: "Ventas exitosas", Valor: sales.length },
-        { Metrica: "Monto ventas", Valor: revenue },
+        metricRow("Total leads", summary.leads, "Total filtrado", "Volumen de oportunidades."),
+        metricRow("SQLs", summary.sqls, "Leads en SQL/interesado", "Interes comercial inicial."),
+        metricRow("Citas agendadas", summary.appointments, "Leads con cita", "Paso intermedio del embudo."),
+        metricRow("Ventas exitosas", summary.sales, "Leads vendidos", "Cierres comerciales."),
+        metricRow("Conversion a cita", formatPercent(summary.appointmentRate), "Citas / leads", "Eficiencia del embudo."),
+        metricRow("Conversion a venta", formatPercent(summary.salesRate), "Ventas / leads", "Eficiencia final."),
+        metricRow("Monto ventas", formatMoney(summary.revenue), "Suma de montos", "Ingreso detectado."),
     ];
 };
 
-const buildSections = (report: any, rows: any[]) => {
+const dimensionRows = (rows: any[], report: any, dimensionLabel: string, resolver: (row: any) => unknown) => {
+    const grouped = new Map<string, {
+        leads: number;
+        sqls: number;
+        appointments: number;
+        sales: number;
+        unanswered: number;
+        revenue: number;
+        scoreSum: number;
+        scored: number;
+        buckets: Record<ScoreBucket, number>;
+    }>();
+
+    rows.forEach((row) => {
+        const key = cleanText(resolver(row)) || "Sin dato";
+        const current = grouped.get(key) || {
+            leads: 0,
+            sqls: 0,
+            appointments: 0,
+            sales: 0,
+            unanswered: 0,
+            revenue: 0,
+            scoreSum: 0,
+            scored: 0,
+            buckets: { hot: 0, warm: 0, cold: 0, low: 0 },
+        };
+        const rowStage = stage(row);
+        const score = scoreValue(row);
+        current.leads += 1;
+        if (rowStage === "SQL") current.sqls += 1;
+        if (rowStage === "Cita agendada") current.appointments += 1;
+        if (isCurrentSaleRow(row, report)) current.sales += 1;
+        if (hasUnansweredRow(row)) current.unanswered += 1;
+        current.revenue += currentSaleAmount(row, report);
+        current.buckets[scoreBucket(row, report)] += 1;
+        if (score !== null) {
+            current.scored += 1;
+            current.scoreSum += score;
+        }
+        grouped.set(key, current);
+    });
+
+    return Array.from(grouped.entries()).map(([name, value]) => ({
+        [dimensionLabel]: name,
+        Leads: value.leads,
+        SQLs: value.sqls,
+        Citas: value.appointments,
+        Ventas: value.sales,
+        "Sin respuesta": value.unanswered,
+        "Monto ventas": value.revenue,
+        "Tasa cita": formatPercent(ratio(value.appointments, value.leads) * 100),
+        "Tasa venta": formatPercent(ratio(value.sales, value.leads) * 100),
+        "Puntaje promedio": value.scored > 0 ? Number((value.scoreSum / value.scored).toFixed(2)) : "",
+        Caliente: value.buckets.hot,
+        Tibio: value.buckets.warm,
+        Frio: value.buckets.cold,
+        Bajo: value.buckets.low,
+    })).sort((a, b) => Number(b.Leads) - Number(a.Leads));
+};
+
+const qualityDistributionRows = (rows: any[], report: any) => {
+    const summary = summarizeRows(rows, report);
+    const counts: Record<ScoreBucket, number> = { hot: 0, warm: 0, cold: 0, low: 0 };
+    rows.forEach((row) => {
+        counts[scoreBucket(row, report)] += 1;
+    });
+    return SCORE_BUCKETS.map((bucket) => ({
+        Nivel: SCORE_BUCKET_LABELS[bucket],
+        Rango: scoreRangeLabel(bucket, report),
+        Leads: counts[bucket],
+        Porcentaje: formatPercent(ratio(counts[bucket], rows.length) * 100),
+        "Sin puntaje incluidos": bucket === "low" ? summary.missingScore : "",
+    }));
+};
+
+const stageRows = (rows: any[]) => {
+    const grouped = new Map<string, number>();
+    rows.forEach((row) => grouped.set(stage(row), (grouped.get(stage(row)) || 0) + 1));
+    return Array.from(grouped.entries()).map(([Etapa, Leads]) => ({ Etapa, Leads })).sort((a, b) => b.Leads - a.Leads);
+};
+
+const statusRows = (rows: any[]) => {
+    const grouped = new Map<string, number>();
+    rows.forEach((row) => {
+        const status = detailRow(row).Estado || "Sin estado";
+        grouped.set(status, (grouped.get(status) || 0) + 1);
+    });
+    return Array.from(grouped.entries()).map(([Estado, Leads]) => ({ Estado, Leads })).sort((a, b) => b.Leads - a.Leads);
+};
+
+const labelRows = (rows: any[]) => {
+    const grouped = new Map<string, number>();
+    rows.forEach((row) => rowLabelArray(row).forEach((label) => grouped.set(label, (grouped.get(label) || 0) + 1)));
+    return Array.from(grouped.entries()).map(([Etiqueta, Leads]) => ({ Etiqueta, Leads })).sort((a, b) => b.Leads - a.Leads);
+};
+
+const revenueByDateRows = (rows: any[], report: any = {}) => {
+    const grouped = new Map<string, { Fecha: string; Ventas: number; Monto: number }>();
+    rows.filter((row) => isCurrentSaleRow(row, report)).forEach((row) => {
+        const detail = detailRow(row, report);
+        const date = cleanText(saleDateForRow(row)).slice(0, 10) || cleanText(detail["Fecha Ingreso"]).slice(0, 10) || "Sin fecha";
+        const current = grouped.get(date) || { Fecha: date, Ventas: 0, Monto: 0 };
+        current.Ventas += 1;
+        current.Monto += currentSaleAmount(row, report);
+        grouped.set(date, current);
+    });
+    return Array.from(grouped.values()).sort((a, b) => a.Fecha.localeCompare(b.Fecha));
+};
+
+const funnelConversionRows = (rows: any[]) => {
+    const stageMap = new Map(stageRows(rows).map((row) => [row.Etapa, Number(row.Leads)]));
+    const ordered = [
+        { label: "SQL", value: stageMap.get("SQL") || 0 },
+        { label: "Cita agendada", value: stageMap.get("Cita agendada") || 0 },
+        { label: "Venta exitosa", value: stageMap.get("Venta exitosa") || 0 },
+    ];
+    return ordered.slice(1).map((item, index) => ({
+        Desde: ordered[index].label,
+        Hacia: item.label,
+        "Base anterior": ordered[index].value,
+        Resultado: item.value,
+        Conversion: formatPercent(ratio(item.value, ordered[index].value) * 100),
+    }));
+};
+
+const analysisRows = (tabId: string, rows: any[], report: any) => {
+    const result: any[] = [];
+    const add = (section: string, sectionRows: any[]) => result.push(...withReportSection(section, sectionRows));
+
+    if (tabId === "funnel") {
+        add("Embudo actual", stageRows(rows));
+        add("Conversion entre etapas", funnelConversionRows(rows));
+        add("Perdidas y descalificacion", labelRows(rows).filter((row) => normalizeText(row.Etiqueta).includes("desinteres") || normalizeText(row.Etiqueta).includes("no_calificado")));
+        return result;
+    }
+
+    if (tabId === "operational") {
+        add("Carga por canal", dimensionRows(rows, report, "Canal", (row) => detailRow(row).Canal));
+        add("Carga por responsable", dimensionRows(rows, report, "Responsable", (row) => detailRow(row).Responsable));
+        add("Estados operativos", statusRows(rows));
+        add("Origen de datos", dimensionRows(rows, report, "Origen", (row) => detailRow(row)["Origen Dato"]));
+        return result;
+    }
+
+    if (tabId === "followup") {
+        add("Colas por etapa", stageRows(rows));
+        add("Ventas por canal", dimensionRows(rows.filter((row) => isCurrentSaleRow(row, report)), report, "Canal", (row) => detailRow(row, report).Canal));
+        add("Ventas por mes", groupSalesByMonth(rows.filter((row) => isCurrentSaleRow(row, report))));
+        add("Detalle por responsable", dimensionRows(rows, report, "Responsable", (row) => detailRow(row).Responsable));
+        return result;
+    }
+
+    if (tabId === "performance") {
+        add("Ranking por responsable", dimensionRows(rows, report, "Responsable", (row) => detailRow(row).Responsable));
+        add("Estados por equipo", stageRows(rows));
+        return result;
+    }
+
+    if (tabId === "trends") {
+        add("Leads por canal", dimensionRows(rows, report, "Canal", (row) => detailRow(row).Canal));
+        add("Campanas", dimensionRows(rows, report, "Campana", (row) => detailRow(row).Campana || "Sin campana"));
+        add("Ingresos por periodo", revenueByDateRows(rows, report));
+        add("Calidad por canal", dimensionRows(rows, report, "Canal", (row) => detailRow(row).Canal));
+        return result;
+    }
+
+    if (tabId === "scoring") {
+        add("Rangos usados", SCORE_BUCKETS.map((bucket) => ({
+            Nivel: SCORE_BUCKET_LABELS[bucket],
+            Rango: scoreRangeLabel(bucket, report),
+        })));
+        add("Distribucion de calidad", qualityDistributionRows(rows, report));
+        add("Calidad por canal", dimensionRows(rows, report, "Canal", (row) => detailRow(row).Canal));
+        add("Calidad por campana", dimensionRows(rows, report, "Campana", (row) => detailRow(row).Campana || "Sin campana"));
+        add("Calidad por estado", dimensionRows(rows, report, "Estado", (row) => detailRow(row).Estado || "Sin estado"));
+        return result;
+    }
+
+    if (tabId === "chats") {
+        add("Estados de conversacion", statusRows(rows));
+        add("Canales", dimensionRows(rows, report, "Canal", (row) => detailRow(row).Canal));
+        add("Etiquetas", labelRows(rows));
+        add("Origen de datos", dimensionRows(rows, report, "Origen", (row) => detailRow(row)["Origen Dato"]));
+        return result;
+    }
+
+    add("Embudo resumido", stageRows(rows));
+    add("Leads por canal", dimensionRows(rows, report, "Canal", (row) => detailRow(row).Canal));
+    add("Detalle comercial por campana", dimensionRows(rows, report, "Campana", (row) => detailRow(row).Campana || "Sin campana"));
+    return result;
+};
+
+const sheetNameFor = (tabId: string, base: string, isSingleTab: boolean) =>
+    isSingleTab ? base : `${TAB_LABELS[tabId] || tabId} ${base}`;
+
+const detailRowsForTab = (tabId: string, rows: any[], report: any) =>
+    tabId === "scoring" ? rows.map((row) => qualityDetailRow(row, report)) : rows.map((row) => detailRow(row, report));
+
+const auditValueText = (value: unknown) => {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "object") {
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return String(value);
+        }
+    }
+    return cleanText(value);
+};
+
+const isBlankAuditValue = (value: unknown) => {
+    const text = auditValueText(value).trim().toLowerCase();
+    return !text || text === "null" || text === "\"\"" || text === "[]" || text === "{}";
+};
+
+const hasSaleSignal = (value: unknown) => {
+    const text = auditValueText(value).toLowerCase();
+    return text.includes("venta_exitosa") || text.includes("\"venta\"") || text.includes(" venta") || text === "venta";
+};
+
+const auditFieldName = (event: any) => cleanText(event.field_name || event.attribute_key || event.raw_payload?.field_name || event.raw_payload?.attribute_key);
+
+const auditEventInfo = (event: any, row: any, report: any) => {
+    const field = auditFieldName(event).toLowerCase();
+    const signature = [
+        event.event_type,
+        event.business_impact,
+        event.status,
+        field,
+        event.change_source,
+    ].map((value) => cleanText(value).toLowerCase()).join(" ");
+    const previousValue = event.previous_value ?? event.historical_value;
+    const currentValue = event.current_value;
+    const isAmountEvent = field.includes("monto") || signature.includes("monto_operacion") || signature.includes("monto_");
+
+    if (isAmountEvent) {
+        const previousAmount = parseAmount(auditValueText(previousValue));
+        const currentAmount = parseAmount(auditValueText(currentValue));
+
+        if (!isBlankAuditValue(previousValue) && isBlankAuditValue(currentValue)) {
+            return {
+                situacion: "Monto eliminado",
+                explicacion: "Antes tenia monto y luego quedo vacio.",
+            };
+        }
+
+        if (
+            !isBlankAuditValue(previousValue)
+            && !isBlankAuditValue(currentValue)
+            && previousAmount !== currentAmount
+            && (previousAmount > 0 || currentAmount > 0)
+        ) {
+            return {
+                situacion: "Monto cambiado",
+                explicacion: "El monto cambio; los totales usan el valor que aparece hoy en el lead.",
+            };
+        }
+    }
+
+    const isLabelEvent = field === "labels" || signature.includes("label") || signature.includes("etiqueta");
+    const saleWasTouched = hasSaleSignal(previousValue) || hasSaleSignal(currentValue) || hasSaleSignal(event.historical_value);
+    const saleWasRemoved = signature.includes("venta_historica")
+        || signature.includes("no_vigente")
+        || signature.includes("no vigente")
+        || signature.includes("removed_sale")
+        || (isLabelEvent && saleWasTouched && (!row || !isCurrentSaleRow(row, report)));
+
+    if (saleWasRemoved && (!row || !isCurrentSaleRow(row, report))) {
+        return {
+            situacion: "Venta retirada",
+            explicacion: "Antes estaba marcada como venta y luego se retiro. Por eso no suma en ventas.",
+        };
+    }
+
+    if (signature.includes("monto_no_contable")) {
+        return {
+            situacion: "No suma a ventas",
+            explicacion: "Tiene monto registrado, pero no esta marcada como venta.",
+        };
+    }
+
+    return null;
+};
+
+const buildCommercialAuditRows = (rows: any[], report: any, auditEvents: any[] = []) => {
+    const rowById = new Map(rows.map((row) => [Number(row.chatwoot_conversation_id || row.id), row]));
+    const result: any[] = [];
+    const seen = new Set<string>();
+
+    rows.forEach((row) => {
+        const amount = parseAmount(row.monto_operacion ?? resolvedAttrs(row).monto_operacion);
+        if (amount <= 0 || isCurrentSaleRow(row, report)) return;
+        const detail = detailRow(row, report);
+        result.push({
+            "ID Conversacion": detail.ID,
+            "Nombre del Lead": detail.Nombre,
+            Situacion: "No suma a ventas",
+            "Se suma en ventas": "No",
+            Explicacion: "Tiene monto registrado, pero no esta marcada como venta.",
+            "Monto actual": amount,
+            "Monto anterior": "",
+            "Monto nuevo": row.monto_operacion ?? resolvedAttrs(row).monto_operacion ?? amount,
+            Campo: "Monto de la operacion",
+            "Fecha del cambio": saleDateForRow(row),
+        });
+        seen.add(`current:${detail.ID}:monto`);
+    });
+
+    auditEvents.forEach((event) => {
+        const conversationId = Number(event.chatwoot_conversation_id);
+        const row = rowById.get(conversationId);
+        if (!row) return;
+        const detail = detailRow(row, report);
+        const info = auditEventInfo(event, row, report);
+        if (!info) return;
+        if (info.situacion === "No suma a ventas" && seen.has(`current:${conversationId}:monto`)) return;
+
+        const field = auditFieldName(event);
+        const key = [
+            event.id || "",
+            conversationId,
+            info.situacion,
+            field,
+            event.changed_at || event.detected_at || "",
+            auditValueText(event.previous_value),
+            auditValueText(event.current_value),
+        ].join(":");
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        result.push({
+            "ID Conversacion": conversationId,
+            "Nombre del Lead": detail.Nombre,
+            Situacion: info.situacion,
+            "Se suma en ventas": isCurrentSaleRow(row, report) ? "Si" : "No",
+            Explicacion: info.explicacion,
+            "Monto actual": parseAmount(row.monto_operacion ?? resolvedAttrs(row).monto_operacion) || "",
+            "Monto anterior": auditValueText(event.previous_value ?? event.historical_value),
+            "Monto nuevo": auditValueText(event.current_value ?? event.new_value),
+            Campo: field === "labels" ? "Venta" : field || "Dato del lead",
+            "Fecha del cambio": event.changed_at || event.detected_at || "",
+        });
+    });
+
+    return result.sort((a, b) =>
+        cleanText(b["Fecha del cambio"]).localeCompare(cleanText(a["Fecha del cambio"]))
+        || Number(b["ID Conversacion"] || 0) - Number(a["ID Conversacion"] || 0)
+    );
+};
+
+const buildTabSections = (report: any, tabId: string, rows: any[], rangeLabel: string, isSingleTab: boolean, auditEvents: any[] = []): ReportSection[] => {
+    const label = TAB_LABELS[tabId] || tabId;
+    const auditRows = buildCommercialAuditRows(rows, report, auditEvents);
+    const sections: ReportSection[] = [
+        {
+            title: `${label} - 00 Resumen`,
+            sheetName: sheetNameFor(tabId, "00 Resumen", isSingleTab),
+            kind: "summary",
+            description: "Contexto del reporte, filtros aplicados, fecha de generacion y notas de lectura.",
+            rows: ensureRows(metadataRows(report, tabId, rows, rangeLabel)),
+        },
+        {
+            title: `${label} - 01 KPIs`,
+            sheetName: sheetNameFor(tabId, "01 KPIs", isSingleTab),
+            kind: "kpi",
+            description: "Metricas principales con formula e interpretacion.",
+            rows: ensureRows(kpiRows(tabId, rows, report)),
+        },
+        {
+            title: `${label} - 02 Analisis`,
+            sheetName: sheetNameFor(tabId, "02 Analisis", isSingleTab),
+            kind: "analysis",
+            description: "Cortes por canal, campana, etapa, responsable, estado o calidad segun la pestana.",
+            rows: ensureRows(analysisRows(tabId, rows, report)),
+        },
+    ];
+
+    if (auditRows.length > 0) {
+        sections.push({
+            title: `${label} - 03 Cambios relevantes`,
+            sheetName: sheetNameFor(tabId, "03 Cambios relevantes", isSingleTab),
+            kind: "analysis",
+            description: "Cambios comerciales importantes que ayudan a entender ventas y montos del reporte.",
+            rows: auditRows,
+        });
+    }
+
+    sections.push(
+        {
+            title: `${label} - 99 Detalle`,
+            sheetName: sheetNameFor(tabId, "99 Detalle", isSingleTab),
+            kind: "detail",
+            description: "Detalle completo para filtrar, revisar o cruzar con otras fuentes.",
+            rows: ensureRows(detailRowsForTab(tabId, rows, report), "No hay leads en el detalle del periodo."),
+        },
+    );
+
+    return sections;
+};
+
+const buildSections = (report: any, rows: any[], rangeLabel = "", auditEvents: any[] = []): ReportSection[] => {
     const profile = report.critical_profile_key ? CRITICAL_PROFILES[report.critical_profile_key] : null;
     const tabIds = Array.isArray(report.tab_ids) && report.tab_ids.length > 0
         ? report.tab_ids
         : profile?.tabIds || ["overview"];
+    const isSingleTab = tabIds.length === 1;
 
-    if (tabIds.length === 1 && tabIds[0] === "chats") {
-        return [
-            {
-                title: "Resumen Etiquetas Actividades",
-                rows: labelSummaryRows(rows, "Resumen Etiquetas Actividades", "Total Leads de Actividades"),
-            },
-            {
-                title: "Detalle Leads Actividades",
-                rows: rows.map(detailRow),
-            },
-            {
-                title: "Resumen Etiquetas Unicas",
-                rows: labelSummaryRows(rows, "Resumen Etiquetas Unicas", "Total Leads Unicos"),
-            },
-            {
-                title: "Detalle Leads Unicas",
-                rows: rows.map(detailRow),
-            },
-        ];
-    }
-
-    if (tabIds.length === 1 && tabIds[0] === "followup") {
-        const followupRows = rows.filter((row) => hasAnyRowLabel(row, ["seguimiento_humano"]));
-        const appointmentRows = rows.filter((row) => hasAnyRowLabel(row, ["cita_agendada", "cita_agendada_humano", "cita"]));
-        const salesRows = rows.filter((row) => hasAnyRowLabel(row, ["venta_exitosa", "venta"]));
-        const totalSales = salesRows.reduce((sum, row) => sum + parseAmount(row.monto_operacion ?? resolvedAttrs(row).monto_operacion), 0);
-
-        return [
-            {
-                title: "Resumen Seguimiento",
-                rows: [
-                    { Metrica: "Leads en Cola de Trabajo Diaria", Valor: followupRows.length },
-                    { Metrica: "Leads en Citas Agendadas", Valor: appointmentRows.length },
-                    { Metrica: "Ventas exitosas", Valor: salesRows.length },
-                    { Metrica: "Monto total ventas", Valor: totalSales },
-                    { Metrica: "Ticket promedio", Valor: salesRows.length > 0 ? totalSales / salesRows.length : 0 },
-                ],
-            },
-            {
-                title: "Cola Trabajo Diaria",
-                rows: followupRows.map(queueRow),
-            },
-            {
-                title: "Citas Agendadas",
-                rows: appointmentRows.map(queueRow),
-            },
-            {
-                title: "Reporte Ventas Exitosas",
-                rows: [
-                    { Metrica: "Ventas exitosas", Valor: salesRows.length },
-                    { Metrica: "Monto total", Valor: totalSales },
-                    { Metrica: "Ticket promedio", Valor: salesRows.length > 0 ? totalSales / salesRows.length : 0 },
-                ],
-            },
-            {
-                title: "Ventas Por Canal",
-                rows: groupSalesByChannel(salesRows),
-            },
-            {
-                title: "Ventas Por Mes",
-                rows: groupSalesByMonth(salesRows),
-            },
-            {
-                title: "Detalle Ventas",
-                rows: salesRows.map(salesDetailRow),
-            },
-        ];
-    }
-
-    return tabIds.flatMap((tabId: string) => [
-        {
-            title: `${TAB_LABELS[tabId] || tabId} - Resumen`,
-            rows: summaryRows(tabId, rows),
-        },
-        {
-            title: `${TAB_LABELS[tabId] || tabId} - Detalle`,
-            rows: rows.map(detailRow),
-        },
-    ]);
+    return tabIds.flatMap((tabId: string) => buildTabSections(report, tabId, rows, rangeLabel, isSingleTab, auditEvents));
 };
 
 const csvEscape = (value: unknown) => {
@@ -549,16 +1177,18 @@ const csvEscape = (value: unknown) => {
     return text;
 };
 
-const sectionToCsv = (section: { title: string; rows: any[] }) => {
+const sectionToCsv = (section: ReportSection) => {
     const columns = Array.from(new Set(section.rows.flatMap((row) => Object.keys(row))));
     return [
-        csvEscape(section.title),
+        [csvEscape("Seccion"), csvEscape(section.title)].join(","),
+        [csvEscape("Tipo"), csvEscape(section.kind || "datos")].join(","),
+        [csvEscape("Descripcion"), csvEscape(section.description || "")].join(","),
         columns.map(csvEscape).join(","),
         ...section.rows.map((row) => columns.map((column) => csvEscape(row[column])).join(",")),
     ].join("\n");
 };
 
-const toCsv = (sections: Array<{ title: string; rows: any[] }>) => `\ufeff${sections.map(sectionToCsv).join("\n\n")}`;
+const toCsv = (sections: ReportSection[]) => `\ufeff${sections.map(sectionToCsv).join("\n\n")}`;
 
 const htmlEscape = (value: unknown) => cleanText(value)
     .replace(/&/g, "&amp;")
@@ -570,9 +1200,29 @@ const sheetName = (value: string) => cleanText(value)
     .replace(/[\\/?*\[\]:]/g, " ")
     .slice(0, 31) || "Reporte";
 
-const toExcelXml = (sections: Array<{ title: string; rows: any[] }>) => {
+const uniqueSheetName = (value: string, usedNames: Set<string>) => {
+    const base = sheetName(value);
+    if (!usedNames.has(base)) {
+        usedNames.add(base);
+        return base;
+    }
+    let index = 2;
+    while (true) {
+        const suffix = ` ${index}`;
+        const candidate = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+        if (!usedNames.has(candidate)) {
+            usedNames.add(candidate);
+            return candidate;
+        }
+        index += 1;
+    }
+};
+
+const toExcelXml = (sections: ReportSection[]) => {
+    const usedNames = new Set<string>();
     const worksheets = sections.map((section) => {
         const columns = Array.from(new Set(section.rows.flatMap((row) => Object.keys(row))));
+        const columnDefs = columns.map(() => `<Column ss:AutoFitWidth="1" ss:Width="140"/>`).join("");
         const header = `<Row>${columns.map((column) => `<Cell><Data ss:Type="String">${htmlEscape(column)}</Data></Cell>`).join("")}</Row>`;
         const rows = section.rows.map((row) => (
             `<Row>${columns.map((column) => {
@@ -582,8 +1232,9 @@ const toExcelXml = (sections: Array<{ title: string; rows: any[] }>) => {
                 return `<Cell><Data ss:Type="${isNumeric ? "Number" : "String"}">${htmlEscape(isNumeric ? numericValue : rawValue)}</Data></Cell>`;
             }).join("")}</Row>`
         )).join("");
+        const autoFilter = columns.length > 0 ? `<x:AutoFilter x:Range="R1C1:R${section.rows.length + 1}C${columns.length}"/>` : "";
 
-        return `<Worksheet ss:Name="${htmlEscape(sheetName(section.title))}"><Table>${header}${rows}</Table></Worksheet>`;
+        return `<Worksheet ss:Name="${htmlEscape(uniqueSheetName(section.sheetName || section.title, usedNames))}"><Table>${columnDefs}${header}${rows}</Table>${autoFilter}</Worksheet>`;
     }).join("");
 
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -621,14 +1272,23 @@ const wrapLine = (value: string, maxLength = 96) => {
 
 const pdfEscape = (value: string) => value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 
-const toPdf = (title: string, sections: Array<{ title: string; rows: any[] }>) => {
-    const lines = [title, `Generado: ${new Date().toISOString()}`, ""];
+const toPdf = (title: string, sections: ReportSection[]) => {
+    const lines = [
+        title,
+        "Reporte ejecutivo del dashboard",
+        `Generado: ${generatedAtLocal()}`,
+        `Zona horaria: ${TIMEZONE}`,
+        "Nota: el PDF resume la lectura ejecutiva. Excel/CSV contienen el detalle filtrable.",
+        "",
+    ];
     sections.forEach((section) => {
         lines.push(section.title);
-        const columns = Array.from(new Set(section.rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
+        if (section.description) lines.push(section.description);
+        const columns = Array.from(new Set(section.rows.flatMap((row) => Object.keys(row)))).slice(0, section.kind === "detail" ? 8 : 10);
+        const rowLimit = section.kind === "detail" ? 40 : 120;
         lines.push(columns.join(" | "));
-        section.rows.slice(0, 120).forEach((row) => lines.push(columns.map((column) => cleanText(row[column])).join(" | ")));
-        if (section.rows.length > 120) lines.push(`... ${section.rows.length - 120} filas adicionales en Excel/CSV`);
+        section.rows.slice(0, rowLimit).forEach((row) => lines.push(columns.map((column) => cleanText(row[column])).join(" | ")));
+        if (section.rows.length > rowLimit) lines.push(`... ${section.rows.length - rowLimit} filas adicionales en Excel/CSV`);
         lines.push("");
     });
 
@@ -689,12 +1349,12 @@ const bytesToBase64 = (bytes: Uint8Array) => {
 
 const stringToBase64 = (value: string) => bytesToBase64(new TextEncoder().encode(value));
 
-const buildAttachments = (report: any, rows: any[], rangeLabel: string) => {
+const buildAttachments = (report: any, rows: any[], rangeLabel: string, auditEvents: any[] = []) => {
     const profile = report.critical_profile_key ? CRITICAL_PROFILES[report.critical_profile_key] : null;
     const formats: ReportFormat[] = Array.isArray(report.file_formats) && report.file_formats.length > 0
         ? report.file_formats
         : profile?.formats || ["excel"];
-    const sections = buildSections(report, rows);
+    const sections = buildSections(report, rows, rangeLabel, auditEvents);
     const safeName = cleanText(report.name || profile?.label || "reporte").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase();
 
     return formats.map((format) => {
@@ -708,7 +1368,7 @@ const buildAttachments = (report: any, rows: any[], rangeLabel: string) => {
         if (format === "pdf") {
             return {
                 filename: `${safeName}_${rangeLabel}.pdf`,
-                content: stringToBase64(toPdf(report.name, sections)),
+                content: stringToBase64(toPdf(report.name || profile?.label || "Reporte programado", sections)),
             };
         }
 
@@ -779,7 +1439,8 @@ const processReport = async (supabase: any, report: any, env: { resendKey: strin
         if (recipients.length === 0) throw new Error("El reporte no tiene destinatarios configurados.");
 
         const rows = await fetchConversationRows(supabase, report, range);
-        const attachments = buildAttachments(report, rows, range.label);
+        const auditEvents = await fetchCommercialAuditEvents(supabase, range);
+        const attachments = buildAttachments(report, rows, range.label, auditEvents);
         const subject = `${report.name} - ${range.label}`;
         const response = await sendEmail({
             apiKey: env.resendKey,
@@ -796,7 +1457,7 @@ const processReport = async (supabase: any, report: any, env: { resendKey: strin
             .update({
                 status: "success",
                 finished_at: new Date().toISOString(),
-                metadata: { range, resend: response, conversations: rows.length },
+                metadata: { range, resend: response, conversations: rows.length, commercial_audit_events: auditEvents.length },
             })
             .eq("id", runId);
 

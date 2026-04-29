@@ -3,6 +3,7 @@ import { useDashboardContext } from '../context/DashboardDataContext';
 import { getGuayaquilDateString } from '../lib/guayaquilTime';
 import { getLeadAttrs } from '../lib/conversationState';
 import { getLeadChannelName } from '../lib/leadDisplay';
+import { getCommercialAuditSummary, getCommercialSaleDate, isCurrentSale, parseAmount } from '../lib/commercialFacts';
 
 export interface DashboardFilters {
     startDate?: Date;
@@ -36,7 +37,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
     }, [filtersOrMonth]);
 
     const { startDate, endDate, selectedInboxes = [], ...overrideTags } = filters;
-    const { conversations: allConversations = [], labelEvents = [], inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error, refetch: contextRefetch } = useDashboardContext();
+    const { conversations: allConversations = [], labelEvents = [], commercialAuditEvents = [], inboxes, labels: configuredLabels, tagSettings: globalTagSettings, loading, error, refetch: contextRefetch } = useDashboardContext();
 
     const sqlTags = overrideTags.sqlTags || globalTagSettings.sqlTags;
     const appointmentTags = overrideTags.appointmentTags || globalTagSettings.appointmentTags;
@@ -111,7 +112,12 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             averageTicket: 0,
             conversionRate: 0,
             salesByDate: [] as any[],
-            trackingStartedAt: null as string | null
+            trackingStartedAt: null as string | null,
+            nonAccountableAmountCount: 0,
+            nonAccountableAmountTotal: 0,
+            historicalSalesNotCurrentCount: 0,
+            removedAmountCount: 0,
+            commercialAuditRows: 0
         },
         trendMetrics: {
             channelLeads: [] as any[],
@@ -142,18 +148,6 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const n = Number(created);
             if (!Number.isNaN(n)) return n < 10000000000 ? n : Math.floor(n / 1000);
             return Math.floor(parseTs(created).getTime() / 1000);
-        };
-
-        // Helper to parse "monto_operacion"
-        const parseMonto = (val: any): number => {
-            if (!val) return 0;
-            const raw = val.toString().trim();
-            const normalized = raw.includes(',') && !raw.includes('.')
-                ? raw.replace(',', '.')
-                : raw.replace(/,/g, '');
-            const clean = normalized.replace(/[^0-9.-]/g, '');
-            const num = parseFloat(clean);
-            return isNaN(num) ? 0 : num;
         };
 
         try {
@@ -187,10 +181,13 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             let trendStart = globalStart;
             let trendEnd = globalEnd;
 
-            // Calculate Total Profit - All Time
-            const totalProfitAll = allConversations.reduce((sum, conv) => {
-                return sum + parseMonto(conv.resolvedAttrs.monto_operacion);
-            }, 0);
+            const commercialTagSettings = {
+                ...globalTagSettings,
+                ...overrideTags,
+                saleTags,
+                humanSaleTargetLabel,
+            };
+            const isCurrentSaleLead = (conv: any) => isCurrentSale(conv, commercialTagSettings);
 
             // Filter Data for KPIs
             const kpiConversations = allConversations.filter(conv => {
@@ -218,18 +215,16 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                     return;
                 }
 
-                const monto = parseMonto(conv.resolvedAttrs.monto_operacion);
+                if (!isCurrentSaleLead(conv)) {
+                    return;
+                }
+
+                const monto = parseAmount(conv.resolvedAttrs.monto_operacion);
 
                 if (monto > 0) {
                     totalProfit += monto;
 
-                    const fechaMontoStr = conv.resolvedAttrs.fecha_monto_operacion;
-                    let fechaMonto: Date;
-                    if (fechaMontoStr) {
-                        fechaMonto = new Date(fechaMontoStr);
-                    } else {
-                        fechaMonto = getCreatedDate(conv);
-                    }
+                    const fechaMonto = getCommercialSaleDate(conv, parseTs);
                     if (fechaMonto >= globalStart && fechaMonto <= globalEnd) {
                         monthlyProfit += monto;
                     }
@@ -290,13 +285,13 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             let historicalCitaAgendadaCount = 0;
             let historicalInteresadoCount = 0;
 
-            const saleTags = _getTagsForStage('sale');
+            const stageSaleTags = _getTagsForStage('sale');
             const apptTags = _getTagsForStage('appointment');
             const sqlTags = _getTagsForStage('sql');
 
             kpiConversations.forEach(conv => {
                 // Cascading Funnel Logic: If they reached a deeper stage, they automatically succeeded in the prior stages.
-                const reachedSale = hasHistoricalLabel(conv, saleTags);
+                const reachedSale = isCurrentSaleLead(conv) || hasHistoricalLabel(conv, stageSaleTags);
                 const reachedAppt = reachedSale || hasHistoricalLabel(conv, apptTags);
                 const reachedSql = reachedAppt || hasHistoricalLabel(conv, sqlTags);
 
@@ -308,7 +303,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             // Core KPI Mappings (Strict to Current Tags)
             const interesadoCount = countByPrimaryStage('sql');
             const citaAgendadaCount = countByPrimaryStage('appointment');
-            const ventaExitosaCount = countByPrimaryStage('sale');
+            const ventaExitosaCount = kpiConversations.filter(isCurrentSaleLead).length;
             const desinteresadoCount = countByPrimaryStage('unqualified');
 
             const schedulingRateVar = totalLeads > 0 ? Math.round((citaAgendadaCount / totalLeads) * 100) : 0;
@@ -377,6 +372,10 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 Number(message?.message_type) === 0 ||
                 String(message?.message_type).toLowerCase() === 'incoming' ||
                 String(message?.sender_type || '').toLowerCase() === 'contact';
+            const hasMessageSenderSignal = (message: any) =>
+                message?.message_direction !== undefined ||
+                message?.message_type !== undefined ||
+                message?.sender_type !== undefined;
             const getConversationMessages = (conv: any) =>
                 Array.isArray(conv.messages)
                     ? conv.messages
@@ -392,14 +391,20 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 return null;
             };
             const hasUnansweredCustomerMessage = (conv: any) => {
+                if (conv.waiting_since) return true;
+
+                if (conv.last_non_activity_message && hasMessageSenderSignal(conv.last_non_activity_message)) {
+                    return isIncomingMessage(conv.last_non_activity_message);
+                }
+
                 const messages = getConversationMessages(conv);
                 if (messages.length > 0) {
                     const lastMessage = messages[messages.length - 1];
                     return isIncomingMessage(lastMessage);
                 }
 
-                if (conv.last_non_activity_message) {
-                    return isIncomingMessage(conv.last_non_activity_message);
+                if (conv.last_non_activity_message?.content && !conv.first_reply_created_at) {
+                    return true;
                 }
 
                 return !conv.first_reply_created_at;
@@ -602,7 +607,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 const stage = conv.resolvedStage;
                 if (stage === 'sql') stat.sqls++;
                 if (stage === 'appointment') stat.appointments++;
-                if (stage === 'sale') {
+                if (isCurrentSaleLead(conv)) {
                     stat.closedSales = (stat.closedSales || 0) + 1;
                 }
             });
@@ -665,18 +670,17 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
             const humanSales = allConversations
                 .filter(conv => {
                     if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return false;
-                    if (!labelsInclude(conv, humanSaleTargetLabel)) return false;
+                    if (!isCurrentSaleLead(conv)) return false;
 
-                    const attrs = getLeadAttrs(conv);
-                    const saleDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
+                    const saleDate = getCommercialSaleDate(conv, parseTs);
                     return !Number.isNaN(saleDate.getTime()) && saleDate >= globalStart && saleDate <= globalEnd;
                 });
             const salesByDateMap = new Map<string, { date: string, sales: number, salesVolume: number }>();
             const totalHumanSalesVolume = humanSales.reduce((acc, conv) => {
                 const attrs = getLeadAttrs(conv);
-                const saleDate = attrs.fecha_monto_operacion ? parseTs(attrs.fecha_monto_operacion) : getCreatedDate(conv);
+                const saleDate = getCommercialSaleDate(conv, parseTs);
                 const dateKey = getGuayaquilDateString(saleDate);
-                const amount = parseMonto(attrs.monto_operacion);
+                const amount = parseAmount(attrs.monto_operacion);
                 const row = salesByDateMap.get(dateKey) || { date: dateKey, sales: 0, salesVolume: 0 };
                 row.sales += 1;
                 row.salesVolume += amount;
@@ -684,6 +688,11 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 return acc + amount;
             }, 0);
             const salesByDate = Array.from(salesByDateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+            const commercialAuditSummary = getCommercialAuditSummary(
+                kpiConversations,
+                commercialAuditEvents,
+                commercialTagSettings
+            );
 
             const humanMetrics = {
                 followup: humanFollowup,
@@ -697,7 +706,12 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 averageTicket: humanSales.length > 0 ? totalHumanSalesVolume / humanSales.length : 0,
                 conversionRate: humanAppointmentConversionRate,
                 salesByDate,
-                trackingStartedAt
+                trackingStartedAt,
+                nonAccountableAmountCount: commercialAuditSummary.nonAccountableAmountCount,
+                nonAccountableAmountTotal: commercialAuditSummary.nonAccountableAmountTotal,
+                historicalSalesNotCurrentCount: commercialAuditSummary.historicalSalesNotCurrentCount,
+                removedAmountCount: commercialAuditSummary.removedAmountCount,
+                commercialAuditRows: commercialAuditSummary.auditRows
             };
 
             // 8. Trend Metrics
@@ -724,13 +738,13 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
 
             allConversations.forEach(conv => {
                 if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conv.inbox_id))) return;
-                if (conv.resolvedStage !== 'sale') return;
+                if (!isCurrentSaleLead(conv)) return;
 
-                const revenueDate = conv.resolvedAttrs.fecha_monto_operacion ? parseTs(conv.resolvedAttrs.fecha_monto_operacion) : getCreatedDate(conv);
+                const revenueDate = getCommercialSaleDate(conv, parseTs);
                 if (Number.isNaN(revenueDate.getTime()) || revenueDate < globalStart || revenueDate > globalEnd) return;
 
                 const dateStr = getGuayaquilDateString(revenueDate);
-                const val = parseMonto(conv.resolvedAttrs.monto_operacion);
+                const val = parseAmount(conv.resolvedAttrs.monto_operacion);
                 const row = revenueByDayMap.get(dateStr) || { date: dateStr, value: 0, sales: 0 };
                 row.value += val;
                 row.sales += 1;
@@ -787,7 +801,7 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                 humanMetrics: emptyData.humanMetrics
             };
         }
-    }, [allConversations, inboxes, configuredLabels, globalTagSettings, filters]);
+    }, [allConversations, inboxes, configuredLabels, globalTagSettings, filters, commercialAuditEvents]);
 
     return { loading, error, data, refetch: contextRefetch };
 };
