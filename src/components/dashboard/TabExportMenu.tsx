@@ -51,7 +51,7 @@ interface TabExportMenuProps {
     onScheduled?: () => void;
 }
 
-type Frequency = "weekly" | "monthly";
+type Frequency = "daily" | "weekly" | "monthly";
 
 const DEFAULT_FORMATS: ReportFileFormat[] = ["excel"];
 
@@ -275,13 +275,14 @@ export function TabExportMenu({
                                 <Select value={frequency} onValueChange={(value: Frequency) => setFrequency(value)}>
                                     <SelectTrigger><SelectValue /></SelectTrigger>
                                     <SelectContent>
+                                        <SelectItem value="daily">Diario</SelectItem>
                                         <SelectItem value="weekly">Semanal</SelectItem>
                                         <SelectItem value="monthly">Mensual</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
 
-                            {frequency === "weekly" ? (
+                            {frequency === "weekly" && (
                                 <div className="space-y-2">
                                     <Label>Día de la semana</Label>
                                     <Select value={weekday} onValueChange={setWeekday}>
@@ -293,7 +294,9 @@ export function TabExportMenu({
                                         </SelectContent>
                                     </Select>
                                 </div>
-                            ) : (
+                            )}
+                            
+                            {frequency === "monthly" && (
                                 <div className="space-y-2">
                                     <Label>Día del mes</Label>
                                     <Input type="number" min={1} max={31} value={monthDay} onChange={(event) => setMonthDay(event.target.value)} />

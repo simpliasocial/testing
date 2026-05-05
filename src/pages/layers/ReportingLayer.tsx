@@ -7,6 +7,7 @@ import {
     Loader2,
     Mail,
     PauseCircle,
+    Pencil,
     PlayCircle,
     Settings,
     Trash2,
@@ -24,7 +25,9 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
 import { DEFAULT_TAG_CONFIG, useDashboardContext } from "@/context/DashboardDataContext";
 import { useAuth } from "@/context/AuthContext";
@@ -46,7 +49,7 @@ import {
 interface ScheduledReport {
     id: string;
     name: string;
-    frequency: "weekly" | "monthly";
+    frequency: "daily" | "weekly" | "monthly";
     schedule_days: string[] | null;
     schedule_month_day: number | null;
     schedule_time: string;
@@ -79,10 +82,19 @@ const PROFILE_AREAS: Record<CriticalProfileKey, string> = {
 
 const profileKeys = Object.keys(CRITICAL_REPORT_PROFILES) as CriticalProfileKey[];
 
+const normalizeEmailList = (value: string) => value
+    .split(/[;,\n]/)
+    .map((email) => email.trim())
+    .filter(Boolean)
+    .join(", ");
+
 const formatSchedule = (report: ScheduledReport) => {
     const time = report.schedule_time?.slice(0, 5) || "08:00";
+    if (report.frequency === "daily") {
+        return `Diario, ${time}`;
+    }
     if (report.frequency === "monthly") {
-        return `Mensual, dia ${report.schedule_month_day || 1}, ${time}`;
+        return `Mensual, día ${report.schedule_month_day || 1}, ${time}`;
     }
 
     const selectedDays = WEEKDAY_OPTIONS
@@ -110,6 +122,16 @@ const ReportingLayer = () => {
     const [profileTabs, setProfileTabs] = useState<ReportTabId[]>([]);
     const [profileFormats, setProfileFormats] = useState<ReportFileFormat[]>([]);
     const [profileActive, setProfileActive] = useState(true);
+
+    const [editingReport, setEditingReport] = useState<ScheduledReport | null>(null);
+    const [scheduleName, setScheduleName] = useState("");
+    const [frequency, setFrequency] = useState<"daily" | "weekly" | "monthly">("weekly");
+    const [weekday, setWeekday] = useState("1");
+    const [monthDay, setMonthDay] = useState("1");
+    const [scheduleTime, setScheduleTime] = useState("08:00");
+    const [recipients, setRecipients] = useState("");
+    const [selectedFormats, setSelectedFormats] = useState<ReportFileFormat[]>([]);
+    const [savingSchedule, setSavingSchedule] = useState(false);
 
     const resolvedProfiles = useMemo(() => profileKeys.map((key) => (
         resolveCriticalProfile(key, tagSettings.criticalReportProfiles)
@@ -224,6 +246,88 @@ const ReportingLayer = () => {
         } catch (error) {
             console.error("Scheduled report delete failed:", error);
             toast.error("No se pudo eliminar el reporte");
+        }
+    };
+
+    const openEditReport = (report: ScheduledReport) => {
+        setEditingReport(report);
+        setScheduleName(report.name || "");
+        setFrequency((report.frequency as any) || "weekly");
+        setWeekday(report.schedule_days?.[0] || "1");
+        setMonthDay(report.schedule_month_day?.toString() || "1");
+        setScheduleTime(report.schedule_time?.slice(0, 5) || "08:00");
+        setRecipients(report.recipients || "");
+        setSelectedFormats(report.file_formats || ["excel"]);
+    };
+
+    const toggleEditFormat = (formatId: ReportFileFormat, checked: boolean | string) => {
+        setSelectedFormats((current) => {
+            const isChecked = checked === true;
+            const next = isChecked
+                ? Array.from(new Set([...current, formatId]))
+                : current.filter((item) => item !== formatId);
+            return next.length > 0 ? next : current;
+        });
+    };
+
+    const handleUpdateSchedule = async () => {
+        if (!editingReport) return;
+        
+        const cleanName = scheduleName.trim();
+        const cleanRecipients = normalizeEmailList(recipients);
+        const dayNumber = Math.min(31, Math.max(1, Number.parseInt(monthDay || "1", 10) || 1));
+
+        if (!cleanName) {
+            toast.error("Escribe un nombre para el reporte");
+            return;
+        }
+        if (!cleanRecipients) {
+            toast.error("Agrega al menos un correo destino");
+            return;
+        }
+        if (selectedFormats.length === 0) {
+            toast.error("Selecciona al menos un formato");
+            return;
+        }
+
+        try {
+            setSavingSchedule(true);
+            const { error } = await supabase
+                .schema("cw")
+                .from("automated_reports")
+                .update({
+                    name: cleanName,
+                    frequency,
+                    schedule_days: frequency === "weekly" ? [weekday] : [],
+                    schedule_month_day: frequency === "monthly" ? dayNumber : null,
+                    schedule_time: scheduleTime,
+                    recipients: cleanRecipients,
+                    file_formats: selectedFormats,
+                    updated_at: new Date().toISOString(),
+                })
+                .eq("id", editingReport.id);
+
+            if (error) throw error;
+            toast.success("Reporte automático actualizado");
+            setEditingReport(null);
+            
+            setReports((current) => current.map((item) => 
+                item.id === editingReport.id ? {
+                    ...item,
+                    name: cleanName,
+                    frequency,
+                    schedule_days: frequency === "weekly" ? [weekday] : [],
+                    schedule_month_day: frequency === "monthly" ? dayNumber : null,
+                    schedule_time: scheduleTime,
+                    recipients: cleanRecipients,
+                    file_formats: selectedFormats,
+                } : item
+            ));
+        } catch (error) {
+            console.error("Scheduled report update failed:", error);
+            toast.error("No se pudo actualizar el reporte");
+        } finally {
+            setSavingSchedule(false);
         }
     };
 
@@ -367,6 +471,9 @@ const ReportingLayer = () => {
                                                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleScheduledStatus(report)}>
                                                     {report.is_active ? <PauseCircle className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
                                                 </Button>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEditReport(report)}>
+                                                    <Pencil className="h-4 w-4" />
+                                                </Button>
                                                 <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => deleteScheduledReport(report)}>
                                                     <Trash2 className="h-4 w-4" />
                                                 </Button>
@@ -386,6 +493,99 @@ const ReportingLayer = () => {
                     </div>
                 </CardContent>
             </Card>
+
+            <Dialog open={Boolean(editingReport)} onOpenChange={(open) => !open && setEditingReport(null)}>
+                <DialogContent className="sm:max-w-[560px]">
+                    <DialogHeader>
+                        <DialogTitle>Editar reporte automático</DialogTitle>
+                        <DialogDescription>
+                            Modifica la configuración de envío por correo para este reporte.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="grid gap-4 py-2">
+                        <div className="space-y-2">
+                            <Label>Nombre</Label>
+                            <Input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} />
+                        </div>
+
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Frecuencia</Label>
+                                <Select value={frequency} onValueChange={(value: "daily" | "weekly" | "monthly") => setFrequency(value)}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="daily">Diario</SelectItem>
+                                        <SelectItem value="weekly">Semanal</SelectItem>
+                                        <SelectItem value="monthly">Mensual</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            {frequency === "weekly" && (
+                                <div className="space-y-2">
+                                    <Label>Día de la semana</Label>
+                                    <Select value={weekday} onValueChange={setWeekday}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            {WEEKDAY_OPTIONS.map((day) => (
+                                                <SelectItem key={day.value} value={day.value}>{day.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            )}
+                            
+                            {frequency === "monthly" && (
+                                <div className="space-y-2">
+                                    <Label>Día del mes</Label>
+                                    <Input type="number" min={1} max={31} value={monthDay} onChange={(event) => setMonthDay(event.target.value)} />
+                                    <p className="text-[11px] text-muted-foreground">Si el mes no tiene ese día, se enviará el último día del mes.</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Hora de envío</Label>
+                                <Input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Formatos</Label>
+                                <div className="flex flex-wrap gap-3 rounded-lg border p-3">
+                                    {REPORT_FORMATS.map((formatOption) => (
+                                        <label key={formatOption.id} className="flex items-center gap-2 text-sm">
+                                            <Checkbox
+                                                checked={selectedFormats.includes(formatOption.id)}
+                                                onCheckedChange={(checked) => toggleEditFormat(formatOption.id, checked)}
+                                            />
+                                            {formatOption.label}
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Correos destino</Label>
+                            <Input
+                                placeholder="gerencia@simplia.com, operaciones@simplia.com"
+                                value={recipients}
+                                onChange={(event) => setRecipients(event.target.value)}
+                            />
+                            <p className="text-[11px] text-muted-foreground">Puedes separar varios correos con coma, punto y coma o salto de línea.</p>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setEditingReport(null)} disabled={savingSchedule}>Cancelar</Button>
+                        <Button onClick={handleUpdateSchedule} disabled={savingSchedule} className="gap-2">
+                            {savingSchedule && <Loader2 className="h-4 w-4 animate-spin" />}
+                            Guardar cambios
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={Boolean(editingProfileKey)} onOpenChange={(open) => !open && setEditingProfileKey(null)}>
                 <DialogContent className="sm:max-w-[680px]">
