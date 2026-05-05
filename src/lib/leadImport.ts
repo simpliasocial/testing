@@ -9,6 +9,7 @@ export type LeadImportTargetField =
     | "channel"
     | "labels"
     | "amount"
+    | "paymentDate"
     | "createdAt"
     | "updatedAt"
     | "email"
@@ -63,6 +64,7 @@ export interface LeadImportPreviewRow {
     labels: string[];
     amountRaw: string;
     amountNumber: number;
+    paymentDateIso: string;
     createdAtIso: string;
     updatedAtIso: string;
     email: string;
@@ -129,19 +131,20 @@ export interface LeadImportSaveResult {
 }
 
 export const LEAD_IMPORT_TARGETS: LeadImportTargetDefinition[] = [
-    { id: "externalId", label: "ID externo", description: "Identificador del sistema origen." },
+    { id: "externalId", label: "ID del lead", description: "Identificador único del cliente o sistema origen.", required: true, preview: true },
     { id: "name", label: "Nombre", description: "Nombre visible del lead.", required: true, preview: true },
-    { id: "phone", label: "Número", description: "Teléfono principal.", preview: true },
-    { id: "channel", label: "Canal", description: "Origen comercial o red social.", preview: true },
-    { id: "labels", label: "Etiqueta", description: "Estados o etiquetas del negocio.", preview: true },
-    { id: "amount", label: "Valor/Pago", description: "Monto, presupuesto o valor comercial.", preview: true },
-    { id: "createdAt", label: "Fecha creación", description: "Fecha de creación del lead.", preview: true },
-    { id: "updatedAt", label: "Fecha modificación", description: "Última modificación del lead.", preview: true },
+    { id: "phone", label: "Teléfono", description: "Teléfono principal. Se normaliza a Ecuador +593.", required: true, preview: true },
+    { id: "createdAt", label: "Fecha creación del lead", description: "Fecha en que se creó el lead.", required: true, preview: true },
     { id: "email", label: "Correo", description: "Correo del contacto." },
-    { id: "stage", label: "Estado/etapa", description: "Estado del embudo o etapa comercial." },
-    { id: "score", label: "Score", description: "Puntaje de interés o calidad." },
-    { id: "campaign", label: "Campaña", description: "Campaña u origen UTM." },
+    { id: "campaign", label: "Campaña", description: "Campaña, anuncio u origen UTM." },
     { id: "city", label: "Ciudad", description: "Ciudad del lead." },
+    { id: "channel", label: "Canal/red social", description: "Origen comercial o red social.", preview: true },
+    { id: "labels", label: "Etiqueta/etapa", description: "Estado, etiqueta, etapa o pipeline. Se normaliza a snake_case.", preview: true },
+    { id: "amount", label: "Valor de venta", description: "Monto pagado o valor comercial cuando el lead es venta exitosa.", preview: true },
+    { id: "paymentDate", label: "Fecha de pago", description: "Fecha en que se registró el pago o valor de venta.", preview: true },
+    { id: "updatedAt", label: "Fecha última modificación", description: "Última modificación o última actividad del lead.", preview: true },
+    { id: "stage", label: "Estado/etapa de origen", description: "Campo opcional para conservar la etapa original." },
+    { id: "score", label: "Score", description: "Puntaje de interés o calidad si el archivo lo trae." },
 ];
 
 const fieldIds = LEAD_IMPORT_TARGETS.map((target) => target.id);
@@ -318,6 +321,49 @@ const phoneLike = (value: unknown) => {
     return digits.length >= 7 && digits.length <= 16;
 };
 
+const snakeCase = (value: unknown) =>
+    normalizeText(value)
+        .replace(/\s+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+const LABEL_ALIAS_EXACT: Record<string, string> = {
+    bienvenida: "bienvenida",
+    interesado: "interesado",
+    solicita_informacion: "solicita_informacion",
+    "solicita informacion": "solicita_informacion",
+    desinteresado: "desinteresado",
+    cita_agendada: "cita_agendada",
+    "cita agendada": "cita_agendada",
+    cita_agendada_humano: "cita_agendada_humano",
+    "cita agendada humano": "cita_agendada_humano",
+    venta_exitosa: "venta_exitosa",
+    "venta exitosa": "venta_exitosa",
+    seguimiento_humano: "seguimiento_humano",
+    "seguimiento humano": "seguimiento_humano",
+};
+
+const LABEL_ALIAS_PATTERNS: Array<{ label: string; patterns: string[] }> = [
+    { label: "venta_exitosa", patterns: ["venta exitosa", "venta realizada", "vendido", "pagado", "pago realizado", "cerrado"] },
+    { label: "cita_agendada_humano", patterns: ["cita humana", "cita manual", "agendada humano", "agendada por humano"] },
+    { label: "cita_agendada", patterns: ["cita agendada", "agendado", "agenda", "cita"] },
+    { label: "seguimiento_humano", patterns: ["seguimiento humano", "requiere humano", "asesor", "humano", "seguimiento"] },
+    { label: "desinteresado", patterns: ["desinteresado", "descartado", "no interesado", "no interesa", "perdido"] },
+    { label: "solicita_informacion", patterns: ["solicita informacion", "pide informacion", "informacion", "info", "costos", "precio"] },
+    { label: "interesado", patterns: ["interesado", "interes", "quiere avanzar", "oportunidad"] },
+    { label: "bienvenida", patterns: ["bienvenida", "primer contacto", "nuevo lead", "entrada"] },
+];
+
+export const normalizeLeadLabel = (value: unknown) => {
+    const normalized = normalizeText(value);
+    if (!normalized) return "";
+    if (LABEL_ALIAS_EXACT[normalized]) return LABEL_ALIAS_EXACT[normalized];
+
+    const match = LABEL_ALIAS_PATTERNS.find((item) =>
+        item.patterns.some((pattern) => normalized.includes(pattern))
+    );
+    return match?.label || snakeCase(value);
+};
+
 const channelAlias = (value: unknown) => {
     const text = normalizeText(value);
     if (!text) return "";
@@ -346,7 +392,7 @@ const scoreColumn = (column: LeadImportColumn, field: LeadImportTargetField) => 
 
     switch (field) {
         case "externalId":
-            if (headerHas(column, ["id externo", "lead id", "id lead", "id"])) return 95;
+            if (headerHas(column, ["id externo", "id del lead", "lead id", "id lead", "id"])) return 95;
             return 0;
         case "name":
             if (headerHas(column, ["nombre completo", "nombre del lead", "nombre cliente", "cliente", "contacto"])) return 95;
@@ -359,16 +405,19 @@ const scoreColumn = (column: LeadImportColumn, field: LeadImportTargetField) => 
             if (headerHas(column, ["canal", "origen", "fuente", "medio", "plataforma", "utm source", "utm_source"])) return 95;
             return channelScore;
         case "labels":
-            if (headerHas(column, ["etiqueta", "label", "tag", "estado", "estatus"])) return 95;
+            if (headerHas(column, ["etiqueta", "label", "tag", "estado", "estatus", "etapa", "embudo", "pipeline", "fase"])) return 95;
             return channelScore >= 30 ? 45 : 0;
         case "amount":
             if (headerHas(column, ["presupuesto", "monto", "valor", "pago", "precio", "importe", "credito", "crédito"])) return 95;
             return amountScore >= 3 ? 60 : 0;
+        case "paymentDate":
+            if (headerHas(column, ["fecha de pago", "fecha pago", "fecha monto", "fecha de venta", "fecha venta", "fecha operacion", "fecha operación"])) return 95;
+            return dateScore >= 3 && headerHas(column, ["pago", "monto", "venta", "operacion", "operación"]) ? 60 : 0;
         case "createdAt":
-            if (headerHas(column, ["fecha de creacion", "fecha creacion", "creado", "created"])) return 95;
+            if (headerHas(column, ["fecha de creacion", "fecha creacion", "fecha de creacion del lead", "fecha creacion lead", "fecha ingreso", "fecha de ingreso", "creado", "created"])) return 95;
             return dateScore >= 3 ? 45 : 0;
         case "updatedAt":
-            if (headerHas(column, ["fecha de modificacion", "fecha modificacion", "modificado", "actualizado", "updated"])) return 95;
+            if (headerHas(column, ["fecha de modificacion", "fecha modificacion", "fecha ultima modificacion", "fecha última modificación", "ultima modificacion", "última modificación", "fecha ultima actividad", "fecha última actividad", "ultima actividad", "última actividad", "modificado", "actualizado", "updated"])) return 95;
             return dateScore >= 3 ? 40 : 0;
         case "email":
             if (headerHas(column, ["correo", "email", "e mail", "mail"])) return 95;
@@ -400,12 +449,16 @@ export const createDefaultLeadImportMapping = (columns: LeadImportColumn[]): Lea
     const mapping = emptyMapping();
 
     fieldIds.forEach((field) => {
+        if (["stage", "score"].includes(field)) {
+            mapping[field] = [];
+            return;
+        }
+
         const ranked = rankedColumns(columns, field);
-        const threshold = ["name", "phone"].includes(field) ? 70 : 80;
-        const maxItems = field === "phone" ? 4 : field === "name" ? 3 : field === "labels" ? 2 : 1;
+        const threshold = ["name", "phone"].includes(field) ? 70 : ["createdAt", "updatedAt", "paymentDate"].includes(field) ? 60 : 80;
         mapping[field] = ranked
             .filter((item) => item.score >= threshold)
-            .slice(0, maxItems)
+            .slice(0, 1)
             .map((item) => item.column.id);
     });
 
@@ -443,16 +496,20 @@ const firstValueForField = (
 export const normalizePhoneValue = (value: unknown) => {
     const raw = normalizeCell(value).replace(/^[`'"\s]+/, "");
     if (!raw) return "";
-    const hasPlus = raw.trim().startsWith("+");
     const digits = raw.replace(/\D/g, "");
     if (!digits) return "";
-    return `${hasPlus ? "+" : ""}${digits}`;
+    if (digits.length < 7 || digits.length > 16) return "";
+    if (digits.startsWith("593")) return `+${digits}`;
+    if (digits.length === 10 && digits.startsWith("0")) return `+593${digits.slice(1)}`;
+    if (digits.length === 9 && digits.startsWith("9")) return `+593${digits}`;
+    if (raw.trim().startsWith("+")) return `+${digits}`;
+    return digits.length > 10 ? `+${digits}` : digits;
 };
 
 export const splitLabels = (values: unknown[]) => {
     const labels = values
         .flatMap((value) => normalizeCell(value).split(/[,;|]/))
-        .map((label) => label.trim())
+        .map(normalizeLeadLabel)
         .filter(Boolean);
 
     return Array.from(new Set(labels));
@@ -609,7 +666,6 @@ export const buildLeadImportPreview = (
     const rows: LeadImportPreviewRow[] = [];
     const issues: LeadImportIssue[] = [];
     const duplicateTracker = new Map<number, number>();
-    const nowIso = new Date().toISOString();
 
     parsed.rows.forEach((row, index) => {
         const rowNumber = parsed.headerRowIndex + index + 2;
@@ -617,23 +673,46 @@ export const buildLeadImportPreview = (
         const externalId = firstValueForField(row, parsed.columns, mapping, "externalId");
         const name = firstValueForField(row, parsed.columns, mapping, "name");
         const phone = normalizePhoneValue(firstValueForField(row, parsed.columns, mapping, "phone"));
-        const labels = splitLabels(valuesForField(row, parsed.columns, mapping, "labels"));
+        const stage = normalizeLeadLabel(firstValueForField(row, parsed.columns, mapping, "stage"));
+        const labels = splitLabels([...valuesForField(row, parsed.columns, mapping, "labels"), stage]);
         const channelValue = firstValueForField(row, parsed.columns, mapping, "channel");
         const channel = normalizeChannelValue(channelValue) || labels.map(channelAlias).find(Boolean) || "";
         const amount = parseAmountValue(firstValueForField(row, parsed.columns, mapping, "amount"));
+        const paymentRaw = firstValueForField(row, parsed.columns, mapping, "paymentDate");
         const createdRaw = firstValueForField(row, parsed.columns, mapping, "createdAt");
         const updatedRaw = firstValueForField(row, parsed.columns, mapping, "updatedAt");
+        const parsedPaymentDate = parseLeadDate(paymentRaw);
         const parsedCreatedAt = parseLeadDate(createdRaw);
         const parsedUpdatedAt = parseLeadDate(updatedRaw);
         const dateWarnings: string[] = [];
+        const blockingIssues: LeadImportIssue[] = [];
 
-        if (createdRaw && !parsedCreatedAt) dateWarnings.push("Fecha creación no reconocida");
+        if (!externalId) {
+            blockingIssues.push({ rowNumber, severity: "error", field: "externalId", reason: "Falta ID del lead.", rawRow });
+        }
+        if (!name) {
+            blockingIssues.push({ rowNumber, severity: "error", field: "name", reason: "Falta nombre del lead.", rawRow });
+        }
+        if (!phone) {
+            blockingIssues.push({ rowNumber, severity: "error", field: "phone", reason: "Falta teléfono válido del lead.", rawRow });
+        }
+        if (!createdRaw) {
+            blockingIssues.push({ rowNumber, severity: "error", field: "createdAt", reason: "Falta fecha de creación del lead.", rawRow });
+        } else if (!parsedCreatedAt) {
+            blockingIssues.push({ rowNumber, severity: "error", field: "createdAt", reason: "Fecha de creación no reconocida.", rawRow });
+        }
+
+        if (blockingIssues.length > 0) {
+            issues.push(...blockingIssues);
+            return;
+        }
+
+        if (paymentRaw && !parsedPaymentDate) dateWarnings.push("Fecha de pago no reconocida");
         if (updatedRaw && !parsedUpdatedAt) dateWarnings.push("Fecha modificación no reconocida");
 
-        const createdAtIso = parsedCreatedAt || parsedUpdatedAt || nowIso;
+        const createdAtIso = parsedCreatedAt;
         const updatedAtIso = parsedUpdatedAt || createdAtIso;
         const email = firstValueForField(row, parsed.columns, mapping, "email");
-        const stage = firstValueForField(row, parsed.columns, mapping, "stage");
         const score = parseScore(firstValueForField(row, parsed.columns, mapping, "score"));
         const campaign = firstValueForField(row, parsed.columns, mapping, "campaign");
         const city = firstValueForField(row, parsed.columns, mapping, "city");
@@ -671,6 +750,7 @@ export const buildLeadImportPreview = (
             labels,
             amountRaw: amount.raw,
             amountNumber: amount.number,
+            paymentDateIso: parsedPaymentDate,
             createdAtIso,
             updatedAtIso,
             email,
@@ -791,7 +871,7 @@ const buildAttributes = (row: LeadImportPreviewRow, sourceSystem: string) => ({
     canal: row.channel,
     monto_operacion: row.amountRaw,
     monto_operacion_numero: row.amountNumber,
-    fecha_monto_operacion: row.amountRaw ? row.updatedAtIso : "",
+    fecha_monto_operacion: row.paymentDateIso || "",
     score_interes: row.score,
     campana: row.campaign,
     ciudad: row.city,
@@ -906,7 +986,7 @@ const buildConversationRows = (
         canal: row.channel || null,
         score_interes: row.score,
         monto_operacion: row.amountRaw || null,
-        fecha_monto_operacion: row.amountRaw ? row.updatedAtIso : null,
+        fecha_monto_operacion: row.paymentDateIso || null,
         source_system: sourceSystem,
         external_lead_id: row.externalLeadId,
         import_batch_id: batchId,
