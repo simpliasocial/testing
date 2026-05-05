@@ -18,6 +18,7 @@ export interface DashboardFilters {
     humanSalesQueueTags?: string[];
     humanSaleTargetLabel?: string;
     humanAppointmentFieldKeys?: string[];
+    humanSaleFieldKeys?: string[];
 }
 
 const FIRST_RESPONSE_GRACE_SECONDS = 60;
@@ -325,7 +326,9 @@ export const useDashboardData = (filtersOrMonth: DashboardFilters | Date | null 
                         agency: conv.resolvedAttrs.agencia || 'Sin Agencia',
                         date: conv.resolvedAttrs.fecha_visita || 'Pendiente',
                         time: conv.resolvedAttrs.hora_visita || '',
-                        status: conv.resolvedStage === 'sale' ? 'Finalizado' : 'Confirmado'
+                        status: conv.resolvedStage === 'sale' ? 'Finalizado' : 'Confirmado',
+                        createdAt: conv.created_at || conv.timestamp || 0,
+                        lastInteractionAt: conv.timestamp || conv.created_at || 0
                     };
                 });
 

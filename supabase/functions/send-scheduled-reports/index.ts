@@ -57,27 +57,25 @@ const CRITICAL_PROFILES: Record<string, { label: string; tabIds: string[]; forma
 
 const cleanText = (value: unknown) => String(value ?? "").trim();
 
-const SCORE_BUCKETS = ["hot", "warm", "cold", "low"] as const;
+const SCORE_BUCKETS = ["hot", "warm", "cold"] as const;
 type ScoreBucket = typeof SCORE_BUCKETS[number];
 
 const SCORE_BUCKET_LABELS: Record<ScoreBucket, string> = {
     hot: "Caliente",
     warm: "Tibio",
     cold: "Frio",
-    low: "Bajo",
 };
 
 const getScoreThresholds = (report: any = {}) => {
     const source = asObject(report.score_thresholds || report.scoreThresholds || report.filters?.scoreThresholds);
     const hotMin = Number(source.hotMin ?? source.highMin ?? 70);
     const warmMin = Number(source.warmMin ?? source.mediumMin ?? 45);
-    const coldMin = Number(source.coldMin ?? 20);
 
-    return {
-        hotMin: Number.isFinite(hotMin) ? hotMin : 70,
-        warmMin: Number.isFinite(warmMin) ? warmMin : 45,
-        coldMin: Number.isFinite(coldMin) ? coldMin : 20,
-    };
+    const normalizedHotMin = Number.isFinite(hotMin) ? hotMin : 70;
+    const normalizedWarmMin = Number.isFinite(warmMin) ? warmMin : 45;
+    return normalizedHotMin > normalizedWarmMin
+        ? { hotMin: normalizedHotMin, warmMin: normalizedWarmMin }
+        : { hotMin: 70, warmMin: 45 };
 };
 
 const parseScore = (value: unknown) => {
@@ -94,19 +92,17 @@ const scoreValue = (row: any) => {
 const scoreBucket = (row: any, report: any = {}): ScoreBucket => {
     const score = scoreValue(row);
     const thresholds = getScoreThresholds(report);
-    if (score === null) return "low";
+    if (score === null) return "cold";
     if (score >= thresholds.hotMin) return "hot";
     if (score >= thresholds.warmMin) return "warm";
-    if (score >= thresholds.coldMin) return "cold";
-    return "low";
+    return "cold";
 };
 
 const scoreRangeLabel = (bucket: ScoreBucket, report: any = {}) => {
     const thresholds = getScoreThresholds(report);
     if (bucket === "hot") return `${thresholds.hotMin} o mas`;
     if (bucket === "warm") return `${thresholds.warmMin} a ${thresholds.hotMin - 1}`;
-    if (bucket === "cold") return `${thresholds.coldMin} a ${thresholds.warmMin - 1}`;
-    return `Menor a ${thresholds.coldMin} o sin puntaje`;
+    return `Menor a ${thresholds.warmMin} o sin puntaje`;
 };
 
 const asObject = (value: unknown): Record<string, any> =>
@@ -679,7 +675,7 @@ const tabInterpretation = (tabId: string) => {
         followup: "Seguimiento humano: colas, citas, ventas, montos y pendientes relevantes.",
         performance: "Comparativo por responsable para entender carga, citas, ventas y conversion.",
         trends: "Origenes, campanas, ingresos por periodo y calidad por canal.",
-        scoring: "Calidad de lead con Caliente, Tibio, Frio y Bajo; sin puntaje cuenta como Bajo.",
+        scoring: "Calidad de lead con Caliente, Tibio y Frio; sin puntaje cuenta como Frio.",
         chats: "Revision de conversaciones, etiquetas, estados, canales y detalle exportable.",
     };
     return notes[tabId] || "Reporte operativo del dashboard.";
@@ -711,9 +707,9 @@ const kpiRows = (tabId: string, rows: any[], report: any) => {
         return [
             metricRow("Leads evaluados", summary.leads, "Total filtrado", "Leads incluidos en calidad."),
             metricRow("Con puntaje", summary.scored, "Score numerico disponible", "Base con puntaje real."),
-            metricRow("Sin puntaje", summary.missingScore, "Score vacio o no numerico", "Se clasifican como Bajo."),
+            metricRow("Sin puntaje", summary.missingScore, "Score vacio o no numerico", "Se clasifican como Frio."),
             metricRow("Puntaje promedio", summary.scored > 0 ? Number(summary.averageScore.toFixed(2)) : "Sin puntajes", "Promedio de puntajes", "Calidad media de leads con dato."),
-            metricRow("Rangos usados", `Caliente ${summary.thresholds.hotMin}+ | Tibio ${summary.thresholds.warmMin}-${summary.thresholds.hotMin - 1} | Frio ${summary.thresholds.coldMin}-${summary.thresholds.warmMin - 1} | Bajo <${summary.thresholds.coldMin}`, "Configuracion del reporte o default", "Rangos usados en el adjunto programado."),
+            metricRow("Rangos usados", `Caliente ${summary.thresholds.hotMin}+ | Tibio ${summary.thresholds.warmMin}-${summary.thresholds.hotMin - 1} | Frio <${summary.thresholds.warmMin} o sin puntaje`, "Configuracion del reporte o default", "Rangos usados en el adjunto programado."),
         ];
     }
 
@@ -785,7 +781,7 @@ const dimensionRows = (rows: any[], report: any, dimensionLabel: string, resolve
             revenue: 0,
             scoreSum: 0,
             scored: 0,
-            buckets: { hot: 0, warm: 0, cold: 0, low: 0 },
+            buckets: { hot: 0, warm: 0, cold: 0 },
         };
         const rowStage = stage(row);
         const score = scoreValue(row);
@@ -817,13 +813,12 @@ const dimensionRows = (rows: any[], report: any, dimensionLabel: string, resolve
         Caliente: value.buckets.hot,
         Tibio: value.buckets.warm,
         Frio: value.buckets.cold,
-        Bajo: value.buckets.low,
     })).sort((a, b) => Number(b.Leads) - Number(a.Leads));
 };
 
 const qualityDistributionRows = (rows: any[], report: any) => {
     const summary = summarizeRows(rows, report);
-    const counts: Record<ScoreBucket, number> = { hot: 0, warm: 0, cold: 0, low: 0 };
+    const counts: Record<ScoreBucket, number> = { hot: 0, warm: 0, cold: 0 };
     rows.forEach((row) => {
         counts[scoreBucket(row, report)] += 1;
     });
@@ -832,7 +827,7 @@ const qualityDistributionRows = (rows: any[], report: any) => {
         Rango: scoreRangeLabel(bucket, report),
         Leads: counts[bucket],
         Porcentaje: formatPercent(ratio(counts[bucket], rows.length) * 100),
-        "Sin puntaje incluidos": bucket === "low" ? summary.missingScore : "",
+        "Sin puntaje incluidos": bucket === "cold" ? summary.missingScore : "",
     }));
 };
 

@@ -29,6 +29,7 @@ import { supabase } from "@/lib/supabase";
 import { DEFAULT_TAG_CONFIG, useDashboardContext } from "@/context/DashboardDataContext";
 import { useAuth } from "@/context/AuthContext";
 import { TabExportMenu } from "@/components/dashboard/TabExportMenu";
+import { LeadImportWizard } from "@/components/dashboard/LeadImportWizard";
 import {
     CRITICAL_REPORT_PROFILES,
     REPORT_FORMATS,
@@ -101,7 +102,7 @@ const getReportTabsLabel = (report: ScheduledReport) => {
 };
 
 const ReportingLayer = () => {
-    const { loading: contextLoading, tagSettings, updateTagSettings } = useDashboardContext();
+    const { loading: contextLoading, tagSettings, updateTagSettings, refetch } = useDashboardContext();
     const { role } = useAuth();
     const [reports, setReports] = useState<ScheduledReport[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -238,6 +239,8 @@ const ReportingLayer = () => {
 
     return (
         <div className="space-y-8">
+            <LeadImportWizard onImported={refetch} />
+
             <Card className="border-primary/15 bg-gradient-to-br from-primary/5 via-background to-background">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-2xl">

@@ -189,8 +189,11 @@ export const getMessagePreview = (lead: Partial<MinifiedConversation> | any) =>
 export const getMessageTimestamp = (lead: Partial<MinifiedConversation> | any) =>
     getLastMessage(lead)?.created_at || lead?.timestamp || lead?.created_at;
 
-export const getChatwootUrl = (conversationId: number | string) =>
-    `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conversationId}`;
+export const getChatwootUrl = (conversationId: number | string) => {
+    const numericId = Number(conversationId);
+    if (!Number.isFinite(numericId) || numericId <= 0) return "";
+    return `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conversationId}`;
+};
 
 export const getInitials = (name: string) =>
     cleanText(name)

@@ -11,7 +11,7 @@ import { dateStringIncludesToday, guayaquilEndOfDayIso, guayaquilStartOfDayIso }
 import { config } from '@/config';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
-import { getAttrs, getInboxChannelName, getLeadChannelName } from '@/lib/leadDisplay';
+import { getAttrs, getChatwootUrl, getInboxChannelName, getLeadChannelName } from '@/lib/leadDisplay';
 import { formatBusinessLabel, formatBusinessList } from '@/lib/displayCopy';
 
 const ReportsPage = () => {
@@ -199,7 +199,7 @@ const ReportsPage = () => {
                     attrs.score_interes || "",
                     attrs.monto_operacion || "",
                     attrs.fecha_monto_operacion || "",
-                    `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conv.id}`,
+                    getChatwootUrl(conv.id) || "Importado",
                     createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : "",
                     lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : ""
                 ];

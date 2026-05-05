@@ -252,6 +252,7 @@ export const HybridDashboardService = {
         search?: string;
         page?: number;
         pageSize?: number;
+        importedOnly?: boolean;
     } = {}): Promise<{ payload: MinifiedConversation[]; count: number }> {
         const pageSize = params.pageSize || SUPABASE_PAGE_SIZE;
         const payload: MinifiedConversation[] = [];
@@ -270,6 +271,7 @@ export const HybridDashboardService = {
             if (params.beforeIso) query = query.lt('created_at_chatwoot', params.beforeIso);
             if (params.sinceIso) query = query.gte('created_at_chatwoot', params.sinceIso);
             if (params.untilIso) query = query.lte('created_at_chatwoot', params.untilIso);
+            if (params.importedOnly) query = query.lt('chatwoot_conversation_id', 0);
             if (params.search) {
                 query = query.or(`nombre_completo.ilike.%${params.search}%,celular.ilike.%${params.search}%,correo.ilike.%${params.search}%,meta->sender->>name.ilike.%${params.search}%`);
             }
@@ -294,6 +296,17 @@ export const HybridDashboardService = {
     async fetchHistoricalBeforeLiveWindow() {
         const liveWindow = getLiveWindow();
         return this.fetchSupabaseConversations({ beforeIso: liveWindow.liveStartIso });
+    },
+
+    async fetchImportedConversations(params: {
+        sinceIso?: string;
+        untilIso?: string;
+    } = {}) {
+        return this.fetchSupabaseConversations({
+            sinceIso: params.sinceIso,
+            untilIso: params.untilIso,
+            importedOnly: true
+        });
     },
 
     async fetchSupabaseIncomingMessageEvents(params: {
@@ -436,15 +449,16 @@ export const HybridDashboardService = {
     },
 
     async fetchHybridConversations(signal?: AbortSignal) {
-        const [historical, live] = await Promise.all([
+        const [historical, imported, live] = await Promise.all([
             this.fetchHistoricalBeforeLiveWindow(),
+            this.fetchImportedConversations(),
             this.fetchLiveConversations(signal)
         ]);
 
         return {
-            conversations: mergeConversationsPreferApi(historical.payload, live.payload),
+            conversations: mergeConversationsPreferApi([...historical.payload, ...imported.payload], live.payload),
             liveCount: live.payload.length,
-            historicalCount: historical.payload.length
+            historicalCount: uniqueById([...historical.payload, ...imported.payload]).length
         };
     },
 
@@ -462,6 +476,11 @@ export const HybridDashboardService = {
             })
             : Promise.resolve({ payload: [], count: 0 });
 
+        const importedPromise = this.fetchImportedConversations({
+            sinceIso: startIso,
+            untilIso: endIso
+        });
+
         const livePromise = endIso >= liveWindow.liveStartIso
             ? this.fetchChatwootWindow({
                 sinceUnix: Math.max(toUnixSeconds(startIso), liveWindow.liveStartUnix),
@@ -469,7 +488,7 @@ export const HybridDashboardService = {
             })
             : Promise.resolve({ payload: [], meta: { all_count: 0 } });
 
-        const [historical, live] = await Promise.all([historicalPromise, livePromise]);
-        return mergeConversationsPreferApi(historical.payload, live.payload);
+        const [historical, imported, live] = await Promise.all([historicalPromise, importedPromise, livePromise]);
+        return mergeConversationsPreferApi([...historical.payload, ...imported.payload], live.payload);
     }
 };

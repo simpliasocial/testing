@@ -1,6 +1,5 @@
 import * as xlsx from "xlsx";
 import { format } from "date-fns";
-import { config } from "@/config";
 import type { DashboardFilters, ResolvedConversation, TagConfig } from "@/context/DashboardDataContext";
 import {
     DEFAULT_REPORT_COLUMN_FIELDS,
@@ -191,7 +190,7 @@ const getFieldValue = (
     const displayField = formatFieldLabel(field);
 
     if (displayField === "Enlace de conversación") {
-        return getChatwootUrl(conversation.id) || `${config.chatwoot.publicUrl}/app/accounts/${config.chatwoot.accountId}/conversations/${conversation.id}`;
+        return getChatwootUrl(conversation.id) || "Importado";
     }
 
     switch (field) {
@@ -522,7 +521,6 @@ const buildDimensionRows = (
             Caliente: value.buckets.hot,
             Tibio: value.buckets.warm,
             Frío: value.buckets.cold,
-            Bajo: value.buckets.low,
         }))
         .sort((a, b) => numberCell(b.Leads) - numberCell(a.Leads));
 };
@@ -590,7 +588,7 @@ const buildQualityDistributionRows = (conversations: ResolvedConversation[], tag
         Rango: getBucketRangeLabel(bucket, thresholds),
         Leads: bucketCounts.get(bucket) || 0,
         Porcentaje: formatPercentValue(safeDivision(bucketCounts.get(bucket) || 0, conversations.length) * 100),
-        "Sin puntaje incluidos": bucket === "low" ? missingScoreCount : "",
+        "Sin puntaje incluidos": bucket === "cold" ? missingScoreCount : "",
     }));
 };
 
@@ -602,10 +600,9 @@ const buildQualityConfigRows = (conversations: ResolvedConversation[], tagSettin
     return [
         { Metrica: "Campo de puntaje usado", Valor: scoreField },
         { Metrica: "Total encontrados", Valor: conversations.length },
-        { Metrica: "Sin puntaje incluidos en Bajo", Valor: missingScoreCount },
+        { Metrica: "Sin puntaje incluidos en Frío", Valor: missingScoreCount },
         { Metrica: "Desde Caliente", Valor: thresholds.hotMin },
         { Metrica: "Desde Tibio", Valor: thresholds.warmMin },
-        { Metrica: "Desde Frío", Valor: thresholds.coldMin },
         { Metrica: "Rangos usados", Valor: SCORE_BUCKET_ORDER.map((bucket) => `${SCORE_BUCKET_COPY[bucket].label}: ${getBucketRangeLabel(bucket, thresholds)}`).join(" | ") },
     ];
 };
@@ -667,7 +664,7 @@ const getTabInterpretation = (tabId: ReportTabId) => {
         followup: "Resume colas humanas, citas, ventas, montos y leads que deben ser gestionados por el equipo.",
         performance: "Compara responsables por volumen, citas, ventas, pendientes y conversión.",
         trends: "Explica de dónde vienen los leads, qué campañas pesan más y cómo evolucionan ingresos y calidad.",
-        scoring: "Clasifica leads en Caliente, Tibio, Frío y Bajo; los leads sin puntaje entran en Bajo.",
+        scoring: "Clasifica leads en Caliente, Tibio y Frío; los leads sin puntaje entran en Frío.",
         chats: "Documenta conversaciones, estados, canales, etiquetas y mensajes disponibles para revisión o análisis.",
     };
     return notes[tabId];
@@ -797,9 +794,9 @@ const buildKpiRows = (
         return [
             metricRow("Leads evaluados", totals.leads, "Total filtrado", "Leads considerados para calidad."),
             metricRow("Con puntaje", totals.scored, "Leads con score numérico", "Base con dato real de scoring."),
-            metricRow("Sin puntaje", totals.missingScore, "Leads sin score", "Se clasifican como Bajo para no quedar fuera del reporte."),
+            metricRow("Sin puntaje", totals.missingScore, "Leads sin score", "Se clasifican como Frío para no quedar fuera del reporte."),
             metricRow("Puntaje promedio", totals.scored > 0 ? Number(totals.averageScore.toFixed(2)) : "Sin puntajes", "Promedio de puntajes", "Lectura general de calidad."),
-            metricRow("Rangos activos", `Caliente ${thresholds.hotMin}+ | Tibio ${thresholds.warmMin}-${thresholds.hotMin - 1} | Frío ${thresholds.coldMin}-${thresholds.warmMin - 1} | Bajo <${thresholds.coldMin}`, "Configuración admin", "Rangos usados en tabla, KPIs, gráficas y exportes."),
+            metricRow("Rangos activos", `Caliente ${thresholds.hotMin}+ | Tibio ${thresholds.warmMin}-${thresholds.hotMin - 1} | Frío <${thresholds.warmMin} o sin puntaje`, "Configuración admin", "Rangos usados en tabla, KPIs, gráficas y exportes."),
         ];
     }
 

@@ -133,7 +133,12 @@ const ChatwootPage = () => {
     );
 
     const openInChatwoot = (conversationId: number) => {
-        window.open(getChatwootUrl(conversationId), '_blank');
+        const url = getChatwootUrl(conversationId);
+        if (!url) {
+            toast.info('Lead importado: no tiene conversación original en Chatwoot');
+            return;
+        }
+        window.open(url, '_blank');
     };
 
     const handleOpenHistory = async (lead: MinifiedConversation) => {
@@ -145,6 +150,7 @@ const ChatwootPage = () => {
             let history: any[] = [];
             const isLivePreferred = lead.source !== 'supabase';
             const fetchApiMessages = async () => {
+                if (!getChatwootUrl(lead.id)) return [];
                 try {
                     return await chatwootService.getMessages(lead.id);
                 } catch (apiError) {
@@ -240,7 +246,7 @@ const ChatwootPage = () => {
                                     className={windowedConversations.hasVerticalScroll ? 'overflow-auto overscroll-contain' : 'overflow-x-auto'}
                                     style={windowedConversations.hasVerticalScroll ? { maxHeight: `${WINDOWED_TABLE_MAX_HEIGHT_PX}px` } : undefined}
                                 >
-                                    <table className="w-full min-w-[1180px] text-sm text-left border-collapse">
+                                    <table className="w-full min-w-[1480px] text-sm text-left border-collapse">
                                         <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur supports-[backdrop-filter]:bg-muted/80">
                                             <tr className="text-muted-foreground uppercase text-[10px] tracking-wider font-bold border-b">
                                                 <th className="px-6 py-4">Nombre del lead</th>
@@ -249,12 +255,14 @@ const ChatwootPage = () => {
                                                 <th className="px-6 py-4">Estado</th>
                                                 <th className="px-6 py-4">Historial de mensajes</th>
                                                 <th className="px-6 py-4">URL</th>
+                                                <th className="px-6 py-4">Fecha de ingreso</th>
+                                                <th className="px-6 py-4">Última interacción</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-border">
                                             {windowedConversations.visibleItems.length === 0 ? (
                                                 <tr>
-                                                    <td colSpan={6} className="px-6 py-24 text-center">
+                                                    <td colSpan={8} className="px-6 py-24 text-center">
                                                         <div className="flex flex-col items-center gap-2 opacity-40">
                                                             <Search className="h-10 w-10" />
                                                             <p className="text-sm font-medium">No se encontraron resultados</p>
@@ -270,6 +278,8 @@ const ChatwootPage = () => {
                                                     const lastMessage = getMessagePreview(lead);
                                                     const lastMessageDate = formatDateTime(getMessageTimestamp(lead));
                                                     const externalUrl = getLeadExternalUrl(lead, channelDisplay);
+                                                    const createdDate = formatDateTime(lead.created_at || lead.timestamp);
+                                                    const lastInteractionDate = formatDateTime(lead.timestamp || lead.created_at);
 
                                                     return (
                                                         <tr key={lead.id} className="hover:bg-muted/20 transition-colors">
@@ -340,6 +350,8 @@ const ChatwootPage = () => {
                                                                     <span className="text-xs text-muted-foreground">Sin URL</span>
                                                                 )}
                                                             </td>
+                                                            <td className="px-6 py-4 text-xs text-muted-foreground">{createdDate}</td>
+                                                            <td className="px-6 py-4 text-xs text-muted-foreground">{lastInteractionDate}</td>
                                                         </tr>
                                                     );
                                                 })
@@ -407,9 +419,10 @@ const ChatwootPage = () => {
                         <Button
                             className="gap-2"
                             onClick={() => viewingConv && openInChatwoot(viewingConv.id)}
+                            disabled={Boolean(viewingConv) && !getChatwootUrl(viewingConv.id)}
                         >
                             <ExternalLink className="h-4 w-4" />
-                            Abrir conversación
+                            {viewingConv && !getChatwootUrl(viewingConv.id) ? 'Lead importado' : 'Abrir conversación'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

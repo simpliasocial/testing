@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 
-export type LabelEventSource = 'dashboard' | 'webhook' | 'sync_diff' | 'repair';
+export type LabelEventSource = 'dashboard' | 'webhook' | 'sync_diff' | 'repair' | 'manual_import';
 
 export interface ConversationLabelEvent {
     id?: number;

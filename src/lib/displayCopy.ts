@@ -18,7 +18,7 @@ const BUSINESS_LABELS: Record<string, string> = {
     venta_exitosa: "Venta exitosa",
     venta: "Venta",
     cita_agendada: "Cita agendada",
-    cita_agendada_humano: "Cita agendada",
+    cita_agendada_humano: "Cita agendada humano",
     cita: "Cita",
     seguimiento_humano: "Seguimiento humano",
     interesado: "Interesado",

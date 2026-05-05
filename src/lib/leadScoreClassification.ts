@@ -1,9 +1,9 @@
-export type ScoreBucket = "hot" | "warm" | "cold" | "low";
+export type ScoreBucket = "hot" | "warm" | "cold";
 
 export interface ScoreThresholds {
     hotMin: number;
     warmMin: number;
-    coldMin: number;
+    coldMin?: number;
     highMin?: number;
     mediumMin?: number;
 }
@@ -11,10 +11,9 @@ export interface ScoreThresholds {
 export const DEFAULT_SCORE_THRESHOLDS: ScoreThresholds = {
     hotMin: 70,
     warmMin: 45,
-    coldMin: 20,
 };
 
-export const SCORE_BUCKET_ORDER: ScoreBucket[] = ["hot", "warm", "cold", "low"];
+export const SCORE_BUCKET_ORDER: ScoreBucket[] = ["hot", "warm", "cold"];
 
 export const SCORE_BUCKET_COPY: Record<ScoreBucket, {
     label: string;
@@ -36,15 +35,9 @@ export const SCORE_BUCKET_COPY: Record<ScoreBucket, {
     },
     cold: {
         label: "Frío",
-        description: "Señal inicial sin intención comercial clara todavía.",
+        description: "Señal inicial, puntaje menor o sin puntaje todavía.",
         color: "#2563eb",
         bg: "bg-blue-50 text-blue-700 border-blue-200",
-    },
-    low: {
-        label: "Bajo",
-        description: "Poca señal comercial, señales negativas o sin puntaje.",
-        color: "#64748b",
-        bg: "bg-slate-50 text-slate-700 border-slate-200",
     },
 };
 
@@ -65,32 +58,28 @@ export const parseNumericScore = (value: unknown): number | null => {
 export const normalizeScoreThresholds = (thresholds?: Partial<ScoreThresholds> | null): ScoreThresholds => {
     const parsedHot = Number(thresholds?.hotMin);
     const parsedWarm = Number(thresholds?.warmMin);
-    const parsedCold = Number(thresholds?.coldMin);
 
     const hotMin = Number.isFinite(parsedHot) ? parsedHot : DEFAULT_SCORE_THRESHOLDS.hotMin;
     const warmMin = Number.isFinite(parsedWarm) ? parsedWarm : DEFAULT_SCORE_THRESHOLDS.warmMin;
-    const coldMin = Number.isFinite(parsedCold) ? parsedCold : DEFAULT_SCORE_THRESHOLDS.coldMin;
 
-    if (hotMin <= warmMin || warmMin <= coldMin) {
+    if (hotMin <= warmMin) {
         return { ...DEFAULT_SCORE_THRESHOLDS };
     }
 
-    return { hotMin, warmMin, coldMin };
+    return { hotMin, warmMin };
 };
 
 export const bucketFromScore = (score: number | null, thresholds: ScoreThresholds): ScoreBucket => {
-    if (score === null) return "low";
+    if (score === null) return "cold";
     if (score >= thresholds.hotMin) return "hot";
     if (score >= thresholds.warmMin) return "warm";
-    if (score >= thresholds.coldMin) return "cold";
-    return "low";
+    return "cold";
 };
 
 export const getBucketRangeLabel = (bucket: ScoreBucket, thresholds: ScoreThresholds) => {
     if (bucket === "hot") return `Desde ${formatThresholdValue(thresholds.hotMin)}`;
     if (bucket === "warm") return `Desde ${formatThresholdValue(thresholds.warmMin)} y antes de ${formatThresholdValue(thresholds.hotMin)}`;
-    if (bucket === "cold") return `Desde ${formatThresholdValue(thresholds.coldMin)} y antes de ${formatThresholdValue(thresholds.warmMin)}`;
-    return `Menor a ${formatThresholdValue(thresholds.coldMin)} o sin puntaje`;
+    return `Menor a ${formatThresholdValue(thresholds.warmMin)} o sin puntaje`;
 };
 
 export const formatThresholdValue = (value: number) => Number.isInteger(value) ? String(value) : value.toString();

@@ -7,6 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAuth } from "@/context/AuthContext";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
     Command,
     CommandEmpty,
@@ -33,18 +35,24 @@ import {
 } from "@/context/DashboardDataContext";
 import {
     formatDateTime,
+    getConversationMessageRole,
     getAttrs,
     getChatwootUrl,
+    getDisplayMessages,
     getInitials,
+    getLastMessage,
     getLeadChannelName,
     getLeadExternalUrl,
     getLeadName,
     getLeadPhone,
+    getMessageText,
     getMessagePreview,
     getMessageTimestamp,
     getRawLeadPhone,
     normalize,
 } from "@/lib/leadDisplay";
+import { chatwootService } from "@/services/ChatwootService";
+import { SupabaseService } from "@/services/SupabaseService";
 import { formatBusinessLabel, formatFieldLabel } from "@/lib/displayCopy";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { cn } from "@/lib/utils";
@@ -85,6 +93,7 @@ import {
     ExternalLink,
     Gauge,
     Loader2,
+    MessageSquare,
     Search,
     Settings2,
     Target,
@@ -188,7 +197,9 @@ const LeadScoringLayer = () => {
     const [appointmentLabelsDraft, setAppointmentLabelsDraft] = useState<string[]>([]);
     const [thresholdHotDraft, setThresholdHotDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.hotMin));
     const [thresholdWarmDraft, setThresholdWarmDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.warmMin));
-    const [thresholdColdDraft, setThresholdColdDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.coldMin));
+    const [viewingLead, setViewingLead] = useState<any | null>(null);
+    const [historyMessages, setHistoryMessages] = useState<any[]>([]);
+    const [loadingHistory, setLoadingHistory] = useState(false);
 
     const inboxMap = useMemo(
         () => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])),
@@ -251,7 +262,6 @@ const LeadScoringLayer = () => {
             setAppointmentLabelsDraft(effectiveAppointmentLabels);
             setThresholdHotDraft(String(effectiveScoreThresholds.hotMin));
             setThresholdWarmDraft(String(effectiveScoreThresholds.warmMin));
-            setThresholdColdDraft(String(effectiveScoreThresholds.coldMin));
         }
     }, [effectiveScoreAttributeKey, effectiveAppointmentLabels, effectiveScoreThresholds, settingsDirty]);
 
@@ -264,26 +274,24 @@ const LeadScoringLayer = () => {
         () => normalizeThresholds({
             hotMin: Number(settingsDirty ? thresholdHotDraft : effectiveScoreThresholds.hotMin),
             warmMin: Number(settingsDirty ? thresholdWarmDraft : effectiveScoreThresholds.warmMin),
-            coldMin: Number(settingsDirty ? thresholdColdDraft : effectiveScoreThresholds.coldMin)
         }),
-        [settingsDirty, thresholdHotDraft, thresholdWarmDraft, thresholdColdDraft, effectiveScoreThresholds]
+        [settingsDirty, thresholdHotDraft, thresholdWarmDraft, effectiveScoreThresholds]
     );
 
     const thresholdValidationError = useMemo(() => {
         const parsedHot = Number(thresholdHotDraft);
         const parsedWarm = Number(thresholdWarmDraft);
-        const parsedCold = Number(thresholdColdDraft);
 
-        if (!Number.isFinite(parsedHot) || !Number.isFinite(parsedWarm) || !Number.isFinite(parsedCold)) {
-            return "Ingresa valores numéricos válidos para Caliente, Tibio y Frío.";
+        if (!Number.isFinite(parsedHot) || !Number.isFinite(parsedWarm)) {
+            return "Ingresa valores numéricos válidos para Caliente y Tibio.";
         }
 
-        if (parsedHot <= parsedWarm || parsedWarm <= parsedCold) {
-            return "Los rangos deben quedar en orden: Caliente mayor que Tibio, y Tibio mayor que Frío.";
+        if (parsedHot <= parsedWarm) {
+            return "Los rangos deben quedar en orden: Caliente mayor que Tibio.";
         }
 
         return null;
-    }, [thresholdHotDraft, thresholdWarmDraft, thresholdColdDraft]);
+    }, [thresholdHotDraft, thresholdWarmDraft]);
 
     const selectedScoreAttribute = useMemo(
         () => scoreAttributeOptions.find(option => option.key === activeScoreAttributeKey) || null,
@@ -309,7 +317,6 @@ const LeadScoringLayer = () => {
                 scoreThresholds: {
                     hotMin: Number(thresholdHotDraft),
                     warmMin: Number(thresholdWarmDraft),
-                    coldMin: Number(thresholdColdDraft)
                 }
             });
             setSettingsDirty(false);
@@ -329,7 +336,63 @@ const LeadScoringLayer = () => {
         setAppointmentLabelsDraft(defaultAppointmentLabels);
         setThresholdHotDraft(String(DEFAULT_SCORE_THRESHOLDS.hotMin));
         setThresholdWarmDraft(String(DEFAULT_SCORE_THRESHOLDS.warmMin));
-        setThresholdColdDraft(String(DEFAULT_SCORE_THRESHOLDS.coldMin));
+    };
+
+    const handleOpenHistory = async (lead: any) => {
+        setViewingLead(lead);
+        setHistoryMessages([]);
+        setLoadingHistory(true);
+
+        try {
+            let history: any[] = [];
+            const isLivePreferred = lead.source !== "supabase";
+
+            const fetchApiMessages = async () => {
+                try {
+                    return await chatwootService.getMessages(lead.id);
+                } catch (apiError) {
+                    console.warn("[LeadScoringLayer] Chatwoot history failed:", apiError);
+                    return [];
+                }
+            };
+
+            const fetchSupabaseMessages = async () => {
+                try {
+                    return await SupabaseService.getHistoricalMessages(lead.id);
+                } catch (dbError) {
+                    console.warn("[LeadScoringLayer] Supabase history failed:", dbError);
+                    return [];
+                }
+            };
+
+            if (isLivePreferred) {
+                history = await fetchApiMessages();
+                if (!history || history.length === 0) {
+                    history = await fetchSupabaseMessages();
+                }
+            } else {
+                history = await fetchSupabaseMessages();
+                if (!history || history.length === 0) {
+                    history = await fetchApiMessages();
+                }
+            }
+
+            if ((!history || history.length === 0) && getLastMessage(lead)) {
+                history = [getLastMessage(lead)];
+            }
+
+            setHistoryMessages(getDisplayMessages(history || []));
+        } catch (historyError) {
+            console.error("[LeadScoringLayer] History error:", historyError);
+            toast.error("No se pudo cargar el historial");
+        } finally {
+            setLoadingHistory(false);
+        }
+    };
+
+    const openViewingLeadInChatwoot = () => {
+        if (!viewingLead) return;
+        window.open(getChatwootUrl(viewingLead.id), "_blank");
     };
 
     const toggleAppointmentLabel = (label: string) => {
@@ -443,7 +506,7 @@ const LeadScoringLayer = () => {
     }));
 
     const hotLeads = filteredLeads.filter(item => item.bucket === "hot");
-    const lowLeads = filteredLeads.filter(item => item.bucket === "low");
+    const coldLeads = filteredLeads.filter(item => item.bucket === "cold");
     const hotAppointments = hotLeads.filter(item => isAppointmentLead(item.lead)).length;
 
     const averageByChannel = Array.from(
@@ -525,7 +588,7 @@ const LeadScoringLayer = () => {
         averageScore: scoreAverage(scoredFilteredLeads),
         hotPercentage: percent(hotLeads.length, filteredLeads.length),
         hotAppointmentConversion: percent(hotAppointments, hotLeads.length),
-        lowPercentage: percent(lowLeads.length, filteredLeads.length)
+        coldPercentage: percent(coldLeads.length, filteredLeads.length)
     };
 
     const detailRows = [...filteredLeads]
@@ -639,7 +702,7 @@ const LeadScoringLayer = () => {
                                             : "Sin campo numérico disponible"}
                                     </div>
                                     <div className="mt-2 text-xs text-muted-foreground">
-                                        El tablero usa el valor final guardado en ese campo y lo clasifica con los rangos de abajo.
+                                        El tablero usa el valor final guardado en ese campo y lo clasifica con los rangos configurados.
                                     </div>
                                 </div>
 
@@ -729,7 +792,7 @@ const LeadScoringLayer = () => {
                                         <div className="rounded-lg border bg-muted/10 p-4">
                                             <div className="mb-3 flex items-center justify-between gap-3">
                                                 <div>
-                                                    <div className="text-sm font-semibold">Rangos para Caliente, Tibio, Frío y Bajo</div>
+                                                    <div className="text-sm font-semibold">Rangos para Caliente, Tibio y Frío</div>
                                                     <p className="text-xs text-muted-foreground">
                                                         El tablero clasificará el puntaje según estos cortes.
                                                     </p>
@@ -743,7 +806,7 @@ const LeadScoringLayer = () => {
                                                 </div>
                                             </div>
 
-                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                                 <div className="space-y-2">
                                                     <label className="text-sm font-semibold">Desde Caliente</label>
                                                     <Input
@@ -768,19 +831,6 @@ const LeadScoringLayer = () => {
                                                             setThresholdWarmDraft(event.target.value);
                                                         }}
                                                         placeholder="45"
-                                                    />
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-sm font-semibold">Desde Frío</label>
-                                                    <Input
-                                                        type="number"
-                                                        inputMode="decimal"
-                                                        value={thresholdColdDraft}
-                                                        onChange={(event) => {
-                                                            setSettingsDirty(true);
-                                                            setThresholdColdDraft(event.target.value);
-                                                        }}
-                                                        placeholder="20"
                                                     />
                                                 </div>
                                             </div>
@@ -863,15 +913,15 @@ const LeadScoringLayer = () => {
                         />
                         <KPICard
                             icon={Activity}
-                            title="% leads bajos"
-                            value={`${kpis.lowPercentage}%`}
-                            subtitle={`${lowLeads.length} leads en nivel Bajo, incluidos los sin puntaje`}
-                            variant="destructive"
+                            title="% leads fríos"
+                            value={`${kpis.coldPercentage}%`}
+                            subtitle={`${coldLeads.length} leads en nivel Frío, incluidos los sin puntaje`}
+                            variant="default"
                         />
                     </div>
 
                     <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                        <ChartCard title="Distribución por nivel de puntaje" description="Reparte los leads entre Caliente, Tibio, Frío y Bajo. Los sin puntaje entran en Bajo.">
+                        <ChartCard title="Distribución por nivel de puntaje" description="Reparte los leads entre Caliente, Tibio y Frío. Los sin puntaje entran en Frío.">
                             {filteredLeads.length === 0 ? (
                                 <EmptyState text="No hay leads con estos filtros." />
                             ) : (
@@ -1073,10 +1123,9 @@ const LeadScoringLayer = () => {
                                                             </div>
                                                         </td>
                                                         <td className="px-4 py-3">
-                                                            <a
-                                                                href={getChatwootUrl(item.lead.id)}
-                                                                target="_blank"
-                                                                rel="noreferrer"
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleOpenHistory(item.lead)}
                                                                 className="flex max-w-[340px] flex-col text-left hover:text-primary"
                                                             >
                                                                 <span className="truncate text-xs font-medium text-foreground">{getMessagePreview(item.lead)}</span>
@@ -1084,8 +1133,8 @@ const LeadScoringLayer = () => {
                                                                     <Clock className="h-3 w-3" />
                                                                     {lastMessageDate}
                                                                 </span>
-                                                                <span className="mt-1 text-[10px] text-primary">Abrir conversación</span>
-                                                            </a>
+                                                                <span className="mt-1 text-[10px] text-primary">Ver historial</span>
+                                                            </button>
                                                         </td>
                                                         <td className="px-4 py-3">
                                                             {externalUrl ? (
@@ -1113,6 +1162,65 @@ const LeadScoringLayer = () => {
                         </CardContent>
                     </Card>
             </>
+            <Dialog open={!!viewingLead} onOpenChange={(open) => !open && setViewingLead(null)}>
+                <DialogContent className="max-w-2xl sm:max-w-3xl">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <MessageSquare className="h-5 w-5 text-primary" />
+                            Historial de: {viewingLead ? getLeadName(viewingLead) : ""}
+                        </DialogTitle>
+                        <DialogDescription>
+                            Mensajes disponibles del lead. Puedes abrir la conversación original para revisar más contexto.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <ScrollArea className="mt-4 h-[500px] pr-4">
+                        {loadingHistory ? (
+                            <div className="flex h-full flex-col items-center justify-center">
+                                <Loader2 className="mb-2 h-8 w-8 animate-spin text-primary" />
+                                <p className="text-sm text-muted-foreground">Cargando mensajes...</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {historyMessages.length === 0 && (
+                                    <div className="py-16 text-center text-sm text-muted-foreground">
+                                        No hay mensajes disponibles para este lead.
+                                    </div>
+                                )}
+                                {historyMessages.map((message: any, index) => {
+                                    const role = getConversationMessageRole(message);
+                                    const isOutgoing = role === "outgoing";
+
+                                    return (
+                                        <div key={message.id || index} className={`flex ${isOutgoing ? "justify-end" : "justify-start"}`}>
+                                            <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${isOutgoing
+                                                ? "rounded-tr-none bg-primary text-primary-foreground"
+                                                : "rounded-tl-none bg-muted text-foreground"
+                                                }`}>
+                                                <div className="mb-1 text-[10px] font-bold uppercase opacity-70">
+                                                    {isOutgoing ? "Agente / Bot" : "Cliente"}
+                                                </div>
+                                                <p className="whitespace-pre-wrap">{getMessageText(message)}</p>
+                                                <div className="mt-1 text-right text-[9px] opacity-60">
+                                                    {formatDateTime(message.created_at || message.created_at_chatwoot)}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </ScrollArea>
+
+                    <DialogFooter className="mt-4 border-t pt-4">
+                        <Button variant="outline" onClick={() => setViewingLead(null)}>Cerrar</Button>
+                        <Button className="gap-2" onClick={openViewingLeadInChatwoot}>
+                            <ExternalLink className="h-4 w-4" />
+                            Abrir conversación
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 };

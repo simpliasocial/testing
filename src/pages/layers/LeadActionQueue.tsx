@@ -130,9 +130,53 @@ type HumanFlowConfigState = {
     humanSalesQueueTags: string[];
     humanSaleTargetLabel: string;
     humanAppointmentFieldKeys: string[];
+    humanSaleFieldKeys: string[];
 };
 
 type WorkflowModalStep = "closed" | "edit" | "confirm" | "saving";
+
+const LOCAL_ATTRIBUTE_DEFINITIONS: AttributeDefinition[] = [
+    {
+        key: "fecha_visita",
+        label: "Fecha de visita",
+        displayType: "date",
+        valueType: "date",
+        options: [],
+        description: "fecha de agendar cita lead"
+    },
+    {
+        key: "hora_visita",
+        label: "Hora de visita",
+        displayType: "text",
+        valueType: "text",
+        options: [],
+        description: "hora de visita del lead"
+    },
+    {
+        key: "responsable",
+        label: "Responsable",
+        displayType: "text",
+        valueType: "text",
+        options: [],
+        description: "nombre de la persona responsable cuando hace el uso manual"
+    },
+    {
+        key: "monto_operacion",
+        label: "Monto de la operación",
+        displayType: "number",
+        valueType: "number",
+        options: [],
+        description: "valor a ingresar manualmente de cantidad $"
+    },
+    {
+        key: "fecha_monto_operacion",
+        label: "Fecha en que se registró el monto",
+        displayType: "date",
+        valueType: "date",
+        options: [],
+        description: "fecha de cuando se puso el monto de operacion"
+    }
+];
 
 const normalizeList = (values: string[] = []) =>
     Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
@@ -146,7 +190,8 @@ const getHumanFlowConfig = (config: TagConfig): HumanFlowConfigState => ({
     humanSaleTargetLabel: String(
         config.humanSaleTargetLabel || DEFAULT_TAG_CONFIG.humanSaleTargetLabel || ""
     ).trim(),
-    humanAppointmentFieldKeys: normalizeList(config.humanAppointmentFieldKeys || DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || [])
+    humanAppointmentFieldKeys: normalizeList(config.humanAppointmentFieldKeys || DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || []),
+    humanSaleFieldKeys: normalizeList(config.humanSaleFieldKeys || DEFAULT_TAG_CONFIG.humanSaleFieldKeys || [])
 });
 
 const arraysEqual = (left: string[], right: string[]) =>
@@ -157,7 +202,8 @@ const humanFlowConfigChanged = (left: HumanFlowConfigState, right: HumanFlowConf
     left.humanAppointmentTargetLabel !== right.humanAppointmentTargetLabel ||
     !arraysEqual(left.humanSalesQueueTags, right.humanSalesQueueTags) ||
     left.humanSaleTargetLabel !== right.humanSaleTargetLabel ||
-    !arraysEqual(left.humanAppointmentFieldKeys, right.humanAppointmentFieldKeys);
+    !arraysEqual(left.humanAppointmentFieldKeys, right.humanAppointmentFieldKeys) ||
+    !arraysEqual(left.humanSaleFieldKeys, right.humanSaleFieldKeys);
 
 const normalizeAttributeOptions = (value: unknown): string[] => {
     if (Array.isArray(value)) {
@@ -406,6 +452,8 @@ const getFieldTypeLabel = (definition: AttributeDefinition) => {
 const getAppointmentFieldExample = (definition: AttributeDefinition) => {
     if (isVisitDateField(definition)) return "Ejemplo: 2026-04-23 (YYYY-MM-DD)";
     if (isVisitTimeField(definition)) return "Ejemplo: 21:00 (HH:mm)";
+    if (definition.key === "monto_operacion") return "Ejemplo: 15000";
+    if (definition.key === "fecha_monto_operacion") return "Formato: YYYY-MM-DD";
     if (definition.valueType === "date") return "Formato: YYYY-MM-DD";
     return "";
 };
@@ -544,8 +592,7 @@ const LeadActionQueue = () => {
     const [scheduledSearch, setScheduledSearch] = useState("");
 
     const [operationLead, setOperationLead] = useState<QueueLead | null>(null);
-    const [operationAmount, setOperationAmount] = useState("");
-    const [operationDate, setOperationDate] = useState(getGuayaquilDateString());
+    const [operationValues, setOperationValues] = useState<Record<string, AppointmentFormValue>>({});
     const [operationModalStep, setOperationModalStep] = useState<WorkflowModalStep>("closed");
     const [isSavingOperation, setIsSavingOperation] = useState(false);
 
@@ -631,7 +678,7 @@ const LeadActionQueue = () => {
     );
 
     const attributeDefinitions = useMemo(
-        () => mergeAttributeDefinitions(loadedAttributeDefinitions, inferredAttributeDefinitions),
+        () => mergeAttributeDefinitions(LOCAL_ATTRIBUTE_DEFINITIONS, loadedAttributeDefinitions, inferredAttributeDefinitions),
         [loadedAttributeDefinitions, inferredAttributeDefinitions]
     );
 
@@ -654,6 +701,22 @@ const LeadActionQueue = () => {
                 };
             }),
         [attributeDefinitionMap, savedHumanConfig.humanAppointmentFieldKeys]
+    );
+
+    const configuredSaleFields = useMemo(
+        () =>
+            savedHumanConfig.humanSaleFieldKeys.map((key) => {
+                const definition = attributeDefinitionMap.get(key);
+                if (definition) return definition;
+                return {
+                    key,
+                    label: key.replace(/_/g, " "),
+                    displayType: "text",
+                    valueType: "text" as const,
+                    options: [] as string[]
+                };
+            }),
+        [attributeDefinitionMap, savedHumanConfig.humanSaleFieldKeys]
     );
 
     const hasHumanConfigChanges = useMemo(
@@ -720,7 +783,7 @@ const LeadActionQueue = () => {
         setGlobalFilters((prev) => ({ ...prev, selectedInboxes }));
     };
 
-    const updateHumanConfigList = (key: keyof Pick<HumanFlowConfigState, "humanFollowupQueueTags" | "humanSalesQueueTags" | "humanAppointmentFieldKeys">, value: string) => {
+    const updateHumanConfigList = (key: keyof Pick<HumanFlowConfigState, "humanFollowupQueueTags" | "humanSalesQueueTags" | "humanAppointmentFieldKeys" | "humanSaleFieldKeys">, value: string) => {
         setHumanConfig((prev) => ({
             ...prev,
             [key]: prev[key].includes(value)
@@ -883,8 +946,7 @@ const LeadActionQueue = () => {
         if (isSavingOperation && !force) return;
         setOperationModalStep("closed");
         setOperationLead(null);
-        setOperationAmount("");
-        setOperationDate(getGuayaquilDateString());
+        setOperationValues({});
     };
 
     const openAppointmentDialog = (lead: QueueLead) => {
@@ -967,23 +1029,48 @@ const LeadActionQueue = () => {
     };
 
     const openOperationDialog = (lead: QueueLead) => {
+        if (configuredSaleFields.length === 0) {
+            toast.error("Configura primero los campos de venta exitosa en la seccion de flujo humano");
+            return;
+        }
+
         const attrs = getAttrs(lead);
+        const nextValues = configuredSaleFields.reduce<Record<string, AppointmentFormValue>>((acc, field) => {
+            const rawValue =
+                field.key === "fecha_monto_operacion"
+                    ? getLeadOperationDate(lead) || attrs[field.key] || getGuayaquilDateString()
+                    : attrs[field.key];
+            acc[field.key] = getAppointmentFieldInitialValue(field, rawValue);
+            return acc;
+        }, {});
+
         setOperationLead(lead);
-        setOperationAmount(attrs.monto_operacion ? String(attrs.monto_operacion) : "");
-        setOperationDate(getLeadOperationDate(lead) || getGuayaquilDateString());
+        setOperationValues(nextValues);
         setOperationModalStep("edit");
+    };
+
+    const handleOperationValueChange = (key: string, value: AppointmentFormValue) => {
+        setOperationValues((prev) => ({
+            ...prev,
+            [key]: value
+        }));
     };
 
     const handleOperationFormConfirm = () => {
         if (!operationLead) return;
-        if (!operationAmount.trim()) {
-            toast.error("Ingresa el monto de la operacion");
+
+        const invalidField = configuredSaleFields
+            .map((field) => ({
+                field,
+                error: validateAppointmentFieldValue(field, operationValues[field.key])
+            }))
+            .find((result) => result.error);
+
+        if (invalidField?.error) {
+            toast.error(invalidField.error);
             return;
         }
-        if (!operationDate) {
-            toast.error("Ingresa la fecha del monto de operacion");
-            return;
-        }
+
         setOperationModalStep("confirm");
     };
 
@@ -993,21 +1080,21 @@ const LeadActionQueue = () => {
         setIsSavingOperation(true);
         setOperationModalStep("saving");
         try {
+            const salePayload = Object.fromEntries(
+                configuredSaleFields.map((field) => [
+                    field.key,
+                    serializeAppointmentFieldValue(field, operationValues[field.key])
+                ])
+            );
+
             await applyLeadWorkflowUpdate({
                 lead: operationLead,
                 nextLabels: [humanSaleTargetLabel],
-                contactAttributePatch: {
-                    monto_operacion: operationAmount.trim(),
-                    fecha_monto_operacion: operationDate
-                },
-                conversationAttributePatch: {
-                    monto_operacion: operationAmount.trim(),
-                    fecha_monto_operacion: operationDate
-                },
+                contactAttributePatch: salePayload,
+                conversationAttributePatch: salePayload,
                 rawPayload: {
                     action: "confirm_operation",
-                    monto_operacion: operationAmount.trim(),
-                    fecha_monto_operacion: operationDate,
+                    fields: salePayload,
                     target_label: humanSaleTargetLabel
                 },
                 successMessage: "Venta guardada correctamente"
@@ -1173,13 +1260,19 @@ const LeadActionQueue = () => {
         }
     };
 
-    const renderAppointmentField = (field: AttributeDefinition) => {
-        const value = appointmentValues[field.key] ?? (field.valueType === "boolean" ? false : "");
+    const renderWorkflowField = (
+        field: AttributeDefinition,
+        values: Record<string, AppointmentFormValue>,
+        onValueChange: (key: string, value: AppointmentFormValue) => void,
+        fieldIdPrefix: string
+    ) => {
+        const value = values[field.key] ?? (field.valueType === "boolean" ? false : "");
         const exampleText = getAppointmentFieldExample(field);
+        const fieldId = `${fieldIdPrefix}-field-${field.key}`;
         const commonLabel = (
             <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm font-medium" htmlFor={`appointment-field-${field.key}`}>
+                    <label className="text-sm font-medium" htmlFor={fieldId}>
                         {field.label}
                     </label>
                     <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
@@ -1205,9 +1298,9 @@ const LeadActionQueue = () => {
                     {commonLabel}
                     <Select
                         value={String(value || "")}
-                        onValueChange={(nextValue) => handleAppointmentValueChange(field.key, nextValue)}
+                        onValueChange={(nextValue) => onValueChange(field.key, nextValue)}
                     >
-                        <SelectTrigger id={`appointment-field-${field.key}`}>
+                        <SelectTrigger id={fieldId}>
                             <SelectValue placeholder={`Selecciona ${field.label.toLowerCase()}`} />
                         </SelectTrigger>
                         <SelectContent>
@@ -1229,11 +1322,11 @@ const LeadActionQueue = () => {
                     <div className="relative">
                         <CalendarDays className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                         <Input
-                            id={`appointment-field-${field.key}`}
+                            id={fieldId}
                             type="date"
                             className="pl-9"
                             value={String(value || "")}
-                            onChange={(event) => handleAppointmentValueChange(field.key, event.target.value)}
+                            onChange={(event) => onValueChange(field.key, event.target.value)}
                         />
                     </div>
                 </div>
@@ -1246,11 +1339,11 @@ const LeadActionQueue = () => {
                     {commonLabel}
                     <div className="flex items-center space-x-2">
                         <Checkbox
-                            id={`appointment-field-${field.key}`}
+                            id={fieldId}
                             checked={Boolean(value)}
-                            onCheckedChange={(checked) => handleAppointmentValueChange(field.key, checked === true)}
+                            onCheckedChange={(checked) => onValueChange(field.key, checked === true)}
                         />
-                        <Label htmlFor={`appointment-field-${field.key}`} className="text-sm">
+                        <Label htmlFor={fieldId} className="text-sm">
                             Activado
                         </Label>
                     </div>
@@ -1263,9 +1356,9 @@ const LeadActionQueue = () => {
                 <div key={field.key} className="space-y-2">
                     {commonLabel}
                     <Textarea
-                        id={`appointment-field-${field.key}`}
+                        id={fieldId}
                         value={String(value)}
-                        onChange={(event) => handleAppointmentValueChange(field.key, event.target.value)}
+                        onChange={(event) => onValueChange(field.key, event.target.value)}
                         placeholder={exampleText || `Ingresa ${field.label.toLowerCase()}`}
                     />
                 </div>
@@ -1276,16 +1369,22 @@ const LeadActionQueue = () => {
             <div key={field.key} className="space-y-2">
                 {commonLabel}
                 <Input
-                    id={`appointment-field-${field.key}`}
+                    id={fieldId}
                     type={field.valueType === "number" ? "number" : "text"}
                     step={field.valueType === "number" ? "any" : undefined}
                     value={String(value || "")}
-                    onChange={(event) => handleAppointmentValueChange(field.key, event.target.value)}
+                    onChange={(event) => onValueChange(field.key, event.target.value)}
                     placeholder={exampleText || `Ingresa ${field.label.toLowerCase()}`}
                 />
             </div>
         );
     };
+
+    const renderAppointmentField = (field: AttributeDefinition) =>
+        renderWorkflowField(field, appointmentValues, handleAppointmentValueChange, "appointment");
+
+    const renderSaleField = (field: AttributeDefinition) =>
+        renderWorkflowField(field, operationValues, handleOperationValueChange, "sale");
 
     const renderQueueTable = ({
         title,
@@ -1362,7 +1461,7 @@ const LeadActionQueue = () => {
                             className={windowedLeads.hasVerticalScroll ? "overflow-auto overscroll-contain" : "overflow-x-auto"}
                             style={windowedLeads.hasVerticalScroll ? { maxHeight: `${WINDOWED_TABLE_MAX_HEIGHT_PX}px` } : undefined}
                         >
-                            <table className="w-full min-w-[1180px] text-sm text-left">
+                            <table className="w-full min-w-[1480px] text-sm text-left">
                                 <thead className="sticky top-0 z-10 border-b bg-muted/95 text-[10px] text-muted-foreground uppercase font-bold tracking-wider backdrop-blur supports-[backdrop-filter]:bg-muted/80">
                                     <tr>
                                         <th className="px-6 py-4">Nombre del lead</th>
@@ -1372,6 +1471,8 @@ const LeadActionQueue = () => {
                                         <th className="px-6 py-4">URL</th>
                                         <th className="px-6 py-4">Cambiar estado</th>
                                         <th className="px-6 py-4 text-right">Acciones</th>
+                                        <th className="px-6 py-4">Fecha de ingreso</th>
+                                        <th className="px-6 py-4">Última interacción</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-muted/20">
@@ -1382,6 +1483,8 @@ const LeadActionQueue = () => {
                                         const lastMessage = getMessagePreview(lead);
                                         const lastMessageDate = formatDateTime(getMessageTimestamp(lead));
                                         const externalUrl = getLeadExternalUrl(lead, channelDisplay);
+                                        const createdDate = formatDateTime(lead.created_at || lead.timestamp);
+                                        const lastInteractionDate = formatDateTime(lead.timestamp || lead.created_at);
                                         const ActionIcon = primaryActionIcon;
 
                                         return (
@@ -1472,12 +1575,14 @@ const LeadActionQueue = () => {
                                                         </a>
                                                     </div>
                                                 </td>
+                                                <td className="px-6 py-4 text-xs text-muted-foreground">{createdDate}</td>
+                                                <td className="px-6 py-4 text-xs text-muted-foreground">{lastInteractionDate}</td>
                                             </tr>
                                         );
                                     })}
                                     {windowedLeads.visibleItems.length === 0 && (
                                         <tr>
-                                            <td colSpan={7} className="px-6 py-20 text-center">
+                                            <td colSpan={9} className="px-6 py-20 text-center">
                                                 <div className="flex flex-col items-center gap-2 opacity-40">
                                                     <CheckCircle2 className="h-12 w-12 text-muted-foreground" />
                                                     <span className="text-sm italic font-medium">{getEmptyQueueMessage(title, configuredTags)}</span>
@@ -1549,13 +1654,14 @@ const LeadActionQueue = () => {
                                                 Configurar flujo humano
                                             </CardTitle>
                                             <CardDescription className="mt-2">
-                                                Define qué estados entran a cada cola y qué datos se pedirán al marcar una cita agendada.
+                                                Define qué estados entran a cada cola y qué datos se pedirán al marcar una cita agendada o una venta exitosa.
                                             </CardDescription>
                                         </div>
                                         <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                                             <Badge variant="outline">{humanConfig.humanFollowupQueueTags.length} estados en seguimiento</Badge>
                                             <Badge variant="outline">{humanConfig.humanSalesQueueTags.length} estados en citas agendadas</Badge>
                                             <Badge variant="outline">{humanConfig.humanAppointmentFieldKeys.length} campos para cita</Badge>
+                                            <Badge variant="outline">{humanConfig.humanSaleFieldKeys.length} campos para venta</Badge>
                                             <Badge variant="secondary" className="gap-1.5 px-3 py-1">
                                                 {isHumanConfigOpen ? (
                                                     <ChevronUp className="h-3.5 w-3.5" />
@@ -1637,6 +1743,18 @@ const LeadActionQueue = () => {
                                                 Venta destino:{" "}
                                                 <span className="font-medium text-foreground">
                                                     {humanConfig.humanSaleTargetLabel ? formatBusinessLabel(humanConfig.humanSaleTargetLabel) : "Sin configurar"}
+                                                </span>
+                                            </p>
+                                            <p>
+                                                Campos de cita:{" "}
+                                                <span className="font-medium text-foreground">
+                                                    {humanConfig.humanAppointmentFieldKeys.length ? humanConfig.humanAppointmentFieldKeys.map(formatFieldLabel).join(", ") : "Sin campos"}
+                                                </span>
+                                            </p>
+                                            <p>
+                                                Campos de venta:{" "}
+                                                <span className="font-medium text-foreground">
+                                                    {humanConfig.humanSaleFieldKeys.length ? humanConfig.humanSaleFieldKeys.map(formatFieldLabel).join(", ") : "Sin campos"}
                                                 </span>
                                             </p>
                                         </div>
@@ -1736,11 +1854,56 @@ const LeadActionQueue = () => {
                                             )}
                                         </AccordionContent>
                                     </AccordionItem>
+
+                                    <AccordionItem value="sale-fields">
+                                        <AccordionTrigger className="text-sm">
+                                            Campos que se pedirán al marcar Venta exitosa
+                                        </AccordionTrigger>
+                                        <AccordionContent>
+                                            {loadingAttributeDefinitions ? (
+                                                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    Cargando campos configurados...
+                                                </div>
+                                            ) : attributeDefinitions.length === 0 ? (
+                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                                    No hay campos configurados disponibles todavía.
+                                                </div>
+                                            ) : (
+                                                <ScrollArea className="h-[260px] rounded-lg border p-4">
+                                                    <div className="grid gap-3 sm:grid-cols-2">
+                                                        {attributeDefinitions.map((definition) => (
+                                                            <div key={`sale-field-${definition.key}`} className="flex items-start space-x-2">
+                                                                <Checkbox
+                                                                    id={`sale-field-${definition.key}`}
+                                                                    checked={humanConfig.humanSaleFieldKeys.includes(definition.key)}
+                                                                    onCheckedChange={() => updateHumanConfigList("humanSaleFieldKeys", definition.key)}
+                                                                />
+                                                                <Label htmlFor={`sale-field-${definition.key}`} className="text-sm font-medium leading-tight">
+                                                                    <span className="flex flex-wrap items-center gap-2">
+                                                                        <span>{definition.label}</span>
+                                                                        <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                                                                            {getFieldTypeLabel(definition)}
+                                                                        </Badge>
+                                                                    </span>
+                                                                    {definition.description && (
+                                                                        <span className="block text-[11px] text-muted-foreground">
+                                                                            {definition.description}
+                                                                        </span>
+                                                                    )}
+                                                                </Label>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </ScrollArea>
+                                            )}
+                                        </AccordionContent>
+                                    </AccordionItem>
                                 </Accordion>
 
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border bg-amber-50/60 px-4 py-3 text-sm text-amber-900">
                                     <p>
-                                        Si no dejas campos configurados para cita agendada, el boton de la cola mostrará un aviso para configurar primero el flujo.
+                                        Si no dejas campos configurados para cita agendada o venta exitosa, el boton de la cola mostrará un aviso para configurar primero el flujo.
                                     </p>
                                     <Button
                                         onClick={saveHumanConfig}
@@ -2028,7 +2191,7 @@ const LeadActionQueue = () => {
                             Confirmar operación
                         </DialogTitle>
                         <DialogDescription>
-                            Ingresa el monto y la fecha de la operación para marcar este lead como {formatBusinessLabel(humanSaleTargetLabel).toLowerCase()}.
+                            Completa los campos configurados para marcar este lead como {formatBusinessLabel(humanSaleTargetLabel).toLowerCase()}.
                         </DialogDescription>
                     </DialogHeader>
 
@@ -2041,40 +2204,30 @@ const LeadActionQueue = () => {
                         </div>
 
                         {operationModalStep === "edit" && (
-                            <>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium">Monto de la operación</label>
-                                    <Input
-                                        value={operationAmount}
-                                        onChange={(e) => setOperationAmount(e.target.value)}
-                                        placeholder="Ej: 15000"
-                                    />
+                            <ScrollArea className="max-h-[380px] pr-4">
+                                <div className="space-y-4">
+                                    {configuredSaleFields.map(renderSaleField)}
                                 </div>
-
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium">Fecha en que se registró el monto</label>
-                                    <div className="relative">
-                                        <CalendarDays className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                        <Input
-                                            className="pl-9"
-                                            type="date"
-                                            value={operationDate}
-                                            onChange={(e) => setOperationDate(e.target.value)}
-                                        />
-                                    </div>
-                                </div>
-                            </>
+                            </ScrollArea>
                         )}
 
                         {operationModalStep !== "edit" && (
                             <div className="space-y-4">
                                 <p className="text-sm text-muted-foreground">
-                                    Vas a confirmar la venta de <strong>{operationLead ? getLeadName(operationLead) : ""}</strong> por{" "}
-                                    <strong>{money(parseAmount(operationAmount))}</strong> con fecha <strong>{operationDate}</strong>.
+                                    Vas a confirmar la venta de <strong>{operationLead ? getLeadName(operationLead) : ""}</strong> y cambiar el estado a{" "}
+                                    <strong>{formatBusinessLabel(humanSaleTargetLabel)}</strong>.
                                 </p>
-                                <p className="text-sm text-muted-foreground">
-                                    Se guardarán el monto de la operación y la fecha en que se registró el monto. El lead quedará con el estado <strong>{formatBusinessLabel(humanSaleTargetLabel)}</strong>.
-                                </p>
+                                <div className="rounded-lg border bg-emerald-50 p-3 text-sm text-emerald-900">
+                                    <p className="font-semibold mb-2">Datos que se guardarán</p>
+                                    <div className="space-y-1">
+                                        {configuredSaleFields.map((field) => (
+                                            <div key={`confirm-sale-${field.key}`}>
+                                                <span className="font-medium">{field.label}:</span>{" "}
+                                                <span>{formatAppointmentFieldValue(field, operationValues[field.key])}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
                                 {operationModalStep === "saving" && (
                                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                         <Loader2 className="h-4 w-4 animate-spin" />

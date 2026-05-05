@@ -51,6 +51,7 @@ export interface TagConfig {
     humanSalesQueueTags?: string[];
     humanSaleTargetLabel?: string;
     humanAppointmentFieldKeys?: string[];
+    humanSaleFieldKeys?: string[];
     scoreAttributeKey?: string;
     scoreAppointmentLabels?: string[];
     scoreThresholds?: ScoreThresholds;
@@ -97,6 +98,7 @@ export const DEFAULT_TAG_CONFIG: TagConfig = {
     humanAppointmentTargetLabel: 'cita_agendada_humano',
     humanSalesQueueTags: ['cita_agendada', 'cita_agendada_humano'],
     humanSaleTargetLabel: 'venta_exitosa',
+    humanSaleFieldKeys: ['monto_operacion', 'fecha_monto_operacion'],
     scoreAttributeKey: '',
     scoreAppointmentLabels: ['cita_agendada', 'cita', 'cita_agendada_humano'],
     scoreThresholds: { ...DEFAULT_SCORE_THRESHOLDS },
@@ -170,6 +172,7 @@ export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig
     humanSalesQueueTags: normalizeTagArray(value?.humanSalesQueueTags, DEFAULT_TAG_CONFIG.humanSalesQueueTags || []),
     humanSaleTargetLabel: String(value?.humanSaleTargetLabel || DEFAULT_TAG_CONFIG.humanSaleTargetLabel || '').trim() || DEFAULT_TAG_CONFIG.humanSaleTargetLabel,
     humanAppointmentFieldKeys: normalizeTagArray(value?.humanAppointmentFieldKeys, DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || []),
+    humanSaleFieldKeys: normalizeTagArray(value?.humanSaleFieldKeys, DEFAULT_TAG_CONFIG.humanSaleFieldKeys || []),
     scoreAttributeKey: String(value?.scoreAttributeKey || DEFAULT_TAG_CONFIG.scoreAttributeKey || '').trim(),
     scoreAppointmentLabels: normalizeTagArray(value?.scoreAppointmentLabels, DEFAULT_TAG_CONFIG.scoreAppointmentLabels || []),
     scoreThresholds: normalizeScoreThresholds(value?.scoreThresholds),

@@ -17,6 +17,8 @@ export interface Appointment {
     date: string;
     time: string;
     status: string;
+    createdAt?: number | string;
+    lastInteractionAt?: number | string;
 }
 
 interface RecentAppointmentsProps {
@@ -25,6 +27,21 @@ interface RecentAppointmentsProps {
 
 export function RecentAppointments({ appointments = [] }: RecentAppointmentsProps) {
     const displayAppointments = appointments.length > 0 ? appointments : [];
+    const formatDateTime = (value?: number | string) => {
+        if (!value) return "Sin fecha";
+        const numeric = Number(value);
+        const date = !Number.isNaN(numeric)
+            ? new Date(numeric < 10000000000 ? numeric * 1000 : numeric)
+            : new Date(String(value));
+        if (Number.isNaN(date.getTime())) return "Sin fecha";
+        return date.toLocaleString("es-EC", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit"
+        });
+    };
 
     return (
         <div className="rounded-md border">
@@ -35,6 +52,8 @@ export function RecentAppointments({ appointments = [] }: RecentAppointmentsProp
                         <TableHead>Contacto</TableHead>
                         <TableHead>Agencia</TableHead>
                         <TableHead>Fecha y Hora</TableHead>
+                        <TableHead>Fecha de ingreso</TableHead>
+                        <TableHead>Última interacción</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -70,12 +89,18 @@ export function RecentAppointments({ appointments = [] }: RecentAppointmentsProp
                                     </div>
                                 </div>
                             </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                                {formatDateTime(appointment.createdAt)}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                                {formatDateTime(appointment.lastInteractionAt)}
+                            </TableCell>
 
                         </TableRow>
                     ))}
                     {displayAppointments.length === 0 && (
                         <TableRow>
-                            <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                            <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                                 No hay citas agendadas recientemente.
                             </TableCell>
                         </TableRow>
