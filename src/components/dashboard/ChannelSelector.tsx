@@ -15,7 +15,7 @@ import {
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover";
-import { useDashboardContext } from "@/context/DashboardDataContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
 import { getInboxChannelName } from "@/lib/leadDisplay";
 
 interface ChannelSelectorProps {

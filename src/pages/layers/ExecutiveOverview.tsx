@@ -2,7 +2,7 @@ import { Users, Target, Calendar as CalendarIcon, CheckSquare, TrendingUp, Perce
 import { useMemo } from "react";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { useDashboardContext } from "@/context/DashboardDataContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
 import { Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";

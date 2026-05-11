@@ -31,8 +31,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 // Types for TypeScript
 export type Database = {
   public: {
-    Tables: {
-      // Define your Supabase table types here
-    };
+    // Add generated table types here when the Supabase schema is formalized.
+    Tables: Record<string, never>;
   };
 };

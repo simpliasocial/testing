@@ -1,15 +1,16 @@
 import { cn } from "@/lib/utils";
 import { MessageCircle, Facebook, Instagram, HelpCircle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 interface ChannelData {
   name: string;
   count: number;
   percentage: number;
-  icon: any;
+  icon: LucideIcon | string;
   color: string;
 }
 
-const iconMap: Record<string, any> = {
+const iconMap: Record<string, LucideIcon> = {
   MessageCircle,
   Facebook,
   Instagram,

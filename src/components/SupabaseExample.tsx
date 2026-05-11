@@ -7,6 +7,14 @@ import { useSupabaseAuth } from '@/hooks/useSupabase';
 import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 
+const getErrorMessage = (error: unknown, fallback: string) => {
+    if (error instanceof Error) return error.message;
+    if (error && typeof error === 'object' && 'message' in error) {
+        return String((error as { message?: unknown }).message || fallback);
+    }
+    return fallback;
+};
+
 /**
  * Example component showing how to use Supabase.
  * This component demonstrates how to:
@@ -33,8 +41,8 @@ export function SupabaseExample() {
             if (error) throw error;
 
             toast.success('Acceso iniciado correctamente');
-        } catch (error: any) {
-            toast.error(error.message || 'Error signing in');
+        } catch (error: unknown) {
+            toast.error(getErrorMessage(error, 'Error signing in'));
         } finally {
             setIsLoading(false);
         }
@@ -52,8 +60,8 @@ export function SupabaseExample() {
             if (error) throw error;
 
             toast.success('Cuenta creada. Revisa tu correo para confirmar el acceso.');
-        } catch (error: any) {
-            toast.error(error.message || 'Error creating account');
+        } catch (error: unknown) {
+            toast.error(getErrorMessage(error, 'Error creating account'));
         } finally {
             setIsLoading(false);
         }
@@ -72,7 +80,7 @@ export function SupabaseExample() {
             } else {
                 toast.success('Conexión verificada correctamente');
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.info('Connection check completed:', error);
             toast.info('La conexión está lista');
         }

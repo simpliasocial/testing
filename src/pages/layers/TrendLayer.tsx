@@ -25,14 +25,33 @@ import {
     YAxis
 } from "recharts";
 
-import { useDashboardContext } from "@/context/DashboardDataContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
+import type { DashboardTrendMetrics, DashboardValuePoint } from "@/application/dashboard/viewModel";
 import { formatBusinessLabel, formatBusinessList } from "@/lib/displayCopy";
 
 const COLORS = ["#243d90", "#059669", "#d97706", "#7c3aed", "#db2777", "#475569", "#0891b2"];
 const WARM_COLORS = ["#ef4444", "#f97316", "#f43f5e", "#f59e0b", "#dc2626", "#ea580c"];
+type RevenuePeakDay = NonNullable<DashboardTrendMetrics["revenuePeakDays"]>[number];
 
 const formatCurrency = (value: number) =>
     new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(value || 0);
+
+const metricValue = (item: DashboardValuePoint | RevenuePeakDay) => Number(item.value || 0);
+
+const sumMetricValues = (items: Array<DashboardValuePoint | RevenuePeakDay> = []) =>
+    items.reduce((sum, item) => sum + metricValue(item), 0);
+
+const isRevenuePeakDay = (item: DashboardValuePoint | RevenuePeakDay): item is RevenuePeakDay =>
+    "date" in item;
+
+const pointKey = (item: DashboardValuePoint | RevenuePeakDay, index: number) =>
+    String(isRevenuePeakDay(item) ? item.date || index : item.name || item.key || item.label || index);
+
+const getTooltipSales = (item: unknown) => {
+    const payload = (item as { payload?: { sales?: unknown } })?.payload;
+    const sales = Number(payload?.sales || 0);
+    return Number.isFinite(sales) ? sales : 0;
+};
 
 const EmptyState = ({ text }: { text: string }) => (
     <div className="flex h-full min-h-[220px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
@@ -56,12 +75,12 @@ const TrendLayer = () => {
     }
 
     const { trendMetrics } = data;
-    const channelTotal = (trendMetrics.channelLeads || []).reduce((sum: number, item: any) => sum + (item.value || 0), 0);
-    const campaignTotal = (trendMetrics.campaignList || []).reduce((sum: number, item: any) => sum + (item.value || 0), 0);
-    const disqualificationTotal = (trendMetrics.disqualificationStats || []).reduce((sum: number, item: any) => sum + (item.value || 0), 0);
-    const revenueTotal = (trendMetrics.revenuePeaks || []).reduce((sum: number, item: any) => sum + (item.value || 0), 0);
+    const channelTotal = sumMetricValues(trendMetrics.channelLeads);
+    const campaignTotal = sumMetricValues(trendMetrics.campaignList);
+    const disqualificationTotal = sumMetricValues(trendMetrics.disqualificationStats);
+    const revenueTotal = sumMetricValues(trendMetrics.revenuePeaks);
     const unqualifiedLabels = tagSettings.unqualifiedTags?.length ? formatBusinessList(tagSettings.unqualifiedTags) : "No aplica";
-    const disqualificationChartData = (trendMetrics.disqualificationStats || []).map((item: any) => ({
+    const disqualificationChartData = trendMetrics.disqualificationStats.map((item) => ({
         ...item,
         name: formatBusinessLabel(item.name),
     }));
@@ -112,8 +131,8 @@ const TrendLayer = () => {
                                             formatter={(value: number) => [`${value} leads`, "Canal"]}
                                         />
                                         <Bar dataKey="value" radius={[0, 6, 6, 0]}>
-                                            {trendMetrics.channelLeads.map((entry: any, index: number) => (
-                                                <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
+                                            {trendMetrics.channelLeads.map((entry, index) => (
+                                                <Cell key={pointKey(entry, index)} fill={COLORS[index % COLORS.length]} />
                                             ))}
                                             <LabelList dataKey="value" position="right" style={{ fontWeight: 700 }} />
                                         </Bar>
@@ -157,10 +176,13 @@ const TrendLayer = () => {
                                             <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                                             <YAxis tickFormatter={(value) => `$${value}`} axisLine={false} tickLine={false} />
                                             <Tooltip
-                                                formatter={(value: number, name: string, item: any) => [
-                                                    formatCurrency(value),
-                                                    `${item?.payload?.sales || 0} venta${item?.payload?.sales === 1 ? "" : "s"}`
-                                                ]}
+                                                formatter={(value: number, _name: string, item: unknown) => {
+                                                    const sales = getTooltipSales(item);
+                                                    return [
+                                                        formatCurrency(value),
+                                                        `${sales} venta${sales === 1 ? "" : "s"}`
+                                                    ];
+                                                }}
                                             />
                                             <Area
                                                 type="monotone"
@@ -173,7 +195,7 @@ const TrendLayer = () => {
                                     </ResponsiveContainer>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    {((trendMetrics as any).revenuePeakDays || []).slice(0, 4).map((item: any) => (
+                                    {(trendMetrics.revenuePeakDays || []).slice(0, 4).map((item) => (
                                         <div key={item.date} className="rounded-lg border bg-muted/20 p-3">
                                             <p className="text-xs font-semibold">{item.date}</p>
                                             <p className="text-lg font-bold text-emerald-700">{formatCurrency(item.value)}</p>
@@ -227,8 +249,8 @@ const TrendLayer = () => {
                                                 outerRadius={82}
                                                 paddingAngle={4}
                                             >
-                                                {disqualificationChartData.map((entry: any, index: number) => (
-                                                    <Cell key={entry.name} fill={WARM_COLORS[index % WARM_COLORS.length]} />
+                                                {disqualificationChartData.map((entry, index) => (
+                                                    <Cell key={pointKey(entry, index)} fill={WARM_COLORS[index % WARM_COLORS.length]} />
                                                 ))}
                                             </Pie>
                                             <Tooltip formatter={(value: number) => [`${value} leads`, "Descalificacion"]} />
@@ -236,8 +258,8 @@ const TrendLayer = () => {
                                     </ResponsiveContainer>
                                 </div>
                                 <div className="flex flex-col justify-center gap-2">
-                                    {disqualificationChartData.slice(0, 6).map((item: any, index: number) => (
-                                        <div key={item.name} className="flex items-center justify-between rounded-lg border p-2 text-sm">
+                                    {disqualificationChartData.slice(0, 6).map((item, index) => (
+                                        <div key={pointKey(item, index)} className="flex items-center justify-between rounded-lg border p-2 text-sm">
                                             <div className="flex items-center gap-2 min-w-0">
                                                 <div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: WARM_COLORS[index % WARM_COLORS.length] }} />
                                                 <span className="truncate">{item.name}</span>
@@ -271,13 +293,14 @@ const TrendLayer = () => {
                             <EmptyState text="No hay valores de campana en este rango." />
                         ) : (
                             <div className="space-y-3">
-                                {trendMetrics.campaignList.slice(0, 8).map((campaign: any) => {
-                                    const percentage = campaignTotal > 0 ? Math.round((campaign.value / campaignTotal) * 100) : 0;
+                                {trendMetrics.campaignList.slice(0, 8).map((campaign, index) => {
+                                    const value = metricValue(campaign);
+                                    const percentage = campaignTotal > 0 ? Math.round((value / campaignTotal) * 100) : 0;
                                     return (
-                                        <div key={campaign.name} className="rounded-lg border p-3">
+                                        <div key={pointKey(campaign, index)} className="rounded-lg border p-3">
                                             <div className="mb-2 flex items-center justify-between gap-3">
                                                 <span className="truncate font-semibold">{campaign.name}</span>
-                                                <span className="text-sm font-bold text-primary">{campaign.value}</span>
+                                                <span className="text-sm font-bold text-primary">{value}</span>
                                             </div>
                                             <div className="flex items-center gap-3">
                                                 <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">

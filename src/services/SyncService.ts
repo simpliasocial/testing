@@ -1,5 +1,8 @@
-import { chatwootService } from './ChatwootService';
-import { SupabaseSyncService } from './SupabaseSyncService';
+import { chatwootClient as chatwootService } from '@/infrastructure/chatwoot/ChatwootClient';
+import { supabaseSyncClient as SupabaseSyncService } from '@/infrastructure/supabase/SupabaseSyncClient';
+
+const errorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : String(error || 'Unknown sync error');
 
 export const SyncService = {
     async bootstrap() {
@@ -72,9 +75,9 @@ export const SyncService = {
 
             await SupabaseSyncService.endSyncRun(runId, 'success', stats);
             console.log('🏁 [Sync] FULL Bootstrap Sync FINISHED!', stats);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('❌ [Sync] Bootstrap Sync FAILED:', err);
-            await SupabaseSyncService.endSyncRun(runId, 'error', stats, err.message);
+            await SupabaseSyncService.endSyncRun(runId, 'error', stats, errorMessage(err));
             throw err;
         }
     },
@@ -101,10 +104,14 @@ export const SyncService = {
                 await SupabaseSyncService.upsertReportingEvents(events);
 
                 // 2. Extract affected conversations
-                const affectedConvIds = Array.from(new Set(events.map((e: any) => e.conversation_id).filter(Boolean)));
+                const affectedConvIds = Array.from(new Set(
+                    events
+                        .map((event) => Number(event.conversation_id))
+                        .filter((conversationId) => Number.isFinite(conversationId) && conversationId > 0)
+                ));
                 console.log(`Refreshing ${affectedConvIds.length} affected conversations`);
 
-                for (const convId of affectedConvIds as number[]) {
+                for (const convId of affectedConvIds) {
                     // Fetch full conversation details
                     const convData = await chatwootService.getConversationDetails(convId);
                     if (convData) {
@@ -128,9 +135,9 @@ export const SyncService = {
             await SupabaseSyncService.updateSyncCursor('daily_delta', since, until);
             await SupabaseSyncService.endSyncRun(runId, 'success', stats);
             console.log('Daily sync finished!', stats);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Daily sync failed:', err);
-            await SupabaseSyncService.endSyncRun(runId, 'error', stats, err.message);
+            await SupabaseSyncService.endSyncRun(runId, 'error', stats, errorMessage(err));
         }
     }
 };

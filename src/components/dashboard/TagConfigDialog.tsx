@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { TagConfig } from "@/context/DashboardDataContext";
+import type { TagConfig } from "@/domain/dashboard";
 import { formatBusinessLabel } from "@/lib/displayCopy";
 
 interface TagConfigDialogProps {
@@ -22,6 +22,8 @@ interface TagConfigDialogProps {
     config: TagConfig;
     onSave: (config: TagConfig) => Promise<void> | void;
 }
+
+type TagArrayCategory = "sqlTags" | "appointmentTags" | "saleTags" | "unqualifiedTags";
 
 export function TagConfigDialog({
     availableLabels,
@@ -39,7 +41,7 @@ export function TagConfigDialog({
         }
     }, [open, config]);
 
-    const toggleTag = (category: keyof TagConfig, tag: string) => {
+    const toggleTag = (category: TagArrayCategory, tag: string) => {
         setTempConfig((prev) => ({
             ...prev,
             [category]: prev[category].includes(tag)
@@ -82,7 +84,7 @@ export function TagConfigDialog({
                         <TabsTrigger value="unqualified">No Aplica</TabsTrigger>
                     </TabsList>
 
-                    {(['sqlTags', 'appointmentTags', 'saleTags', 'unqualifiedTags'] as const).map((category) => (
+                    {(['sqlTags', 'appointmentTags', 'saleTags', 'unqualifiedTags'] as TagArrayCategory[]).map((category) => (
                         <TabsContent
                             key={category}
                             value={

@@ -1,73 +1,37 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo, useState, useCallback } from "react";
 import { useDashboardData } from "@/hooks/useDashboardData";
 import {
     Loader2,
-    ListTodo,
-    ExternalLink,
-    Clock,
-    MessageSquare,
     RefreshCw,
-    Phone,
-    UserCircle,
-    CheckCircle2,
     AlertTriangle,
-    Search,
     DollarSign,
-    FileSpreadsheet,
     CalendarDays,
-    Check,
-    Settings2,
-    ChevronDown,
-    ChevronUp
+    Check
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import {
-    DEFAULT_TAG_CONFIG,
-    TagConfig,
-    useDashboardContext
-} from "@/context/DashboardDataContext";
-import { useAuth } from "@/context/AuthContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
+import type { ResolvedConversation } from "@/context/dashboardDataTypes";
+import type { DashboardQueueLead } from "@/application/dashboard";
+import { useAuth } from "@/context/useAuth";
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker";
 import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
 import { TabExportMenu } from "@/components/dashboard/TabExportMenu";
-import { chatwootService } from "@/services/ChatwootService";
-import { SupabaseService } from "@/services/SupabaseService";
-import { LabelEventService } from "@/services/LabelEventService";
-import { HybridDashboardService } from "@/services/HybridDashboardService";
-import { supabase } from "@/lib/supabase";
 import { getGuayaquilDateString } from "@/lib/guayaquilTime";
-import { MinifiedConversation } from "@/services/StorageService";
+import type { MinifiedConversation } from "@/services/StorageService";
+import type { Inbox } from "@/domain/lead";
 import { DateRange } from "react-day-picker";
 import {
-    getConversationMessageRole,
-    getDisplayMessages,
-    formatDateTime,
     getAttrs,
-    getChatwootUrl,
-    getInitials,
-    getLastMessage,
     getLeadChannelName,
     getLeadEmail,
-    getLeadExternalUrl,
     getLeadName,
     getLeadOperationDate,
     getLeadPhone,
-    getMessageText,
-    getMessagePreview,
-    getMessageTimestamp,
     getRawLeadPhone,
-    money,
-    normalize,
-    parseAmount
 } from "@/lib/leadDisplay";
-import { getContactCustomAttributes, getConversationCustomAttributes } from "@/lib/leadAttributes";
 import {
     formatBusinessLabel,
-    formatBusinessList,
-    formatFieldLabel,
     friendlyErrorMessage
 } from "@/lib/displayCopy";
 import {
@@ -76,8 +40,7 @@ import {
     DialogHeader,
     DialogTitle,
     DialogDescription,
-    DialogFooter,
-    DialogTrigger
+    DialogFooter
 } from "@/components/ui/dialog";
 import {
     AlertDialog,
@@ -97,458 +60,47 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import * as XLSX from "xlsx";
 import {
-    buildWindowedListState,
-    WINDOWED_LIST_MAX_RENDERED_ROWS,
-    WINDOWED_TABLE_MAX_HEIGHT_PX
-} from "@/lib/windowedList";
+    AppointmentFormValue,
+    AttributeDefinition,
+    calculateSalesTotal,
+    filterQueueBySearch,
+    filterSalesRows,
+    formatAppointmentFieldValue,
+    getAppointmentFieldInitialValue,
+    serializeAppointmentFieldValue,
+    validateAppointmentFieldValue,
+} from "@/features/followup/model/leadActionQueueModel";
+import { useLeadWorkflowUpdate } from "@/features/followup/hooks/useLeadWorkflowUpdate";
+import { useFollowupAttributeDefinitions } from "@/features/followup/hooks/useFollowupAttributeDefinitions";
+import { useLeadMessageHistory } from "@/features/followup/hooks/useLeadMessageHistory";
+import { useHumanFlowConfig } from "@/features/followup/hooks/useHumanFlowConfig";
+import { useSalesReportExport } from "@/features/followup/hooks/useSalesReportExport";
+import { WorkflowField } from "@/features/followup/components/WorkflowField";
+import { FollowupQueueTable } from "@/features/followup/components/FollowupQueueTable";
+import { SalesReportPanel } from "@/features/followup/components/SalesReportPanel";
+import { HumanFlowConfigPanel } from "@/features/followup/components/HumanFlowConfigPanel";
+import { LeadMessageHistoryDialog } from "@/features/followup/components/LeadMessageHistoryDialog";
 
-type QueueLead = any;
-type AppointmentFormValue = string | boolean;
-
-type AttributeDefinition = {
-    key: string;
-    label: string;
-    displayType: string;
-    valueType: "text" | "number" | "date" | "boolean" | "textarea";
-    options: string[];
-    regexPattern?: string;
-    regexCue?: string;
-    description?: string;
-};
-
-type HumanFlowConfigState = {
-    humanFollowupQueueTags: string[];
-    humanAppointmentTargetLabel: string;
-    humanSalesQueueTags: string[];
-    humanSaleTargetLabel: string;
-    humanAppointmentFieldKeys: string[];
-    humanSaleFieldKeys: string[];
-};
+type QueueLead = Omit<DashboardQueueLead, "id" | "labels" | "meta" | "source"> &
+    Partial<ResolvedConversation> & {
+        id: number;
+        labels?: string[];
+        meta?: MinifiedConversation["meta"];
+        source?: MinifiedConversation["source"];
+        owner?: string;
+        account_id?: unknown;
+        additional_attributes?: unknown;
+        channel?: unknown;
+        channel_name?: unknown;
+        channel_type?: unknown;
+        last_message?: unknown;
+        name?: unknown;
+        raw_payload?: unknown;
+    };
 
 type WorkflowModalStep = "closed" | "edit" | "confirm" | "saving";
-
-const LOCAL_ATTRIBUTE_DEFINITIONS: AttributeDefinition[] = [
-    {
-        key: "fecha_visita",
-        label: "Fecha de visita",
-        displayType: "date",
-        valueType: "date",
-        options: [],
-        description: "fecha de agendar cita lead"
-    },
-    {
-        key: "hora_visita",
-        label: "Hora de visita",
-        displayType: "text",
-        valueType: "text",
-        options: [],
-        description: "hora de visita del lead"
-    },
-    {
-        key: "responsable",
-        label: "Responsable",
-        displayType: "text",
-        valueType: "text",
-        options: [],
-        description: "nombre de la persona responsable cuando hace el uso manual"
-    },
-    {
-        key: "monto_operacion",
-        label: "Monto de la operación",
-        displayType: "number",
-        valueType: "number",
-        options: [],
-        description: "valor a ingresar manualmente de cantidad $"
-    },
-    {
-        key: "fecha_monto_operacion",
-        label: "Fecha en que se registró el monto",
-        displayType: "date",
-        valueType: "date",
-        options: [],
-        description: "fecha de cuando se puso el monto de operacion"
-    }
-];
-
-const normalizeList = (values: string[] = []) =>
-    Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
-
-const getHumanFlowConfig = (config: TagConfig): HumanFlowConfigState => ({
-    humanFollowupQueueTags: normalizeList(config.humanFollowupQueueTags || DEFAULT_TAG_CONFIG.humanFollowupQueueTags || []),
-    humanAppointmentTargetLabel: String(
-        config.humanAppointmentTargetLabel || DEFAULT_TAG_CONFIG.humanAppointmentTargetLabel || ""
-    ).trim(),
-    humanSalesQueueTags: normalizeList(config.humanSalesQueueTags || DEFAULT_TAG_CONFIG.humanSalesQueueTags || []),
-    humanSaleTargetLabel: String(
-        config.humanSaleTargetLabel || DEFAULT_TAG_CONFIG.humanSaleTargetLabel || ""
-    ).trim(),
-    humanAppointmentFieldKeys: normalizeList(config.humanAppointmentFieldKeys || DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || []),
-    humanSaleFieldKeys: normalizeList(config.humanSaleFieldKeys || DEFAULT_TAG_CONFIG.humanSaleFieldKeys || [])
-});
-
-const arraysEqual = (left: string[], right: string[]) =>
-    normalizeList(left).join("||") === normalizeList(right).join("||");
-
-const humanFlowConfigChanged = (left: HumanFlowConfigState, right: HumanFlowConfigState) =>
-    !arraysEqual(left.humanFollowupQueueTags, right.humanFollowupQueueTags) ||
-    left.humanAppointmentTargetLabel !== right.humanAppointmentTargetLabel ||
-    !arraysEqual(left.humanSalesQueueTags, right.humanSalesQueueTags) ||
-    left.humanSaleTargetLabel !== right.humanSaleTargetLabel ||
-    !arraysEqual(left.humanAppointmentFieldKeys, right.humanAppointmentFieldKeys) ||
-    !arraysEqual(left.humanSaleFieldKeys, right.humanSaleFieldKeys);
-
-const normalizeAttributeOptions = (value: unknown): string[] => {
-    if (Array.isArray(value)) {
-        return normalizeList(value.map((item) => String(item ?? "")));
-    }
-
-    if (value && typeof value === "object") {
-        return normalizeList(Object.values(value as Record<string, unknown>).map((item) => String(item ?? "")));
-    }
-
-    if (typeof value === "string") {
-        return normalizeList(value.split(","));
-    }
-
-    return [];
-};
-
-const getAttributeValueType = (
-    displayType: string,
-    options: string[] = []
-): AttributeDefinition["valueType"] => {
-    if (options.length > 0) return "text";
-
-    const normalizedType = normalize(displayType);
-    if (
-        normalizedType.includes("checkbox") ||
-        normalizedType.includes("boolean") ||
-        normalizedType.includes("switch") ||
-        normalizedType.includes("toggle")
-    ) {
-        return "boolean";
-    }
-    if (normalizedType.includes("date")) return "date";
-    if (
-        normalizedType.includes("number") ||
-        normalizedType.includes("decimal") ||
-        normalizedType.includes("float") ||
-        normalizedType.includes("currency")
-    ) {
-        return "number";
-    }
-    if (
-        normalizedType.includes("textarea") ||
-        normalizedType.includes("text_area") ||
-        normalizedType.includes("long")
-    ) {
-        return "textarea";
-    }
-    return "text";
-};
-
-const isContactAttributeDefinition = (definition: any) => {
-    const scopeHint = normalize(
-        `${definition?.attribute_scope || ""} ${definition?.attribute_model_type || ""} ${definition?.attribute_model || ""}`
-    );
-
-    if (scopeHint.includes("conversation")) return false;
-    if (scopeHint.includes("contact")) return true;
-
-    const numericModel = Number(definition?.attribute_model);
-    if (!Number.isNaN(numericModel)) return numericModel !== 0;
-
-    return true;
-};
-
-const normalizeAttributeDefinitions = (definitions: any[]): AttributeDefinition[] => {
-    const byKey = new Map<string, AttributeDefinition>();
-
-    (definitions || []).forEach((definition) => {
-        const rawKey = definition?.attribute_key || definition?.key;
-        if (!rawKey || !isContactAttributeDefinition(definition)) return;
-
-        const key = String(rawKey).trim();
-        if (!key) return;
-
-        const options = normalizeAttributeOptions(
-            definition.attribute_values ?? definition.options ?? definition.values
-        );
-        const displayType = String(
-            definition.attribute_display_type || definition.display_type || "text"
-        )
-            .trim()
-            .toLowerCase();
-
-        byKey.set(key, {
-            key,
-            label: formatFieldLabel(definition.attribute_display_name || definition.display_name || rawKey),
-            displayType,
-            valueType: getAttributeValueType(displayType, options),
-            options,
-            regexPattern: String(definition.regex_pattern || definition.regexPattern || "").trim() || undefined,
-            regexCue: String(definition.regex_cue || definition.regexCue || "").trim() || undefined,
-            description: String(
-                definition.attribute_description || definition.description || ""
-            ).trim() || undefined
-        });
-    });
-
-    return Array.from(byKey.values()).sort((a, b) => a.label.localeCompare(b.label));
-};
-
-const inferAttributeValueType = (key: string, rawValue: unknown): AttributeDefinition["valueType"] => {
-    if (typeof rawValue === "boolean") return "boolean";
-    if (typeof rawValue === "number") return "number";
-
-    const text = String(rawValue ?? "").trim();
-    const normalizedKey = normalize(key);
-    if (!text) return normalizedKey.includes("fecha") || normalizedKey.includes("date") ? "date" : "text";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return "date";
-    if ((normalizedKey.includes("fecha") || normalizedKey.includes("date")) && toDateInputValue(text)) return "date";
-
-    const normalizedText = normalize(text);
-    if (["true", "false", "si", "no", "yes", "on", "off"].includes(normalizedText)) return "boolean";
-    if (!Number.isNaN(Number(text)) && text !== "") return "number";
-    return "text";
-};
-
-const inferAttributeDefinitionsFromConversations = (leads: QueueLead[]): AttributeDefinition[] => {
-    const byKey = new Map<string, AttributeDefinition>();
-
-    (leads || []).forEach((lead) => {
-        const attrs = getAttrs(lead);
-        Object.entries(attrs || {}).forEach(([key, rawValue]) => {
-            const trimmedKey = String(key || "").trim();
-            if (!trimmedKey) return;
-
-            const inferredValueType = inferAttributeValueType(trimmedKey, rawValue);
-            const inferredDisplayType =
-                inferredValueType === "boolean"
-                    ? "checkbox"
-                    : inferredValueType === "number"
-                        ? "number"
-                        : inferredValueType === "date"
-                            ? "date"
-                            : "text";
-
-            const existing = byKey.get(trimmedKey);
-            if (!existing) {
-                byKey.set(trimmedKey, {
-                    key: trimmedKey,
-                    label: formatFieldLabel(trimmedKey),
-                    displayType: inferredDisplayType,
-                    valueType: inferredValueType,
-                    options: []
-                });
-                return;
-            }
-
-            if (existing.valueType === "text" && inferredValueType !== "text") {
-                byKey.set(trimmedKey, {
-                    ...existing,
-                    displayType: inferredDisplayType,
-                    valueType: inferredValueType
-                });
-            }
-        });
-    });
-
-    return Array.from(byKey.values()).sort((a, b) => a.label.localeCompare(b.label));
-};
-
-const mergeAttributeDefinitions = (...groups: AttributeDefinition[][]): AttributeDefinition[] => {
-    const byKey = new Map<string, AttributeDefinition>();
-
-    groups.flat().forEach((definition) => {
-        if (!definition?.key) return;
-
-        const existing = byKey.get(definition.key);
-        if (!existing) {
-            byKey.set(definition.key, definition);
-            return;
-        }
-
-        const incomingHasSpecificType =
-            definition.valueType !== "text" ||
-            definition.displayType !== "text" ||
-            definition.options.length > 0;
-        const existingHasSpecificType =
-            existing.valueType !== "text" ||
-            existing.displayType !== "text" ||
-            existing.options.length > 0;
-
-        byKey.set(definition.key, {
-            ...existing,
-            ...definition,
-            label: definition.label || existing.label,
-            displayType:
-                incomingHasSpecificType || !existingHasSpecificType
-                    ? definition.displayType
-                    : existing.displayType,
-            valueType:
-                incomingHasSpecificType || !existingHasSpecificType
-                    ? definition.valueType
-                    : existing.valueType,
-            options: definition.options.length > 0 ? definition.options : existing.options,
-            regexPattern: definition.regexPattern || existing.regexPattern,
-            regexCue: definition.regexCue || existing.regexCue,
-            description: definition.description || existing.description
-        });
-    });
-
-    return Array.from(byKey.values()).sort((a, b) => a.label.localeCompare(b.label));
-};
-
-const toDateInputValue = (value: unknown) => {
-    const raw = String(value || "").trim();
-    if (!raw) return "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) return "";
-    return parsed.toISOString().split("T")[0];
-};
-
-const getFieldLabel = (definition: AttributeDefinition | undefined, key: string) =>
-    formatFieldLabel(definition?.label || key);
-
-const getNormalizedFieldIdentity = (definition: AttributeDefinition) =>
-    normalize(`${definition.key} ${definition.label}`);
-
-const isVisitDateField = (definition: AttributeDefinition) => {
-    const identity = getNormalizedFieldIdentity(definition);
-    return identity.includes("fecha_visita") || identity.includes("fecha visita");
-};
-
-const isVisitTimeField = (definition: AttributeDefinition) => {
-    const identity = getNormalizedFieldIdentity(definition);
-    return identity.includes("hora_visita") || identity.includes("hora visita");
-};
-
-const getFieldTypeLabel = (definition: AttributeDefinition) => {
-    if (definition.options.length > 0) return "lista";
-    switch (definition.valueType) {
-        case "boolean":
-            return "checkbox";
-        case "number":
-            return "número";
-        case "date":
-            return "fecha";
-        case "textarea":
-            return "texto largo";
-        default:
-            return "texto";
-    }
-};
-
-const getAppointmentFieldExample = (definition: AttributeDefinition) => {
-    if (isVisitDateField(definition)) return "Ejemplo: 2026-04-23 (YYYY-MM-DD)";
-    if (isVisitTimeField(definition)) return "Ejemplo: 21:00 (HH:mm)";
-    if (definition.key === "monto_operacion") return "Ejemplo: 15000";
-    if (definition.key === "fecha_monto_operacion") return "Formato: YYYY-MM-DD";
-    if (definition.valueType === "date") return "Formato: YYYY-MM-DD";
-    return "";
-};
-
-const parseNumericFieldValue = (value: string) => {
-    const normalized = String(value || "")
-        .trim()
-        .replace(",", ".")
-        .replace(/[^0-9.-]/g, "");
-
-    if (!normalized) return null;
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : null;
-};
-
-const coerceBooleanValue = (value: unknown) => {
-    if (typeof value === "boolean") return value;
-    const normalizedValue = normalize(value);
-    return ["true", "1", "si", "yes", "on", "activo"].includes(normalizedValue);
-};
-
-const getAppointmentFieldInitialValue = (
-    field: AttributeDefinition,
-    rawValue: unknown
-): AppointmentFormValue => {
-    if (field.valueType === "boolean") return coerceBooleanValue(rawValue);
-    if (field.valueType === "date") return toDateInputValue(rawValue);
-    return rawValue == null ? "" : String(rawValue);
-};
-
-const validateAppointmentFieldValue = (
-    field: AttributeDefinition,
-    value: AppointmentFormValue
-) => {
-    const label = getFieldLabel(field, field.key);
-
-    if (field.valueType === "boolean") return null;
-
-    const rawText = String(value ?? "").trim();
-    if (!rawText) return `Completa el campo ${label}`;
-
-    if (field.valueType === "number" && parseNumericFieldValue(rawText) === null) {
-        return `${label} debe ser un número válido`;
-    }
-
-    if (field.valueType === "date" && !toDateInputValue(rawText)) {
-        return `${label} debe tener una fecha válida`;
-    }
-
-    if (isVisitDateField(field) && !/^\d{4}-\d{2}-\d{2}$/.test(rawText)) {
-        return `${label} debe estar en formato YYYY-MM-DD`;
-    }
-
-    if (isVisitTimeField(field) && !/^([01]\d|2[0-3]):[0-5]\d$/.test(rawText)) {
-        return `${label} debe estar en formato HH:mm, por ejemplo 21:00`;
-    }
-
-    if (field.regexPattern) {
-        try {
-            const pattern = new RegExp(field.regexPattern);
-            if (!pattern.test(rawText)) {
-                return field.regexCue || `${label} no cumple el formato esperado`;
-            }
-        } catch {
-            // If the external rule is invalid, skip hard validation rather than blocking the user.
-        }
-    }
-
-    return null;
-};
-
-const serializeAppointmentFieldValue = (
-    field: AttributeDefinition,
-    value: AppointmentFormValue
-) => {
-    if (field.valueType === "boolean") return Boolean(value);
-    if (field.valueType === "number") return parseNumericFieldValue(String(value ?? "")) ?? null;
-    if (field.valueType === "date") return toDateInputValue(value) || "";
-    return String(value ?? "").trim();
-};
-
-const formatAppointmentFieldValue = (
-    field: AttributeDefinition,
-    value: AppointmentFormValue
-) => {
-    if (field.valueType === "boolean") return value ? "Sí" : "No";
-    return String(value ?? "").trim();
-};
-
-const getEmptyQueueMessage = (title: string, configuredTags: string[]) => {
-    if (configuredTags.length === 0) {
-        return `Configura primero los estados de ${title.toLowerCase()} para poblar esta tabla.`;
-    }
-    return `No hay leads disponibles en ${title.toLowerCase()} con los filtros actuales.`;
-};
 
 const LeadActionQueue = () => {
     const {
@@ -567,22 +119,47 @@ const LeadActionQueue = () => {
         ...tagSettings
     });
     const { role } = useAuth();
+    const { applyLeadWorkflowUpdate } = useLeadWorkflowUpdate({
+        replaceConversation,
+        refetchContext,
+        refetchDashboard: refetch,
+    });
+    const {
+        attributeDefinitions,
+        attributeDefinitionMap,
+        loadingAttributeDefinitions,
+    } = useFollowupAttributeDefinitions({ conversations });
+    const {
+        humanConfig,
+        updateHumanConfigList,
+        updateHumanConfigLabel,
+        saveHumanConfig,
+        hasHumanConfigChanges,
+        mergedLabels,
+        configuredAppointmentFields,
+        configuredSaleFields,
+        humanFollowupQueueTags,
+        humanAppointmentTargetLabel,
+        humanSalesQueueTags,
+        humanSaleTargetLabel,
+    } = useHumanFlowConfig({
+        tagSettings,
+        allAvailableLabels,
+        attributeDefinitionMap,
+        updateTagSettings,
+    });
 
-    const savedHumanConfig = useMemo(() => getHumanFlowConfig(tagSettings), [tagSettings]);
-    const [humanConfig, setHumanConfig] = useState<HumanFlowConfigState>(savedHumanConfig);
-
-    useEffect(() => {
-        setHumanConfig(savedHumanConfig);
-    }, [savedHumanConfig]);
-
-    const [loadedAttributeDefinitions, setLoadedAttributeDefinitions] = useState<AttributeDefinition[]>([]);
-    const [loadingAttributeDefinitions, setLoadingAttributeDefinitions] = useState(false);
     const [isHumanConfigOpen, setIsHumanConfigOpen] = useState(false);
 
     const [selectedLead, setSelectedLead] = useState<QueueLead | null>(null);
-    const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-    const [historyMessages, setHistoryMessages] = useState<any[]>([]);
-    const [loadingHistory, setLoadingHistory] = useState(false);
+    const {
+        historyLead,
+        isHistoryOpen,
+        setIsHistoryOpen,
+        historyMessages,
+        loadingHistory,
+        openHistory
+    } = useLeadMessageHistory<QueueLead>();
 
     const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
     const [isTagConfirmOpen, setIsTagConfirmOpen] = useState(false);
@@ -605,175 +182,37 @@ const LeadActionQueue = () => {
     const [salesEndDate, setSalesEndDate] = useState("");
     const [salesSearch, setSalesSearch] = useState("");
 
-    const inboxMap = useMemo(() => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])), [inboxes]);
+    const inboxMap = useMemo(() => new Map<number, Inbox>(inboxes.map((inbox) => [Number(inbox.id), inbox])), [inboxes]);
 
-    const getChannelName = useCallback((lead: Partial<MinifiedConversation> | any) => {
+    const getChannelName = useCallback((lead: QueueLead | Partial<MinifiedConversation>) => {
         const inbox = lead?.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
         return getLeadChannelName(lead, inbox);
     }, [inboxMap]);
 
+    const getQueueSearchValues = useCallback((lead: QueueLead) => {
+        const attrs = getAttrs(lead);
+        const channel = getChannelName(lead);
+
+        return [
+            lead.id,
+            getLeadName(lead),
+            getLeadPhone(lead, channel),
+            getRawLeadPhone(lead),
+            getLeadEmail(lead),
+            attrs.celular,
+            attrs.nombre_completo
+        ];
+    }, [getChannelName]);
+
     const followUpQueue = useMemo(() => {
-        const queue = data.operationalMetrics?.followUpQueue || [];
-        const query = normalize(followUpSearch);
-        if (!query) return queue;
-
-        return queue.filter((lead: QueueLead) => {
-            const attrs = getAttrs(lead);
-            const haystack = [
-                lead.id,
-                getLeadName(lead),
-                getLeadPhone(lead, getChannelName(lead)),
-                getRawLeadPhone(lead),
-                getLeadEmail(lead),
-                attrs.celular,
-                attrs.nombre_completo
-            ].map(normalize).join(" ");
-
-            return haystack.includes(query);
-        });
-    }, [data, followUpSearch, getChannelName]);
+        const queue = (data.operationalMetrics?.followUpQueue || []) as QueueLead[];
+        return filterQueueBySearch(queue, followUpSearch, getQueueSearchValues);
+    }, [data, followUpSearch, getQueueSearchValues]);
 
     const scheduledAppointmentsQueue = useMemo(() => {
-        const queue = data.operationalMetrics?.scheduledAppointmentsQueue || [];
-        const query = normalize(scheduledSearch);
-        if (!query) return queue;
-
-        return queue.filter((lead: QueueLead) => {
-            const attrs = getAttrs(lead);
-            const haystack = [
-                lead.id,
-                getLeadName(lead),
-                getLeadPhone(lead, getChannelName(lead)),
-                getRawLeadPhone(lead),
-                getLeadEmail(lead),
-                attrs.celular,
-                attrs.nombre_completo
-            ].map(normalize).join(" ");
-
-            return haystack.includes(query);
-        });
-    }, [data, scheduledSearch, getChannelName]);
-
-    const humanFollowupQueueTags = savedHumanConfig.humanFollowupQueueTags;
-    const humanAppointmentTargetLabel = savedHumanConfig.humanAppointmentTargetLabel;
-    const humanSalesQueueTags = savedHumanConfig.humanSalesQueueTags;
-    const humanSaleTargetLabel = savedHumanConfig.humanSaleTargetLabel;
-
-
-    const mergedLabels = useMemo(
-        () =>
-            normalizeList([
-                ...allAvailableLabels,
-                ...savedHumanConfig.humanFollowupQueueTags,
-                savedHumanConfig.humanAppointmentTargetLabel,
-                ...savedHumanConfig.humanSalesQueueTags,
-                savedHumanConfig.humanSaleTargetLabel
-            ]),
-        [allAvailableLabels, savedHumanConfig]
-    );
-
-    const inferredAttributeDefinitions = useMemo(
-        () => inferAttributeDefinitionsFromConversations(conversations),
-        [conversations]
-    );
-
-    const attributeDefinitions = useMemo(
-        () => mergeAttributeDefinitions(LOCAL_ATTRIBUTE_DEFINITIONS, loadedAttributeDefinitions, inferredAttributeDefinitions),
-        [loadedAttributeDefinitions, inferredAttributeDefinitions]
-    );
-
-    const attributeDefinitionMap = useMemo(
-        () => new Map(attributeDefinitions.map((definition) => [definition.key, definition])),
-        [attributeDefinitions]
-    );
-
-    const configuredAppointmentFields = useMemo(
-        () =>
-            savedHumanConfig.humanAppointmentFieldKeys.map((key) => {
-                const definition = attributeDefinitionMap.get(key);
-                if (definition) return definition;
-                return {
-                    key,
-                    label: key.replace(/_/g, " "),
-                    displayType: "text",
-                    valueType: "text" as const,
-                    options: [] as string[]
-                };
-            }),
-        [attributeDefinitionMap, savedHumanConfig.humanAppointmentFieldKeys]
-    );
-
-    const configuredSaleFields = useMemo(
-        () =>
-            savedHumanConfig.humanSaleFieldKeys.map((key) => {
-                const definition = attributeDefinitionMap.get(key);
-                if (definition) return definition;
-                return {
-                    key,
-                    label: key.replace(/_/g, " "),
-                    displayType: "text",
-                    valueType: "text" as const,
-                    options: [] as string[]
-                };
-            }),
-        [attributeDefinitionMap, savedHumanConfig.humanSaleFieldKeys]
-    );
-
-    const hasHumanConfigChanges = useMemo(
-        () => humanFlowConfigChanged(humanConfig, savedHumanConfig),
-        [humanConfig, savedHumanConfig]
-    );
-
-    useEffect(() => {
-        let cancelled = false;
-
-        const loadAttributeDefinitions = async () => {
-            setLoadingAttributeDefinitions(true);
-            try {
-                const [liveResult, fallbackResult] = await Promise.allSettled([
-                    chatwootService.getAttributeDefinitions(),
-                    supabase
-                        .schema("cw")
-                        .from("attribute_definitions")
-                        .select(
-                            "attribute_key, attribute_display_name, attribute_display_type, attribute_values, attribute_scope, attribute_model, regex_pattern, regex_cue, attribute_description"
-                        )
-                        .order("attribute_display_name", { ascending: true })
-                ]);
-                const liveRawDefinitions =
-                    liveResult.status === "fulfilled" ? liveResult.value : [];
-                const fallbackDefinitions =
-                    fallbackResult.status === "fulfilled" && !fallbackResult.value.error
-                        ? fallbackResult.value.data || []
-                        : [];
-
-                const mergedDefinitions = mergeAttributeDefinitions(
-                    normalizeAttributeDefinitions(liveRawDefinitions || []),
-                    normalizeAttributeDefinitions(fallbackDefinitions)
-                );
-
-                if (!cancelled) {
-                    setLoadedAttributeDefinitions(mergedDefinitions);
-                }
-            } catch (attributeError) {
-                console.error("Error loading external field definitions:", attributeError);
-                if (!cancelled) {
-                    setLoadedAttributeDefinitions([]);
-                    toast.error(friendlyErrorMessage("loadFields"));
-                }
-            } finally {
-                if (!cancelled) {
-                    setLoadingAttributeDefinitions(false);
-                }
-            }
-        };
-
-        loadAttributeDefinitions();
-
-        return () => {
-            cancelled = true;
-        };
-    }, []);
+        const queue = (data.operationalMetrics?.scheduledAppointmentsQueue || []) as QueueLead[];
+        return filterQueueBySearch(queue, scheduledSearch, getQueueSearchValues);
+    }, [data, scheduledSearch, getQueueSearchValues]);
 
     const handleQueueDateRangeChange = (range: DateRange | undefined) => {
         setGlobalFilters((prev) => ({ ...prev, startDate: range?.from, endDate: range?.to }));
@@ -783,157 +222,41 @@ const LeadActionQueue = () => {
         setGlobalFilters((prev) => ({ ...prev, selectedInboxes }));
     };
 
-    const updateHumanConfigList = (key: keyof Pick<HumanFlowConfigState, "humanFollowupQueueTags" | "humanSalesQueueTags" | "humanAppointmentFieldKeys" | "humanSaleFieldKeys">, value: string) => {
-        setHumanConfig((prev) => ({
-            ...prev,
-            [key]: prev[key].includes(value)
-                ? prev[key].filter((item) => item !== value)
-                : [...prev[key], value]
-        }));
-    };
-
-    const saveHumanConfig = async () => {
-        try {
-            await updateTagSettings({
-                ...tagSettings,
-                ...humanConfig
-            });
-            toast.success("Configuracion del flujo humano actualizada");
-        } catch (configError) {
-            console.error("Error saving human flow config:", configError);
-            toast.error("No se pudo guardar la configuracion del flujo humano");
-        }
-    };
-
-
-
     const salesRows = useMemo(() => {
-        const query = normalize(salesSearch);
-        return conversations
-            .filter((lead) => lead.labels?.includes(humanSaleTargetLabel))
-            .filter((lead) => {
-                if ((globalFilters.selectedInboxes || []).length > 0 && !globalFilters.selectedInboxes?.includes(Number(lead.inbox_id))) {
-                    return false;
-                }
-
-                const operationDateValue = getLeadOperationDate(lead);
-                if (salesStartDate && (!operationDateValue || operationDateValue < salesStartDate)) return false;
-                if (salesEndDate && (!operationDateValue || operationDateValue > salesEndDate)) return false;
-
-                if (!query) return true;
-                const haystack = [
+        return filterSalesRows({
+            leads: conversations,
+            saleTargetLabel: humanSaleTargetLabel,
+            selectedInboxes: globalFilters.selectedInboxes || [],
+            startDate: salesStartDate,
+            endDate: salesEndDate,
+            search: salesSearch,
+            getLabels: (lead) => lead.labels || [],
+            getInboxId: (lead) => lead.inbox_id,
+            getOperationDate: getLeadOperationDate,
+            getSearchValues: (lead) => [
                     lead.id,
                     getLeadName(lead),
                     getLeadPhone(lead, getChannelName(lead)),
                     getLeadEmail(lead),
                     getChannelName(lead)
-                ].map(normalize).join(" ");
-                return haystack.includes(query);
-            })
-            .sort((a, b) => (getLeadOperationDate(b) || "").localeCompare(getLeadOperationDate(a) || ""));
-    }, [conversations, globalFilters.selectedInboxes, humanSaleTargetLabel, salesEndDate, salesSearch, salesStartDate, inboxMap]);
+            ],
+        });
+    }, [conversations, globalFilters.selectedInboxes, humanSaleTargetLabel, salesEndDate, salesSearch, salesStartDate, getChannelName]);
 
     const salesTotal = useMemo(
-        () => salesRows.reduce((sum, lead) => sum + parseAmount(getAttrs(lead).monto_operacion), 0),
+        () => calculateSalesTotal(salesRows, (lead) => getAttrs(lead).monto_operacion),
         [salesRows]
     );
-
-    const reconcileConversationSnapshot = async (conversationId: number, remainingRetries = 1): Promise<void> => {
-        try {
-            const { error } = await supabase.functions.invoke("chatwoot-repair-conversations", {
-                body: {
-                    ids: [conversationId],
-                    limit: 1,
-                    batch_size: 1
-                }
-            });
-
-            if (error) throw error;
-        } catch (reconcileError) {
-            console.error(`Server-side conversation reconcile failed for ${conversationId}:`, reconcileError);
-            if (remainingRetries > 0) {
-                window.setTimeout(() => {
-                    void reconcileConversationSnapshot(conversationId, remainingRetries - 1);
-                }, 1500);
-            }
-        }
-    };
-
-    const applyLeadWorkflowUpdate = async ({
-        lead,
-        nextLabels,
-        contactAttributePatch,
-        conversationAttributePatch,
-        rawPayload,
-        successMessage
-    }: {
-        lead: QueueLead;
-        nextLabels: string[];
-        contactAttributePatch?: Record<string, any>;
-        conversationAttributePatch?: Record<string, any>;
-        rawPayload: Record<string, any>;
-        successMessage: string;
-    }) => {
-        const contactId = lead.meta?.sender?.id;
-        if (!contactId) {
-            throw new Error("No se encontró el contacto asociado a este lead.");
-        }
-
-        const currentContactAttrs = getContactCustomAttributes(lead);
-        const currentConversationAttrs = getConversationCustomAttributes(lead);
-        const nextContactAttrs = {
-            ...currentContactAttrs,
-            ...(contactAttributePatch || {})
-        };
-        const nextConversationAttrs = {
-            ...currentConversationAttrs,
-            ...(conversationAttributePatch || {})
-        };
-        const nextResolvedAttrs = {
-            ...(lead.custom_attributes || {}),
-            ...nextContactAttrs,
-            ...nextConversationAttrs
-        };
-
-        if (conversationAttributePatch && Object.keys(conversationAttributePatch).length > 0) {
-            await chatwootService.updateConversationCustomAttributes(lead.id, nextConversationAttrs);
-        }
-
-        if (contactAttributePatch && Object.keys(contactAttributePatch).length > 0) {
-            await chatwootService.updateContact(contactId, {
-                custom_attributes: nextContactAttrs
-            });
-        }
-
-        await chatwootService.updateConversationLabels(lead.id, nextLabels);
-
-        try {
-            await LabelEventService.recordConversationLabelChange({
-                conversationId: lead.id,
-                previousLabels: lead.labels || [],
-                nextLabels,
-                eventSource: "dashboard",
-                rawPayload
-            });
-        } catch (labelEventError) {
-            console.error("Local label event sync failed after successful Chatwoot update:", labelEventError);
-        }
-
-        const [freshConversation] = await HybridDashboardService.refreshConversationDetailsById([lead.id]);
-        if (!freshConversation) {
-            throw new Error("No se pudo obtener el estado final del lead.");
-        }
-
-        await replaceConversation({
-            ...freshConversation,
-            custom_attributes: nextResolvedAttrs
-        });
-
-        toast.success(successMessage);
-
-        void reconcileConversationSnapshot(lead.id);
-        void Promise.allSettled([refetchContext(), refetch?.()]);
-    };
+    const exportSalesReport = useSalesReportExport({
+        salesRows,
+        tagSettings,
+        salesStartDate,
+        salesEndDate,
+        salesSearch,
+        saleTargetLabel: humanSaleTargetLabel,
+        salesTotal,
+        getChannelName,
+    });
 
     const closeAppointmentWorkflow = (force = false) => {
         if (isSavingAppointment && !force) return;
@@ -1110,121 +433,6 @@ const LeadActionQueue = () => {
         }
     };
 
-    const exportSalesReport = () => {
-        if (salesRows.length === 0) {
-            toast.error("No hay ventas exitosas para exportar con esos filtros");
-            return;
-        }
-
-        const activeFields = tagSettings?.excelExportFields && tagSettings.excelExportFields.length > 0
-            ? tagSettings.excelExportFields
-            : ["ID", "Nombre", "Telefono", "Canal", "Estados", "Correo", "Enlace de conversación", "Fecha Ingreso", "Ultima Interaccion"];
-
-        const detailRows = salesRows.map((lead) => {
-            const attrs = getAttrs(lead);
-            const createdAt = lead.created_at ? new Date(lead.created_at * 1000) : null;
-            const lastActivity = lead.timestamp ? new Date(lead.timestamp * 1000) : null;
-            const canal = getChannelName(lead);
-
-            const row: any = {};
-
-            activeFields.forEach(field => {
-                const displayField = formatFieldLabel(field);
-                if (displayField === "Enlace de conversación") {
-                    row[displayField] = getChatwootUrl(lead.id);
-                    return;
-                }
-                switch (field) {
-                    case "ID": row[displayField] = lead.id; break;
-                    case "Nombre": row[displayField] = getLeadName(lead); break;
-                    case "Telefono": row[displayField] = getLeadPhone(lead, canal); break;
-                    case "Canal": row[displayField] = canal; break;
-                    case "Estados":
-                    case "Etiquetas": row[displayField] = formatBusinessList(lead.labels || []); break;
-                    case "Correo": row[displayField] = getLeadEmail(lead); break;
-                    case "Monto": row[displayField] = attrs.monto_operacion || ""; break;
-                    case "Fecha Monto": row[displayField] = getLeadOperationDate(lead); break;
-                    case "Agencia": row[displayField] = attrs.agencia || ""; break;
-                    case "Check-in": row[displayField] = attrs.checkincat || ""; break;
-                    case "Check-out": row[displayField] = attrs.checkoutcat || ""; break;
-                    case "Campana": row[displayField] = attrs.campana || ""; break;
-                    case "Ciudad": row[displayField] = attrs.ciudad || ""; break;
-                    case "Responsable": row[displayField] = attrs.responsable || lead.meta?.assignee?.name || ""; break;
-                    case "URL Red Social": row[displayField] = getLeadExternalUrl(lead, canal); break;
-                    case "Fecha Ingreso": row[displayField] = createdAt ? formatDateTime(createdAt.getTime()) : ""; break;
-                    case "Ultima Interaccion": row[displayField] = lastActivity ? formatDateTime(lastActivity.getTime()) : ""; break;
-                    case "ID Contacto": row[displayField] = lead.meta?.sender?.id || ""; break;
-                    case "ID Inbox": row[displayField] = lead.inbox_id || ""; break;
-                    case "ID Cuenta": row[displayField] = (lead as any).account_id || ""; break;
-                    case "Origen Dato": row[displayField] = lead.source || ""; break;
-                    default: row[displayField] = attrs[field] || ""; break;
-                }
-            });
-
-            row["Monto numérico"] = parseAmount(attrs.monto_operacion);
-            return row;
-        });
-
-        const byChannel = new Map<string, { canal: string; ventas: number; monto: number }>();
-        const byMonth = new Map<string, { periodo: string; ventas: number; monto: number }>();
-
-        salesRows.forEach((lead) => {
-            const amount = parseAmount(getAttrs(lead).monto_operacion);
-            const channel = getChannelName(lead);
-            const month = (getLeadOperationDate(lead) || "Sin fecha").slice(0, 7);
-
-            const channelRow = byChannel.get(channel) || { canal: channel, ventas: 0, monto: 0 };
-            channelRow.ventas += 1;
-            channelRow.monto += amount;
-            byChannel.set(channel, channelRow);
-
-            const monthRow = byMonth.get(month) || { periodo: month, ventas: 0, monto: 0 };
-            monthRow.ventas += 1;
-            monthRow.monto += amount;
-            byMonth.set(month, monthRow);
-        });
-
-        const summaryRows = [
-            ["Generado", new Date().toLocaleString()],
-            ["Filtro fecha inicio", salesStartDate || "Todos"],
-            ["Filtro fecha fin", salesEndDate || "Todos"],
-            ["Filtro busqueda", salesSearch || "Todos"],
-            ["Estado de venta usado", formatBusinessLabel(humanSaleTargetLabel)],
-            ["Ventas exitosas", salesRows.length],
-            ["Monto total", salesTotal],
-            ["Ticket promedio", salesRows.length > 0 ? salesTotal / salesRows.length : 0],
-        ];
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "Resumen");
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Array.from(byChannel.values())), "Por Canal");
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Array.from(byMonth.values())), "Por Mes");
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailRows), "Detalle Ventas");
-        XLSX.writeFile(wb, `reporte_ventas_exitosas_${getGuayaquilDateString()}.xlsx`);
-        toast.success("Reporte de ventas exitosas generado");
-    };
-
-    const handleViewHistory = async (lead: QueueLead) => {
-        setSelectedLead(lead);
-        setIsHistoryOpen(true);
-        setLoadingHistory(true);
-        try {
-            let messages = await chatwootService.getMessages(lead.id);
-            if (!messages || messages.length === 0) {
-                messages = await SupabaseService.getHistoricalMessages(lead.id);
-            }
-            if ((!messages || messages.length === 0) && getLastMessage(lead)) {
-                messages = [getLastMessage(lead)];
-            }
-            setHistoryMessages(getDisplayMessages(messages || []));
-        } catch (historyError) {
-            console.error("Error fetching history:", historyError);
-            toast.error("No se pudo cargar el historial");
-        } finally {
-            setLoadingHistory(false);
-        }
-    };
-
     const handleOpenTagChange = (lead: QueueLead) => {
         setSelectedLead(lead);
         setNewTag("");
@@ -1260,344 +468,23 @@ const LeadActionQueue = () => {
         }
     };
 
-    const renderWorkflowField = (
-        field: AttributeDefinition,
-        values: Record<string, AppointmentFormValue>,
-        onValueChange: (key: string, value: AppointmentFormValue) => void,
-        fieldIdPrefix: string
-    ) => {
-        const value = values[field.key] ?? (field.valueType === "boolean" ? false : "");
-        const exampleText = getAppointmentFieldExample(field);
-        const fieldId = `${fieldIdPrefix}-field-${field.key}`;
-        const commonLabel = (
-            <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm font-medium" htmlFor={fieldId}>
-                        {field.label}
-                    </label>
-                    <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
-                        {getFieldTypeLabel(field)}
-                    </Badge>
-                </div>
-                <div className="text-[11px] text-muted-foreground">
-                    {field.key}
-                    {field.description ? ` · ${field.description}` : ""}
-                    {field.regexCue ? ` · ${field.regexCue}` : ""}
-                </div>
-                {exampleText && (
-                    <div className="text-[11px] text-violet-700">
-                        {exampleText}
-                    </div>
-                )}
-            </div>
-        );
-
-        if (field.options.length > 0) {
-            return (
-                <div key={field.key} className="space-y-2">
-                    {commonLabel}
-                    <Select
-                        value={String(value || "")}
-                        onValueChange={(nextValue) => onValueChange(field.key, nextValue)}
-                    >
-                        <SelectTrigger id={fieldId}>
-                            <SelectValue placeholder={`Selecciona ${field.label.toLowerCase()}`} />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {field.options.map((option) => (
-                                <SelectItem key={`${field.key}-${option}`} value={option}>
-                                    {option}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-            );
-        }
-
-        if (field.valueType === "date") {
-            return (
-                <div key={field.key} className="space-y-2">
-                    {commonLabel}
-                    <div className="relative">
-                        <CalendarDays className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            id={fieldId}
-                            type="date"
-                            className="pl-9"
-                            value={String(value || "")}
-                            onChange={(event) => onValueChange(field.key, event.target.value)}
-                        />
-                    </div>
-                </div>
-            );
-        }
-
-        if (field.valueType === "boolean") {
-            return (
-                <div key={field.key} className="space-y-3 rounded-xl border bg-muted/20 p-4">
-                    {commonLabel}
-                    <div className="flex items-center space-x-2">
-                        <Checkbox
-                            id={fieldId}
-                            checked={Boolean(value)}
-                            onCheckedChange={(checked) => onValueChange(field.key, checked === true)}
-                        />
-                        <Label htmlFor={fieldId} className="text-sm">
-                            Activado
-                        </Label>
-                    </div>
-                </div>
-            );
-        }
-
-        if (field.valueType === "textarea") {
-            return (
-                <div key={field.key} className="space-y-2">
-                    {commonLabel}
-                    <Textarea
-                        id={fieldId}
-                        value={String(value)}
-                        onChange={(event) => onValueChange(field.key, event.target.value)}
-                        placeholder={exampleText || `Ingresa ${field.label.toLowerCase()}`}
-                    />
-                </div>
-            );
-        }
-
-        return (
-            <div key={field.key} className="space-y-2">
-                {commonLabel}
-                <Input
-                    id={fieldId}
-                    type={field.valueType === "number" ? "number" : "text"}
-                    step={field.valueType === "number" ? "any" : undefined}
-                    value={String(value || "")}
-                    onChange={(event) => onValueChange(field.key, event.target.value)}
-                    placeholder={exampleText || `Ingresa ${field.label.toLowerCase()}`}
-                />
-            </div>
-        );
-    };
-
     const renderAppointmentField = (field: AttributeDefinition) =>
-        renderWorkflowField(field, appointmentValues, handleAppointmentValueChange, "appointment");
+        <WorkflowField
+            key={field.key}
+            field={field}
+            value={appointmentValues[field.key]}
+            onValueChange={handleAppointmentValueChange}
+            fieldIdPrefix="appointment"
+        />;
 
     const renderSaleField = (field: AttributeDefinition) =>
-        renderWorkflowField(field, operationValues, handleOperationValueChange, "sale");
-
-    const renderQueueTable = ({
-        title,
-        description,
-        configuredTags,
-        leads,
-        primaryActionLabel,
-        primaryActionIcon,
-        primaryActionClassName,
-        onPrimaryAction,
-        searchValue,
-        onSearchChange
-    }: {
-        title: string;
-        description: string;
-        configuredTags: string[];
-        leads: QueueLead[];
-        primaryActionLabel: string;
-        primaryActionIcon: typeof DollarSign;
-        primaryActionClassName: string;
-        onPrimaryAction: (lead: QueueLead) => void;
-        searchValue: string;
-        onSearchChange: (value: string) => void;
-    }) => {
-        const windowedLeads = buildWindowedListState(leads);
-        const filteredLabel = `${windowedLeads.total} lead${windowedLeads.total === 1 ? "" : "s"} filtrado${windowedLeads.total === 1 ? "" : "s"}`;
-        const summaryLabel = windowedLeads.isTrimmed
-            ? `${filteredLabel} · viendo los ${WINDOWED_LIST_MAX_RENDERED_ROWS} más recientes`
-            : filteredLabel;
-
-        return (
-            <Card className="border-primary/20 shadow-sm">
-                <CardHeader className="pb-4">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                            <CardTitle className="flex items-center gap-2 text-xl">
-                                <ListTodo className="h-6 w-6 text-primary" />
-                                {title}
-                            </CardTitle>
-                            <CardDescription className="mt-2 space-y-2">
-                                <span className="block">{description}</span>
-                                <span className="flex flex-wrap items-center gap-2">
-                                    {configuredTags.length > 0 ? (
-                                        configuredTags.map((label) => (
-                                            <Badge key={`${title}-${label}`} variant="outline">
-                                                {formatBusinessLabel(label)}
-                                            </Badge>
-                                        ))
-                                    ) : (
-                                        <Badge variant="outline">Sin estados configurados</Badge>
-                                    )}
-                                </span>
-                            </CardDescription>
-                        </div>
-                        <div className="flex flex-col gap-3 items-end w-full lg:w-auto">
-                            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground w-fit">
-                                {summaryLabel}
-                            </div>
-                            <div className="relative w-full sm:w-64 lg:w-80">
-                                <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    className="pl-9 h-9 text-sm"
-                                    placeholder={`Buscar en ${title.toLowerCase()}...`}
-                                    value={searchValue}
-                                    onChange={(e) => onSearchChange(e.target.value)}
-                                />
-                            </div>
-                        </div>
-                    </div>
-                </CardHeader>
-                <CardContent>
-                    <div className="relative rounded-xl border overflow-hidden bg-background">
-                        <div
-                            className={windowedLeads.hasVerticalScroll ? "overflow-auto overscroll-contain" : "overflow-x-auto"}
-                            style={windowedLeads.hasVerticalScroll ? { maxHeight: `${WINDOWED_TABLE_MAX_HEIGHT_PX}px` } : undefined}
-                        >
-                            <table className="w-full min-w-[1480px] text-sm text-left">
-                                <thead className="sticky top-0 z-10 border-b bg-muted/95 text-[10px] text-muted-foreground uppercase font-bold tracking-wider backdrop-blur supports-[backdrop-filter]:bg-muted/80">
-                                    <tr>
-                                        <th className="px-6 py-4">Nombre del lead</th>
-                                        <th className="px-6 py-4">Canal</th>
-                                        <th className="px-6 py-4">Número</th>
-                                        <th className="px-6 py-4">Historial de mensajes</th>
-                                        <th className="px-6 py-4">URL</th>
-                                        <th className="px-6 py-4">Cambiar estado</th>
-                                        <th className="px-6 py-4 text-right">Acciones</th>
-                                        <th className="px-6 py-4">Fecha de ingreso</th>
-                                        <th className="px-6 py-4">Última interacción</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-muted/20">
-                                    {windowedLeads.visibleItems.map((lead: QueueLead) => {
-                                        const displayName = getLeadName(lead);
-                                        const channelDisplay = getChannelName(lead);
-                                        const phoneDisplay = getLeadPhone({ ...lead, channel: channelDisplay }, channelDisplay);
-                                        const lastMessage = getMessagePreview(lead);
-                                        const lastMessageDate = formatDateTime(getMessageTimestamp(lead));
-                                        const externalUrl = getLeadExternalUrl(lead, channelDisplay);
-                                        const createdDate = formatDateTime(lead.created_at || lead.timestamp);
-                                        const lastInteractionDate = formatDateTime(lead.timestamp || lead.created_at);
-                                        const ActionIcon = primaryActionIcon;
-
-                                        return (
-                                            <tr key={`${title}-${lead.id}`} className="bg-background hover:bg-muted/10 transition-colors">
-                                                <td className="px-6 py-4">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs uppercase">
-                                                            {getInitials(displayName)}
-                                                        </div>
-                                                        <div className="flex min-w-0 flex-col">
-                                                            <span className="font-semibold text-foreground truncate">{displayName}</span>
-                                                            <span className="text-[10px] text-muted-foreground">ID {lead.id}</span>
-                                                            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                                                                <UserCircle className="w-3 h-3" />
-                                                                {lead.owner}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <Badge variant="secondary" className="px-2 py-0 text-[10px] uppercase font-bold">
-                                                        {channelDisplay}
-                                                    </Badge>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <div className="flex flex-col text-xs gap-1">
-                                                        <span className="flex items-center gap-1.5 text-muted-foreground font-medium italic">
-                                                            <Phone className="w-3 h-3" />
-                                                            {phoneDisplay || "Sin número"}
-                                                        </span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleViewHistory(lead)}
-                                                        className="flex max-w-[300px] flex-col text-left hover:text-primary"
-                                                    >
-                                                        <span className="text-xs truncate text-foreground font-medium">
-                                                            {lastMessage}
-                                                        </span>
-                                                        <span className="text-[10px] text-muted-foreground flex items-center gap-1 mt-1">
-                                                            <Clock className="w-3 h-3" />
-                                                            {lastMessageDate}
-                                                        </span>
-                                                        <span className="text-[10px] text-primary mt-1">Ver historial</span>
-                                                    </button>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    {externalUrl ? (
-                                                        <a href={externalUrl} target="_blank" rel="noreferrer">
-                                                            <Button size="sm" variant="outline" className="h-8 gap-2 text-xs">
-                                                                <ExternalLink className="h-3.5 w-3.5" />
-                                                                Abrir URL
-                                                            </Button>
-                                                        </a>
-                                                    ) : (
-                                                        <span className="text-xs text-muted-foreground">Sin URL</span>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        className="h-8 gap-2 text-xs border-primary/30 text-primary hover:bg-primary/5"
-                                                        onClick={() => handleOpenTagChange(lead)}
-                                                    >
-                                                        <RefreshCw className="h-3.5 w-3.5" />
-                                                        Cambiar estado
-                                                    </Button>
-                                                </td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <div className="flex justify-end gap-2">
-                                                        <Button
-                                                            size="sm"
-                                                            variant="outline"
-                                                            className={`h-8 gap-2 text-xs ${primaryActionClassName}`}
-                                                            onClick={() => onPrimaryAction(lead)}
-                                                        >
-                                                            <ActionIcon className="h-3.5 w-3.5" />
-                                                            {primaryActionLabel}
-                                                        </Button>
-                                                        <a href={getChatwootUrl(lead.id)} target="_blank" rel="noreferrer">
-                                                            <Button size="sm" variant="ghost" className="h-8 gap-2 px-2 text-xs text-muted-foreground hover:text-primary">
-                                                                <ExternalLink className="h-4 w-4" />
-                                                                Abrir conversación
-                                                            </Button>
-                                                        </a>
-                                                    </div>
-                                                </td>
-                                                <td className="px-6 py-4 text-xs text-muted-foreground">{createdDate}</td>
-                                                <td className="px-6 py-4 text-xs text-muted-foreground">{lastInteractionDate}</td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {windowedLeads.visibleItems.length === 0 && (
-                                        <tr>
-                                            <td colSpan={9} className="px-6 py-20 text-center">
-                                                <div className="flex flex-col items-center gap-2 opacity-40">
-                                                    <CheckCircle2 className="h-12 w-12 text-muted-foreground" />
-                                                    <span className="text-sm italic font-medium">{getEmptyQueueMessage(title, configuredTags)}</span>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </CardContent>
-            </Card>
-        );
-    };
+        <WorkflowField
+            key={field.key}
+            field={field}
+            value={operationValues[field.key]}
+            onValueChange={handleOperationValueChange}
+            fieldIdPrefix="sale"
+        />;
 
     if (loading) {
         return (
@@ -1637,453 +524,69 @@ const LeadActionQueue = () => {
                 </div>
             </div>
 
-            {role === 'admin' && (
-                <Collapsible open={isHumanConfigOpen} onOpenChange={setIsHumanConfigOpen}>
-                    <Card className="border-primary/20 shadow-sm">
-                        <CardHeader className="pb-4">
-                            <CollapsibleTrigger asChild>
-                                <button
-                                    type="button"
-                                    className="w-full text-left"
-                                    aria-label={isHumanConfigOpen ? "Ocultar configuracion del flujo humano" : "Abrir configuracion del flujo humano"}
-                                >
-                                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                                        <div>
-                                            <CardTitle className="flex items-center gap-2 text-xl">
-                                                <Settings2 className="h-6 w-6 text-primary" />
-                                                Configurar flujo humano
-                                            </CardTitle>
-                                            <CardDescription className="mt-2">
-                                                Define qué estados entran a cada cola y qué datos se pedirán al marcar una cita agendada o una venta exitosa.
-                                            </CardDescription>
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-                                            <Badge variant="outline">{humanConfig.humanFollowupQueueTags.length} estados en seguimiento</Badge>
-                                            <Badge variant="outline">{humanConfig.humanSalesQueueTags.length} estados en citas agendadas</Badge>
-                                            <Badge variant="outline">{humanConfig.humanAppointmentFieldKeys.length} campos para cita</Badge>
-                                            <Badge variant="outline">{humanConfig.humanSaleFieldKeys.length} campos para venta</Badge>
-                                            <Badge variant="secondary" className="gap-1.5 px-3 py-1">
-                                                {isHumanConfigOpen ? (
-                                                    <ChevronUp className="h-3.5 w-3.5" />
-                                                ) : (
-                                                    <ChevronDown className="h-3.5 w-3.5" />
-                                                )}
-                                                {isHumanConfigOpen ? "Ocultar" : "Abrir"}
-                                            </Badge>
-                                        </div>
-                                    </div>
-                                </button>
-                            </CollapsibleTrigger>
-                        </CardHeader>
-                        <CollapsibleContent>
-                            <CardContent className="space-y-5">
-                                <div className="grid gap-4 xl:grid-cols-2">
-                                    <div className="grid gap-4 sm:grid-cols-2">
-                                        <div className="space-y-2">
-                                            <Label>Estado destino de cita</Label>
-                                            <Select
-                                                value={humanConfig.humanAppointmentTargetLabel}
-                                                onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanAppointmentTargetLabel: value }))}
-                                            >
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Selecciona estado" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    {mergedLabels.map((label) => (
-                                                        <SelectItem key={`appointment-target-${label}`} value={label}>
-                                                            {formatBusinessLabel(label)}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-
-                                        <div className="space-y-2">
-                                            <Label>Estado destino de venta</Label>
-                                            <Select
-                                                value={humanConfig.humanSaleTargetLabel}
-                                                onValueChange={(value) => setHumanConfig((prev) => ({ ...prev, humanSaleTargetLabel: value }))}
-                                            >
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Selecciona estado" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    {mergedLabels.map((label) => (
-                                                        <SelectItem key={`sale-target-${label}`} value={label}>
-                                                            {formatBusinessLabel(label)}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-xl border bg-muted/20 p-4 text-sm">
-                                        <p className="font-semibold text-foreground">Resumen activo</p>
-                                        <div className="mt-3 space-y-2 text-muted-foreground">
-                                            <p>
-                                                Seguimiento humano:{" "}
-                                                <span className="font-medium text-foreground">
-                                                    {humanConfig.humanFollowupQueueTags.length ? formatBusinessList(humanConfig.humanFollowupQueueTags) : "Sin estados"}
-                                                </span>
-                                            </p>
-                                            <p>
-                                                Cita humana destino:{" "}
-                                                <span className="font-medium text-foreground">
-                                                    {humanConfig.humanAppointmentTargetLabel ? formatBusinessLabel(humanConfig.humanAppointmentTargetLabel) : "Sin configurar"}
-                                                </span>
-                                            </p>
-                                            <p>
-                                                Cola de ventas:{" "}
-                                                <span className="font-medium text-foreground">
-                                                    {humanConfig.humanSalesQueueTags.length ? formatBusinessList(humanConfig.humanSalesQueueTags) : "Sin estados"}
-                                                </span>
-                                            </p>
-                                            <p>
-                                                Venta destino:{" "}
-                                                <span className="font-medium text-foreground">
-                                                    {humanConfig.humanSaleTargetLabel ? formatBusinessLabel(humanConfig.humanSaleTargetLabel) : "Sin configurar"}
-                                                </span>
-                                            </p>
-                                            <p>
-                                                Campos de cita:{" "}
-                                                <span className="font-medium text-foreground">
-                                                    {humanConfig.humanAppointmentFieldKeys.length ? humanConfig.humanAppointmentFieldKeys.map(formatFieldLabel).join(", ") : "Sin campos"}
-                                                </span>
-                                            </p>
-                                            <p>
-                                                Campos de venta:{" "}
-                                                <span className="font-medium text-foreground">
-                                                    {humanConfig.humanSaleFieldKeys.length ? humanConfig.humanSaleFieldKeys.map(formatFieldLabel).join(", ") : "Sin campos"}
-                                                </span>
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <Accordion type="multiple" className="w-full rounded-xl border px-4">
-                                    <AccordionItem value="followup-tags">
-                                        <AccordionTrigger className="text-sm">
-                                            Estados que entran en Cola de Trabajo Diaria
-                                        </AccordionTrigger>
-                                        <AccordionContent>
-                                            <ScrollArea className="h-[220px] rounded-lg border p-4">
-                                                <div className="grid gap-3 sm:grid-cols-2">
-                                                    {mergedLabels.map((label) => (
-                                                        <div key={`followup-label-${label}`} className="flex items-center space-x-2">
-                                                            <Checkbox
-                                                                id={`followup-label-${label}`}
-                                                                checked={humanConfig.humanFollowupQueueTags.includes(label)}
-                                                                onCheckedChange={() => updateHumanConfigList("humanFollowupQueueTags", label)}
-                                                            />
-                                                            <Label htmlFor={`followup-label-${label}`} className="text-sm font-medium">
-                                                                {formatBusinessLabel(label)}
-                                                            </Label>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </ScrollArea>
-                                        </AccordionContent>
-                                    </AccordionItem>
-
-                                    <AccordionItem value="sales-tags">
-                                        <AccordionTrigger className="text-sm">
-                                            Estados que entran en Citas Agendadas
-                                        </AccordionTrigger>
-                                        <AccordionContent>
-                                            <ScrollArea className="h-[220px] rounded-lg border p-4">
-                                                <div className="grid gap-3 sm:grid-cols-2">
-                                                    {mergedLabels.map((label) => (
-                                                        <div key={`sales-label-${label}`} className="flex items-center space-x-2">
-                                                            <Checkbox
-                                                                id={`sales-label-${label}`}
-                                                                checked={humanConfig.humanSalesQueueTags.includes(label)}
-                                                                onCheckedChange={() => updateHumanConfigList("humanSalesQueueTags", label)}
-                                                            />
-                                                            <Label htmlFor={`sales-label-${label}`} className="text-sm font-medium">
-                                                                {formatBusinessLabel(label)}
-                                                            </Label>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </ScrollArea>
-                                        </AccordionContent>
-                                    </AccordionItem>
-
-                                    <AccordionItem value="appointment-fields">
-                                        <AccordionTrigger className="text-sm">
-                                            Campos que se pedirán al marcar Cita agendada
-                                        </AccordionTrigger>
-                                        <AccordionContent>
-                                            {loadingAttributeDefinitions ? (
-                                                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
-                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                    Cargando campos configurados...
-                                                </div>
-                                            ) : attributeDefinitions.length === 0 ? (
-                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                    No hay campos configurados disponibles todavía.
-                                                </div>
-                                            ) : (
-                                                <ScrollArea className="h-[260px] rounded-lg border p-4">
-                                                    <div className="grid gap-3 sm:grid-cols-2">
-                                                        {attributeDefinitions.map((definition) => (
-                                                            <div key={definition.key} className="flex items-start space-x-2">
-                                                                <Checkbox
-                                                                    id={`appointment-field-${definition.key}`}
-                                                                    checked={humanConfig.humanAppointmentFieldKeys.includes(definition.key)}
-                                                                    onCheckedChange={() => updateHumanConfigList("humanAppointmentFieldKeys", definition.key)}
-                                                                />
-                                                                <Label htmlFor={`appointment-field-${definition.key}`} className="text-sm font-medium leading-tight">
-                                                                    <span className="flex flex-wrap items-center gap-2">
-                                                                        <span>{definition.label}</span>
-                                                                        <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
-                                                                            {getFieldTypeLabel(definition)}
-                                                                        </Badge>
-                                                                    </span>
-                                                                    {definition.description && (
-                                                                        <span className="block text-[11px] text-muted-foreground">
-                                                                            {definition.description}
-                                                                        </span>
-                                                                    )}
-                                                                </Label>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </ScrollArea>
-                                            )}
-                                        </AccordionContent>
-                                    </AccordionItem>
-
-                                    <AccordionItem value="sale-fields">
-                                        <AccordionTrigger className="text-sm">
-                                            Campos que se pedirán al marcar Venta exitosa
-                                        </AccordionTrigger>
-                                        <AccordionContent>
-                                            {loadingAttributeDefinitions ? (
-                                                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
-                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                    Cargando campos configurados...
-                                                </div>
-                                            ) : attributeDefinitions.length === 0 ? (
-                                                <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-                                                    No hay campos configurados disponibles todavía.
-                                                </div>
-                                            ) : (
-                                                <ScrollArea className="h-[260px] rounded-lg border p-4">
-                                                    <div className="grid gap-3 sm:grid-cols-2">
-                                                        {attributeDefinitions.map((definition) => (
-                                                            <div key={`sale-field-${definition.key}`} className="flex items-start space-x-2">
-                                                                <Checkbox
-                                                                    id={`sale-field-${definition.key}`}
-                                                                    checked={humanConfig.humanSaleFieldKeys.includes(definition.key)}
-                                                                    onCheckedChange={() => updateHumanConfigList("humanSaleFieldKeys", definition.key)}
-                                                                />
-                                                                <Label htmlFor={`sale-field-${definition.key}`} className="text-sm font-medium leading-tight">
-                                                                    <span className="flex flex-wrap items-center gap-2">
-                                                                        <span>{definition.label}</span>
-                                                                        <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
-                                                                            {getFieldTypeLabel(definition)}
-                                                                        </Badge>
-                                                                    </span>
-                                                                    {definition.description && (
-                                                                        <span className="block text-[11px] text-muted-foreground">
-                                                                            {definition.description}
-                                                                        </span>
-                                                                    )}
-                                                                </Label>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </ScrollArea>
-                                            )}
-                                        </AccordionContent>
-                                    </AccordionItem>
-                                </Accordion>
-
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border bg-amber-50/60 px-4 py-3 text-sm text-amber-900">
-                                    <p>
-                                        Si no dejas campos configurados para cita agendada o venta exitosa, el boton de la cola mostrará un aviso para configurar primero el flujo.
-                                    </p>
-                                    <Button
-                                        onClick={saveHumanConfig}
-                                        disabled={!hasHumanConfigChanges}
-                                        className="sm:w-auto"
-                                    >
-                                        Guardar configuracion
-                                    </Button>
-                                </div>
-                            </CardContent>
-                        </CollapsibleContent>
-                    </Card>
-                </Collapsible>
+            {role === "admin" && (
+                <HumanFlowConfigPanel
+                    isOpen={isHumanConfigOpen}
+                    onOpenChange={setIsHumanConfigOpen}
+                    humanConfig={humanConfig}
+                    mergedLabels={mergedLabels}
+                    attributeDefinitions={attributeDefinitions}
+                    loadingAttributeDefinitions={loadingAttributeDefinitions}
+                    hasHumanConfigChanges={hasHumanConfigChanges}
+                    updateHumanConfigList={updateHumanConfigList}
+                    updateHumanConfigLabel={updateHumanConfigLabel}
+                    saveHumanConfig={saveHumanConfig}
+                />
             )}
 
 
 
-            {renderQueueTable({
-                title: "Cola de Trabajo Diaria",
-                description: "Leads que entran al seguimiento humano y deben pasar a cita agendada humana.",
-                configuredTags: humanFollowupQueueTags,
-                leads: followUpQueue,
-                primaryActionLabel: "Cita agendada",
-                primaryActionIcon: CalendarDays,
-                primaryActionClassName: "border-violet-300 text-violet-700 hover:bg-violet-50",
-                onPrimaryAction: openAppointmentDialog,
-                searchValue: followUpSearch,
-                onSearchChange: setFollowUpSearch
-            })}
+            <FollowupQueueTable<QueueLead>
+                title="Cola de Trabajo Diaria"
+                description="Leads que entran al seguimiento humano y deben pasar a cita agendada humana."
+                configuredTags={humanFollowupQueueTags}
+                leads={followUpQueue}
+                primaryActionLabel="Cita agendada"
+                primaryActionIcon={CalendarDays}
+                primaryActionClassName="border-violet-300 text-violet-700 hover:bg-violet-50"
+                onPrimaryAction={openAppointmentDialog}
+                onChangeStatus={handleOpenTagChange}
+                onOpenHistory={openHistory}
+                getChannelName={getChannelName}
+                searchValue={followUpSearch}
+                onSearchChange={setFollowUpSearch}
+            />
 
-            {renderQueueTable({
-                title: "Citas Agendadas",
-                description: "Leads que ya estan en etapa de cita y desde aqui pueden confirmarse como venta exitosa.",
-                configuredTags: humanSalesQueueTags,
-                leads: scheduledAppointmentsQueue,
-                primaryActionLabel: "Venta exitosa",
-                primaryActionIcon: DollarSign,
-                primaryActionClassName: "border-emerald-300 text-emerald-700 hover:bg-emerald-50",
-                onPrimaryAction: openOperationDialog,
-                searchValue: scheduledSearch,
-                onSearchChange: setScheduledSearch
-            })}
+            <FollowupQueueTable<QueueLead>
+                title="Citas Agendadas"
+                description="Leads que ya estan en etapa de cita y desde aqui pueden confirmarse como venta exitosa."
+                configuredTags={humanSalesQueueTags}
+                leads={scheduledAppointmentsQueue}
+                primaryActionLabel="Venta exitosa"
+                primaryActionIcon={DollarSign}
+                primaryActionClassName="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                onPrimaryAction={openOperationDialog}
+                onChangeStatus={handleOpenTagChange}
+                onOpenHistory={openHistory}
+                getChannelName={getChannelName}
+                searchValue={scheduledSearch}
+                onSearchChange={setScheduledSearch}
+            />
 
-            <Card className="border-primary/20 shadow-sm max-w-4xl mx-auto w-full">
-                <CardHeader>
-                    <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
-                        <div>
-                            <CardTitle className="flex items-center gap-2 text-xl">
-                                <FileSpreadsheet className="h-6 w-6 text-primary" />
-                                Reporte de ventas exitosas
-                            </CardTitle>
-                            <CardDescription>
-                                Filtra y exporta las ventas y operaciones que han sido marcadas como exitosas.
-                            </CardDescription>
-                        </div>
-                        <div className="flex items-center gap-2 rounded-lg border bg-primary/10 px-3 py-2 text-sm text-primary">
-                            <CheckCircle2 className="h-4 w-4" />
-                            {salesRows.length} ventas filtradas - {money(salesTotal)}
-                        </div>
-                    </div>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                            <label className="text-xs font-medium text-muted-foreground">Desde</label>
-                            <Input type="date" value={salesStartDate} onChange={(e) => setSalesStartDate(e.target.value)} />
-                        </div>
-                        <div className="space-y-1">
-                            <label className="text-xs font-medium text-muted-foreground">Hasta</label>
-                            <Input type="date" value={salesEndDate} onChange={(e) => setSalesEndDate(e.target.value)} />
-                        </div>
-                    </div>
-                    <div className="space-y-1">
-                        <label className="text-xs font-medium text-muted-foreground">Buscar en ventas</label>
-                        <Input
-                            placeholder="Nombre, telefono, ID o canal"
-                            value={salesSearch}
-                            onChange={(e) => setSalesSearch(e.target.value)}
-                        />
-                    </div>
-                    <div className="flex gap-2">
-                        <Button variant="outline" className="flex-1 gap-2 border-primary text-primary hover:bg-primary/5" onClick={exportSalesReport}>
-                            <FileSpreadsheet className="h-4 w-4" />
-                            Exportar Excel completo
-                        </Button>
-                        {role === 'admin' && (
-                            <Dialog>
-                                <DialogTrigger asChild>
-                                    <Button variant="outline" className="gap-2 border-primary text-primary hover:bg-primary/5" title="Configurar Columnas">
-                                        <Settings2 className="h-4 w-4" />
-                                    </Button>
-                                </DialogTrigger>
-                                <DialogContent className="max-w-3xl">
-                                    <DialogHeader>
-                                        <DialogTitle className="flex items-center gap-2">
-                                            <FileSpreadsheet className="w-5 h-5 text-primary" />
-                                            Configuración de Columnas Excel
-                                        </DialogTitle>
-                                        <DialogDescription>
-                                            Selecciona qué campos se incluirán en la exportación de ventas.
-                                        </DialogDescription>
-                                    </DialogHeader>
-                                    <div className="space-y-6 pt-4 max-h-[60vh] overflow-y-auto pr-2">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                            <div className="space-y-4">
-                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Campos Base</h3>
-                                                <div className="space-y-2">
-                                                    {["ID", "Nombre", "Telefono", "Canal", "Estados", "Correo", "Enlace de conversación", "Fecha Ingreso", "Ultima Interaccion"].map(field => (
-                                                        <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
-                                                            <Checkbox
-                                                                id={`ventas-field-${field}`}
-                                                                checked={tagSettings?.excelExportFields?.includes(field) || false}
-                                                                onCheckedChange={(checked) => {
-                                                                    const current = tagSettings?.excelExportFields || [];
-                                                                    const next = checked
-                                                                        ? [...current, field]
-                                                                        : current.filter(f => f !== field);
-                                                                    updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
-                                                                }}
-                                                            />
-                                                            <Label htmlFor={`ventas-field-${field}`}>{formatFieldLabel(field)}</Label>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                            <div className="space-y-4">
-                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Métricas Operativas</h3>
-                                                <div className="space-y-2">
-                                                    {["Monto", "Fecha Monto", "Agencia", "Check-in", "Check-out", "Campana", "Ciudad", "Responsable", "URL Red Social"].map(field => (
-                                                        <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
-                                                            <Checkbox
-                                                                id={`ventas-field-${field}`}
-                                                                checked={tagSettings?.excelExportFields?.includes(field) || false}
-                                                                onCheckedChange={(checked) => {
-                                                                    const current = tagSettings?.excelExportFields || [];
-                                                                    const next = checked
-                                                                        ? [...current, field]
-                                                                        : current.filter(f => f !== field);
-                                                                    updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
-                                                                }}
-                                                            />
-                                                            <Label htmlFor={`ventas-field-${field}`}>{formatFieldLabel(field)}</Label>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                            <div className="space-y-4">
-                                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Datos de referencia</h3>
-                                                <div className="space-y-2">
-                                                    {["ID Contacto", "ID Inbox", "ID Cuenta", "Origen Dato"].map(field => (
-                                                        <div key={`ventas-field-${field}`} className="flex items-center space-x-2">
-                                                            <Checkbox
-                                                                id={`ventas-field-${field}`}
-                                                                checked={tagSettings?.excelExportFields?.includes(field) || false}
-                                                                onCheckedChange={(checked) => {
-                                                                    const current = tagSettings?.excelExportFields || [];
-                                                                    const next = checked
-                                                                        ? [...current, field]
-                                                                        : current.filter(f => f !== field);
-                                                                    updateTagSettings({ ...(tagSettings || DEFAULT_TAG_CONFIG), excelExportFields: next });
-                                                                }}
-                                                            />
-                                                            <Label htmlFor={`ventas-field-${field}`}>{formatFieldLabel(field)}</Label>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <DialogFooter className="mt-4">
-                                        <DialogTrigger asChild>
-                                            <Button variant="outline">Cerrar</Button>
-                                        </DialogTrigger>
-                                    </DialogFooter>
-                                </DialogContent>
-                            </Dialog>
-                        )}
-                    </div>
-                </CardContent>
-            </Card>
+            <SalesReportPanel
+                salesCount={salesRows.length}
+                salesTotal={salesTotal}
+                salesStartDate={salesStartDate}
+                salesEndDate={salesEndDate}
+                salesSearch={salesSearch}
+                canConfigureColumns={role === "admin"}
+                tagSettings={tagSettings}
+                onSalesStartDateChange={setSalesStartDate}
+                onSalesEndDateChange={setSalesEndDate}
+                onSalesSearchChange={setSalesSearch}
+                onExportSalesReport={exportSalesReport}
+                updateTagSettings={updateTagSettings}
+            />
 
             <Dialog
                 open={appointmentModalStep !== "closed"}
@@ -2151,7 +654,7 @@ const LeadActionQueue = () => {
                     <DialogFooter>
                         {appointmentModalStep === "edit" ? (
                             <>
-                                <Button variant="outline" onClick={closeAppointmentWorkflow}>Cancelar</Button>
+                                <Button variant="outline" onClick={() => closeAppointmentWorkflow()}>Cancelar</Button>
                                 <Button className="bg-violet-600 hover:bg-violet-700" onClick={handleAppointmentFormConfirm}>
                                     Guardar cita
                                 </Button>
@@ -2167,7 +670,7 @@ const LeadActionQueue = () => {
                                 </Button>
                                 <Button
                                     className="bg-violet-600 hover:bg-violet-700"
-                                    onClick={executeAppointmentConfirm}
+                                    onClick={() => executeAppointmentConfirm()}
                                     disabled={isSavingAppointment}
                                 >
                                     {isSavingAppointment ? "Guardando..." : "Confirmar cita"}
@@ -2241,7 +744,7 @@ const LeadActionQueue = () => {
                     <DialogFooter>
                         {operationModalStep === "edit" ? (
                             <>
-                                <Button variant="outline" onClick={closeOperationWorkflow}>Cancelar</Button>
+                                <Button variant="outline" onClick={() => closeOperationWorkflow()}>Cancelar</Button>
                                 <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleOperationFormConfirm}>
                                     Confirmar
                                 </Button>
@@ -2257,7 +760,7 @@ const LeadActionQueue = () => {
                                 </Button>
                                 <Button
                                     className="bg-emerald-600 hover:bg-emerald-700"
-                                    onClick={executeOperationConfirm}
+                                    onClick={() => executeOperationConfirm()}
                                     disabled={isSavingOperation}
                                 >
                                     {isSavingOperation ? "Guardando..." : "Confirmar venta"}
@@ -2268,70 +771,13 @@ const LeadActionQueue = () => {
                 </DialogContent>
             </Dialog>
 
-            <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
-                <DialogContent className="max-w-2xl sm:max-w-3xl">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <MessageSquare className="h-5 w-5 text-primary" />
-                            Historial de: {selectedLead ? getLeadName(selectedLead) : ""}
-                        </DialogTitle>
-                        <DialogDescription>
-                            Mensajes disponibles del lead. Si necesitas responder o revisar más contexto, abre la conversación original.
-                        </DialogDescription>
-                    </DialogHeader>
-
-                    <ScrollArea className="h-[500px] mt-4 pr-4">
-                        {loadingHistory ? (
-                            <div className="flex flex-col items-center justify-center h-full">
-                                <Loader2 className="h-8 w-8 animate-spin text-primary mb-2" />
-                                <p className="text-sm text-muted-foreground">Cargando mensajes...</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-4">
-                                {historyMessages.length === 0 && (
-                                    <div className="py-16 text-center text-sm text-muted-foreground">
-                                        No hay mensajes disponibles para este lead.
-                                    </div>
-                                )}
-                                {historyMessages.map((msg: any) => {
-                                    const role = getConversationMessageRole(msg);
-                                    const isOutgoing = role === "outgoing";
-                                    return (
-                                        <div key={msg.id} className={`flex ${isOutgoing ? "justify-end" : "justify-start"}`}>
-                                            <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm ${isOutgoing
-                                                ? "bg-primary text-primary-foreground rounded-tr-none"
-                                                : "bg-muted text-foreground rounded-tl-none"
-                                                }`}>
-                                                <div className="font-bold text-[10px] mb-1 opacity-70 uppercase">
-                                                    {isOutgoing ? "Agente / Bot" : "Cliente"}
-                                                </div>
-                                                {getMessageText(msg)}
-                                                <div className="text-[9px] mt-1 text-right opacity-60">
-                                                    {formatDateTime(msg.created_at)}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </ScrollArea>
-
-                    <DialogFooter className="mt-4 border-t pt-4">
-                        <Button variant="outline" onClick={() => setIsHistoryOpen(false)}>Cerrar</Button>
-                        <a
-                            href={selectedLead ? getChatwootUrl(selectedLead.id) : "#"}
-                            target="_blank"
-                            rel="noreferrer"
-                        >
-                            <Button className="gap-2">
-                                <ExternalLink className="h-4 w-4" />
-                                Abrir conversación
-                            </Button>
-                        </a>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <LeadMessageHistoryDialog
+                isOpen={isHistoryOpen}
+                onOpenChange={setIsHistoryOpen}
+                lead={historyLead}
+                messages={historyMessages}
+                loading={loadingHistory}
+            />
 
             <Dialog open={isTagDialogOpen} onOpenChange={setIsTagDialogOpen}>
                 <DialogContent>

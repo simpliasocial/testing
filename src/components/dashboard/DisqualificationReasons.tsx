@@ -6,12 +6,20 @@ interface DisqualificationReasonsProps {
   data?: Array<{ reason: string; count: number; percentage: number }>;
 }
 
+type DisqualificationReason = NonNullable<DisqualificationReasonsProps["data"]>[number];
+
 const colors = [
   "hsl(0, 72%, 51%)",
   "hsl(38, 92%, 50%)",
   "hsl(220, 30%, 60%)",
   "hsl(220, 20%, 75%)",
 ];
+
+const getTooltipPercentage = (props: unknown) => {
+  const payload = (props as { payload?: Partial<DisqualificationReason> })?.payload;
+  const percentage = Number(payload?.percentage || 0);
+  return Number.isFinite(percentage) ? percentage : 0;
+};
 
 export function DisqualificationReasons({ className, data = [] }: DisqualificationReasonsProps) {
 
@@ -37,17 +45,17 @@ export function DisqualificationReasons({ className, data = [] }: Disqualificati
                 borderRadius: '8px',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
               }}
-              formatter={(value: number, name: string, props: any) => [
+              formatter={(value: number, _name: string, props: unknown) => [
                 <div className="flex flex-col gap-1">
                   <span className="font-bold">{value} leads</span>
                   <span className="text-xs text-muted-foreground">
-                    {props.payload.percentage}% del total
+                    {getTooltipPercentage(props)}% del total
                   </span>
                 </div>,
                 'Cantidad'
               ]}
             />
-            <Bar dataKey="count" radius={[0, 4, 4, 0]} background={{ fill: 'hsl(var(--muted)/0.2)', radius: [0, 4, 4, 0] }}>
+            <Bar dataKey="count" radius={4} background={{ fill: 'hsl(var(--muted)/0.2)', radius: 4 }}>
               {data.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
               ))}

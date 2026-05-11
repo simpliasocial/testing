@@ -8,11 +8,32 @@ import { chatwootService } from '@/services/ChatwootService';
 import { HybridDashboardService } from '@/services/HybridDashboardService';
 import { mapMinifiedToChatwootConversation } from '@/services/ConversationMapper';
 import { dateStringIncludesToday, guayaquilEndOfDayIso, guayaquilStartOfDayIso } from '@/lib/guayaquilTime';
-import { config } from '@/config';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
 import { getAttrs, getChatwootUrl, getInboxChannelName, getLeadChannelName } from '@/lib/leadDisplay';
 import { formatBusinessLabel, formatBusinessList } from '@/lib/displayCopy';
+import type { ChatwootConversation } from '@/domain/conversation';
+import type { Inbox } from '@/domain/lead';
+
+type ReportCell = string | number | boolean;
+type ReportRows = ReportCell[][];
+type LabelCountBucket = { total: number; [inboxId: number]: number };
+
+const REPORT_LABELS = [
+    'interesado',
+    'crear_confianza',
+    'crear_urgencia',
+    'desinteresado',
+    'cita_agendada',
+    'venta_exitosa'
+] as const;
+
+const toReportCell = (value: unknown): ReportCell => {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+    return String(value ?? '');
+};
+
+const toReportText = (value: unknown) => String(value || '');
 
 const ReportsPage = () => {
     const [isExporting, setIsExporting] = useState(false);
@@ -21,7 +42,7 @@ const ReportsPage = () => {
     const [customStartDate, setCustomStartDate] = useState<string>("");
     const [customEndDate, setCustomEndDate] = useState<string>("");
 
-    const [inboxes, setInboxes] = useState<any[]>([]);
+    const [inboxes, setInboxes] = useState<Inbox[]>([]);
 
     useEffect(() => {
         const loadInboxes = async () => {
@@ -35,11 +56,7 @@ const ReportsPage = () => {
         loadInboxes();
     }, []);
 
-    const labels = [
-        'interesado', 'crear_confianza', 'crear_urgencia', 'desinteresado', 'cita_agendada', 'venta_exitosa'
-    ];
-
-    const fetchAllConversations = async (startDate: string, endDate: string, inboxId: string) => {
+    const fetchAllConversations = async (startDate: string, endDate: string, inboxId: string): Promise<ChatwootConversation[]> => {
         const hybridConversations = await HybridDashboardService.fetchHybridReportConversations(startDate, endDate);
         let allConvs = hybridConversations.map(mapMinifiedToChatwootConversation);
 
@@ -50,11 +67,11 @@ const ReportsPage = () => {
         return allConvs;
     };
 
-    const generateExcel = (filteredConvs: any[], createdConvs: any[], labelTitle: string, filename: string, startDate: string, endDate: string, isPreliminary = false) => {
-        const labelCounts: Record<string, any> = {};
-        const labelCountsUnicas: Record<string, any> = {};
+    const generateExcel = (filteredConvs: ChatwootConversation[], createdConvs: ChatwootConversation[], labelTitle: string, filename: string, startDate: string, endDate: string, isPreliminary = false) => {
+        const labelCounts: Record<string, LabelCountBucket> = {};
+        const labelCountsUnicas: Record<string, LabelCountBucket> = {};
 
-        labels.forEach(l => {
+        REPORT_LABELS.forEach(l => {
             labelCounts[l] = { total: 0 };
             labelCountsUnicas[l] = { total: 0 };
             inboxes.forEach(inbox => {
@@ -93,8 +110,8 @@ const ReportsPage = () => {
             }
         });
 
-        // --- SECCIÓN 1: RESUMEN DE ACTIVIDADES ---
-        const resumenData: any[][] = [];
+        // Section 1: activity summary.
+        const resumenData: ReportRows = [];
         resumenData.push([`Fecha Inicio`, startDate]);
         resumenData.push([`Fecha Fin`, endDate]);
         if (isPreliminary) {
@@ -109,7 +126,7 @@ const ReportsPage = () => {
         resumenData.push(headerRow1);
 
         Object.keys(labelCounts).forEach(label => {
-            let row = [formatBusinessLabel(label), labelCounts[label].total];
+            const row: ReportCell[] = [formatBusinessLabel(label), labelCounts[label].total];
             inboxes.forEach(inbox => {
                 row.push(labelCounts[label][inbox.id] || 0);
             });
@@ -127,7 +144,7 @@ const ReportsPage = () => {
             });
         });
 
-        let footerRow = [labelTitle.replace('Total Leads', 'Total estados asignados'), totalSum];
+        const footerRow: ReportCell[] = [labelTitle.replace('Total Leads', 'Total estados asignados'), totalSum];
         inboxes.forEach(inbox => {
             footerRow.push(sumPerInbox[inbox.id]);
         });
@@ -136,10 +153,10 @@ const ReportsPage = () => {
         resumenData.push([]);
         resumenData.push([`Total Leads de Actividades`, filteredConvs.length]);
 
-        // --- SECCIÓN 2: DETALLE DE LEADS DE ACTIVIDADES ---
-        const getDetalleRows = (convs: any[]) => {
-            const rows: any[][] = [];
-            const headers = [
+        // Section 2: activity lead details.
+        const getDetalleRows = (convs: ChatwootConversation[]): ReportRows => {
+            const rows: ReportRows = [];
+            const headers: ReportCell[] = [
                 "ID Conversacion",
                 "Nombre del Lead",
                 "Telefono/Celular",
@@ -172,33 +189,33 @@ const ReportsPage = () => {
 
                 let telefonoPrincipal = "";
                 if (canal.toLowerCase().includes('whatsapp')) {
-                    telefonoPrincipal = conv.meta?.sender?.phone_number || attrs.celular || "";
+                    telefonoPrincipal = toReportText(conv.meta?.sender?.phone_number || attrs.celular);
                 } else {
-                    telefonoPrincipal = attrs.celular || "";
+                    telefonoPrincipal = toReportText(attrs.celular);
                 }
 
                 const createdAt = conv.created_at ? new Date(conv.created_at * 1000) : null;
                 const lastActivity = conv.timestamp ? new Date(conv.timestamp * 1000) : null;
 
-                const rowData = [
+                const rowData: ReportCell[] = [
                     conv.id,
                     conv.meta?.sender?.name || 'Sin Nombre',
                     telefonoPrincipal,
                     canal,
                     formatBusinessList(conv.labels || [], ' | '),
-                    attrs.responsable || "",
+                    toReportCell(attrs.responsable),
                     conv.meta?.assignee?.name || (attrs.agente === true ? "Asignado" : "Sin Asignar"),
-                    attrs.nombre_completo || "",
-                    attrs.correo || conv.meta?.sender?.email || "",
-                    attrs.ciudad || "",
-                    attrs.campana || "",
-                    attrs.edad || "",
-                    attrs.fecha_visita || "",
-                    attrs.hora_visita || "",
-                    attrs.agencia || "",
-                    attrs.score_interes || "",
-                    attrs.monto_operacion || "",
-                    attrs.fecha_monto_operacion || "",
+                    toReportCell(attrs.nombre_completo),
+                    toReportCell(attrs.correo || conv.meta?.sender?.email),
+                    toReportCell(attrs.ciudad),
+                    toReportCell(attrs.campana),
+                    toReportCell(attrs.edad),
+                    toReportCell(attrs.fecha_visita),
+                    toReportCell(attrs.hora_visita),
+                    toReportCell(attrs.agencia),
+                    toReportCell(attrs.score_interes),
+                    toReportCell(attrs.monto_operacion),
+                    toReportCell(attrs.fecha_monto_operacion),
                     getChatwootUrl(conv.id) || "Importado",
                     createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : "",
                     lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : ""
@@ -211,8 +228,8 @@ const ReportsPage = () => {
 
         const detalleDataActividades = getDetalleRows(filteredConvs);
 
-        // --- SECCIÓN 3: RESUMEN DE ESTADOS ÚNICOS ---
-        const resumenUnicasData: any[][] = [];
+        // Section 3: unique status summary.
+        const resumenUnicasData: ReportRows = [];
         resumenUnicasData.push([`Fecha Inicio`, startDate]);
         resumenUnicasData.push([`Fecha Fin`, endDate]);
         if (isPreliminary) {
@@ -223,7 +240,7 @@ const ReportsPage = () => {
         resumenUnicasData.push(headerRow1);
 
         Object.keys(labelCountsUnicas).forEach(label => {
-            let row = [formatBusinessLabel(label), labelCountsUnicas[label].total];
+            const row: ReportCell[] = [formatBusinessLabel(label), labelCountsUnicas[label].total];
             inboxes.forEach(inbox => {
                 row.push(labelCountsUnicas[label][inbox.id] || 0);
             });
@@ -241,7 +258,7 @@ const ReportsPage = () => {
             });
         });
 
-        let footerRowUnicas = ["Total estados asignados", totalSumUnicas];
+        const footerRowUnicas: ReportCell[] = ["Total estados asignados", totalSumUnicas];
         inboxes.forEach(inbox => {
             footerRowUnicas.push(sumPerInboxUnicas[inbox.id]);
         });
@@ -250,7 +267,7 @@ const ReportsPage = () => {
         resumenUnicasData.push([]);
         resumenUnicasData.push([`Total Leads Unicos`, createdConvs.length]);
 
-        // --- SECCIÓN 4: CONVERSACIONES ÚNICAS ---
+        // Section 4: unique conversations.
         const detalleDataUnicas = getDetalleRows(createdConvs);
 
         const wb = XLSX.utils.book_new();

@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { chatwootService } from '@/services/ChatwootService';
-import { SupabaseService } from '@/services/SupabaseService';
-import { useDashboardContext } from '@/context/DashboardDataContext';
-import { MinifiedConversation } from '@/services/StorageService';
+import { supabaseHistoricalClient } from '@/infrastructure/supabase/SupabaseHistoricalClient';
+import { useDashboardContext } from '@/context/useDashboardContext';
+import type { MinifiedConversation } from '@/services/StorageService';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -44,6 +44,7 @@ import {
     WINDOWED_TABLE_MAX_HEIGHT_PX
 } from '@/lib/windowedList';
 import { toast } from 'sonner';
+import type { ConversationMessage, Inbox } from '@/domain/lead';
 
 const dayStartUnix = (date?: Date) => {
     if (!date) return 0;
@@ -73,27 +74,36 @@ const ChatwootPage = () => {
 
     const [search, setSearch] = useState('');
     const [viewingConv, setViewingConv] = useState<MinifiedConversation | null>(null);
-    const [messages, setMessages] = useState<any[]>([]);
+    const [messages, setMessages] = useState<ConversationMessage[]>([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
 
     const selectedInboxKey = (globalFilters.selectedInboxes || []).join(',');
+    const selectedInboxes = useMemo(
+        () => selectedInboxKey
+            ? selectedInboxKey.split(',').map(Number).filter(Number.isFinite)
+            : [],
+        [selectedInboxKey]
+    );
 
     const inboxMap = useMemo(
-        () => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])),
+        () => new Map<number, Inbox>(inboxes.map((inbox) => [Number(inbox.id), inbox])),
         [inboxes]
     );
 
-    const getInbox = (lead: MinifiedConversation) =>
-        lead?.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
+    const getInbox = useCallback(
+        (lead: MinifiedConversation) => lead?.inbox_id ? inboxMap.get(Number(lead.inbox_id)) || null : null,
+        [inboxMap]
+    );
 
-    const getChannelName = (lead: MinifiedConversation) =>
-        getLeadChannelName(lead, getInbox(lead));
+    const getChannelName = useCallback(
+        (lead: MinifiedConversation) => getLeadChannelName(lead, getInbox(lead)),
+        [getInbox]
+    );
 
     const filteredConversations = useMemo(() => {
         const query = normalize(search);
         const startUnix = dayStartUnix(globalFilters.startDate);
         const endUnix = dayEndUnix(globalFilters.endDate);
-        const selectedInboxes = globalFilters.selectedInboxes || [];
 
         return conversations
             .filter((lead) => {
@@ -125,7 +135,7 @@ const ChatwootPage = () => {
                 return haystack.includes(query);
             })
             .sort((a, b) => (b.timestamp || b.created_at || 0) - (a.timestamp || a.created_at || 0));
-    }, [conversations, globalFilters.startDate, globalFilters.endDate, selectedInboxKey, search, inboxMap]);
+    }, [conversations, globalFilters.startDate, globalFilters.endDate, selectedInboxes, search, getChannelName, getInbox]);
 
     const windowedConversations = useMemo(
         () => buildWindowedListState(filteredConversations),
@@ -147,9 +157,9 @@ const ChatwootPage = () => {
         setLoadingHistory(true);
 
         try {
-            let history: any[] = [];
+            let history: ConversationMessage[] = [];
             const isLivePreferred = lead.source !== 'supabase';
-            const fetchApiMessages = async () => {
+            const fetchApiMessages = async (): Promise<ConversationMessage[]> => {
                 if (!getChatwootUrl(lead.id)) return [];
                 try {
                     return await chatwootService.getMessages(lead.id);
@@ -158,9 +168,9 @@ const ChatwootPage = () => {
                     return [];
                 }
             };
-            const fetchSupabaseMessages = async () => {
+            const fetchSupabaseMessages = async (): Promise<ConversationMessage[]> => {
                 try {
-                    return await SupabaseService.getHistoricalMessages(lead.id);
+                    return await supabaseHistoricalClient.getHistoricalMessages(lead.id);
                 } catch (dbError) {
                     console.warn('[ChatwootPage] Supabase history failed:', dbError);
                     return [];
@@ -390,7 +400,7 @@ const ChatwootPage = () => {
                                         No hay mensajes disponibles para este lead.
                                     </div>
                                 )}
-                                {messages.map((msg: any, index) => {
+                                {messages.map((msg, index) => {
                                     const role = getConversationMessageRole(msg);
                                     const isOutgoing = role === 'outgoing';
                                     return (

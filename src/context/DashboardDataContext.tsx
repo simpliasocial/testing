@@ -1,313 +1,79 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
-import { chatwootService } from '../services/ChatwootService';
-import { StorageService, MinifiedConversation } from '../services/StorageService';
-import { HybridDashboardService, mergeConversationsPreferApi } from '../services/HybridDashboardService';
-import { ConversationLabelEvent, LabelEventService } from '../services/LabelEventService';
-import { CommercialAuditService } from '../services/CommercialAuditService';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { MinifiedConversation } from '../services/StorageService';
+import { chatwootRepository } from '@/infrastructure/chatwoot/ChatwootRepository';
+import { dedupeContactAttributeDefinitions } from '@/infrastructure/chatwoot/ContactAttributeDefinitionMapper';
+import { hybridConversationRepository, mergeConversationsPreferApi } from '@/infrastructure/conversation/HybridConversationRepository';
+import { labelEventClient } from '@/infrastructure/supabase/LabelEventClient';
+import { commercialAuditClient } from '@/infrastructure/supabase/CommercialAuditClient';
+import { dashboardSettingsRepository } from '@/infrastructure/settings/DashboardSettingsRepository';
+import { indexedConversationRepository } from '@/infrastructure/storage/IndexedConversationRepository';
 import { supabase } from '../lib/supabase';
 import { applyLatestLabelState, collectKnownLabels, getLeadAttrs, resolveLeadStage } from '../lib/conversationState';
 import type { CommercialAuditEvent } from '../lib/commercialFacts';
-import {
-    DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG,
-    DEFAULT_REPORT_COLUMN_FIELDS,
-    type CriticalReportProfileConfig
-} from '../lib/reportCatalog';
-import {
-    DEFAULT_SCORE_THRESHOLDS,
-    normalizeScoreThresholds,
-    type ScoreThresholds
-} from '../lib/leadScoreClassification';
-
-export interface DashboardFilters {
-    startDate?: Date;
-    endDate?: Date;
-    selectedInboxes?: number[];
-}
-
-export interface ChatwootAttributeDefinition {
-    chatwoot_attribute_id?: number;
-    attribute_key: string;
-    attribute_display_name: string;
-    attribute_display_type: string;
-    attribute_description?: string;
-    attribute_scope?: string;
-    regex_pattern?: string | null;
-    regex_cue?: string | null;
-    raw_payload?: any;
-}
-
-export type { ScoreThresholds };
-
-export interface TagConfig {
-    sqlTags: string[];
-    appointmentTags: string[];
-    saleTags: string[];
-    unqualifiedTags: string[];
-    scoreHighTags?: string[];
-    scoreMediumTags?: string[];
-    scoreLowTags?: string[];
-    humanFollowupQueueTags?: string[];
-    humanAppointmentTargetLabel?: string;
-    humanSalesQueueTags?: string[];
-    humanSaleTargetLabel?: string;
-    humanAppointmentFieldKeys?: string[];
-    humanSaleFieldKeys?: string[];
-    scoreAttributeKey?: string;
-    scoreAppointmentLabels?: string[];
-    scoreThresholds?: ScoreThresholds;
-    excelExportFields?: string[];
-    reportColumnFields?: Record<string, string[]>;
-    criticalReportProfiles?: Record<string, CriticalReportProfileConfig>;
-}
-
-export interface ResolvedConversation extends MinifiedConversation {
-    resolvedLabels: string[];
-    resolvedAttrs: Record<string, any>;
-    resolvedStage: 'sale' | 'appointment' | 'unqualified' | 'followup' | 'sql' | 'other';
-}
-
-type DashboardDataSource = 'HYBRID' | 'API_ONLY' | 'SUPABASE_ONLY';
-
-type DashboardDataContextType = {
-    conversations: ResolvedConversation[];
-    labelEvents: ConversationLabelEvent[];
-    commercialAuditEvents: CommercialAuditEvent[];
-    inboxes: any[];
-    labels: string[];
-    contactAttributeDefinitions: ChatwootAttributeDefinition[];
-    tagSettings: TagConfig;
-    loading: boolean;
-    error: string | null;
-    dataSource: DashboardDataSource;
-    lastLiveFetchAt: Date | null;
-    liveError: string | null;
-    historicalError: string | null;
-    updateTagSettings: (config: TagConfig) => Promise<void>;
-    globalFilters: DashboardFilters;
-    setGlobalFilters: React.Dispatch<React.SetStateAction<DashboardFilters>>;
-    replaceConversation: (conversation: MinifiedConversation) => Promise<void>;
-    refetch: () => Promise<void>;
-};
-
-export const DEFAULT_TAG_CONFIG: TagConfig = {
-    sqlTags: ['interesado', 'crear_confianza', 'crear_urgencia'],
-    appointmentTags: ['cita_agendada', 'cita'],
-    saleTags: ['venta_exitosa', 'venta'],
-    unqualifiedTags: ['desinteresado', 'descartado'],
-    humanFollowupQueueTags: ['seguimiento_humano'],
-    humanAppointmentTargetLabel: 'cita_agendada_humano',
-    humanSalesQueueTags: ['cita_agendada', 'cita_agendada_humano'],
-    humanSaleTargetLabel: 'venta_exitosa',
-    humanSaleFieldKeys: ['monto_operacion', 'fecha_monto_operacion'],
-    scoreAttributeKey: '',
-    scoreAppointmentLabels: ['cita_agendada', 'cita', 'cita_agendada_humano'],
-    scoreThresholds: { ...DEFAULT_SCORE_THRESHOLDS },
-    excelExportFields: [
-        "ID",
-        "Nombre",
-        "Telefono",
-        "Canal",
-        "Estados",
-        "Correo",
-        "Monto",
-        "Fecha Monto",
-        "Agencia",
-        "Check-in",
-        "Check-out",
-        "URL Red Social",
-        "Enlace de conversación",
-        "Fecha Ingreso",
-        "Ultima Interaccion"
-    ],
-    reportColumnFields: DEFAULT_REPORT_COLUMN_FIELDS,
-    criticalReportProfiles: DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG
-};
-
-const TAG_SETTINGS_STORAGE_KEY = 'dashboard_tag_settings';
-
-const normalizeTagArray = (value: unknown, fallback: string[]) => {
-    if (!Array.isArray(value)) return [...fallback];
-    return Array.from(new Set(
-        value
-            .map(item => String(item || '').trim())
-            .filter(Boolean)
-    ));
-};
-
-const normalizeReportColumnFields = (value?: Record<string, unknown> | null) => {
-    const entries = Object.entries(DEFAULT_REPORT_COLUMN_FIELDS).map(([tabId, fallback]) => {
-        const configured = value?.[tabId];
-        return [tabId, normalizeTagArray(configured, fallback)];
-    });
-
-    return Object.fromEntries(entries);
-};
-
-const normalizeCriticalReportProfiles = (value?: Record<string, Partial<CriticalReportProfileConfig>> | null) => {
-    const entries = Object.entries(DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG).map(([key, fallback]) => {
-        const configured = value?.[key];
-        return [
-            key,
-            {
-                tabIds: normalizeTagArray(configured?.tabIds, fallback.tabIds || []),
-                fileFormats: normalizeTagArray(configured?.fileFormats, fallback.fileFormats || []),
-                isActive: typeof configured?.isActive === 'boolean' ? configured.isActive : fallback.isActive
-            }
-        ];
-    });
-
-    return Object.fromEntries(entries);
-};
-
-export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig => ({
-    sqlTags: normalizeTagArray(value?.sqlTags, DEFAULT_TAG_CONFIG.sqlTags),
-    appointmentTags: normalizeTagArray(value?.appointmentTags, DEFAULT_TAG_CONFIG.appointmentTags),
-    saleTags: normalizeTagArray(value?.saleTags, DEFAULT_TAG_CONFIG.saleTags),
-    unqualifiedTags: normalizeTagArray(value?.unqualifiedTags, DEFAULT_TAG_CONFIG.unqualifiedTags),
-    scoreHighTags: normalizeTagArray(value?.scoreHighTags, DEFAULT_TAG_CONFIG.scoreHighTags || []),
-    scoreMediumTags: normalizeTagArray(value?.scoreMediumTags, DEFAULT_TAG_CONFIG.scoreMediumTags || []),
-    scoreLowTags: normalizeTagArray(value?.scoreLowTags, DEFAULT_TAG_CONFIG.scoreLowTags || []),
-    humanFollowupQueueTags: normalizeTagArray(value?.humanFollowupQueueTags, DEFAULT_TAG_CONFIG.humanFollowupQueueTags || []),
-    humanAppointmentTargetLabel: String(value?.humanAppointmentTargetLabel || DEFAULT_TAG_CONFIG.humanAppointmentTargetLabel || '').trim() || DEFAULT_TAG_CONFIG.humanAppointmentTargetLabel,
-    humanSalesQueueTags: normalizeTagArray(value?.humanSalesQueueTags, DEFAULT_TAG_CONFIG.humanSalesQueueTags || []),
-    humanSaleTargetLabel: String(value?.humanSaleTargetLabel || DEFAULT_TAG_CONFIG.humanSaleTargetLabel || '').trim() || DEFAULT_TAG_CONFIG.humanSaleTargetLabel,
-    humanAppointmentFieldKeys: normalizeTagArray(value?.humanAppointmentFieldKeys, DEFAULT_TAG_CONFIG.humanAppointmentFieldKeys || []),
-    humanSaleFieldKeys: normalizeTagArray(value?.humanSaleFieldKeys, DEFAULT_TAG_CONFIG.humanSaleFieldKeys || []),
-    scoreAttributeKey: String(value?.scoreAttributeKey || DEFAULT_TAG_CONFIG.scoreAttributeKey || '').trim(),
-    scoreAppointmentLabels: normalizeTagArray(value?.scoreAppointmentLabels, DEFAULT_TAG_CONFIG.scoreAppointmentLabels || []),
-    scoreThresholds: normalizeScoreThresholds(value?.scoreThresholds),
-    excelExportFields: normalizeTagArray(value?.excelExportFields, DEFAULT_TAG_CONFIG.excelExportFields || []),
-    reportColumnFields: normalizeReportColumnFields(value?.reportColumnFields),
-    criticalReportProfiles: normalizeCriticalReportProfiles(value?.criticalReportProfiles)
-});
-
-const persistTagSettingsLocally = (config: TagConfig) => {
-    const serialized = JSON.stringify(normalizeTagConfig(config));
-    try {
-        localStorage.setItem(TAG_SETTINGS_STORAGE_KEY, serialized);
-    } catch (storageError) {
-        try {
-            localStorage.removeItem(TAG_SETTINGS_STORAGE_KEY);
-            localStorage.setItem(TAG_SETTINGS_STORAGE_KEY, serialized);
-        } catch (retryError) {
-            console.warn('[Dashboard] Could not persist tag settings in localStorage:', retryError);
-        }
-    }
-};
-
-const readLocalTagSettings = (): TagConfig | null => {
-    try {
-        const saved = localStorage.getItem(TAG_SETTINGS_STORAGE_KEY);
-        if (!saved) return null;
-        return normalizeTagConfig(JSON.parse(saved));
-    } catch (storageError) {
-        console.warn('[Dashboard] Could not read local tag settings:', storageError);
-        return null;
-    }
-};
+import { DEFAULT_TAG_CONFIG, normalizeTagConfig, type ContactAttributeDefinition, type DashboardFilters, type TagConfig } from '@/domain/dashboard';
+import type { ConversationLabelEvent } from '@/domain/conversation';
+import type { Inbox } from '@/domain/lead';
+import { DashboardDataContext } from './dashboardDataContextValue';
+import type { DashboardDataSource, ResolvedConversation } from './dashboardDataTypes';
 
 const POLL_INTERVAL_MS = 30000;
 const HISTORICAL_DETAIL_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 const HISTORICAL_DETAIL_REFRESH_LIMIT = 250;
 
-const DashboardDataContext = createContext<DashboardDataContextType>({
-    conversations: [],
-    labelEvents: [],
-    commercialAuditEvents: [],
-    inboxes: [],
-    labels: [],
-    contactAttributeDefinitions: [],
-    tagSettings: DEFAULT_TAG_CONFIG,
-    loading: true,
-    error: null,
-    dataSource: 'HYBRID',
-    lastLiveFetchAt: null,
-    liveError: null,
-    historicalError: null,
-    updateTagSettings: async () => { },
-    globalFilters: {},
-    setGlobalFilters: () => { },
-    replaceConversation: async () => { },
-    refetch: async () => { }
-});
-
-export const useDashboardContext = () => useContext(DashboardDataContext);
-
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error || 'Error desconocido');
 
-const isAbortError = (error: any) =>
-    error?.name === 'AbortError' ||
-    error?.name === 'CanceledError' ||
-    error?.message === 'canceled';
-
-const normalizeText = (value: unknown) => String(value || '').trim();
-
-const resolveAttributeScope = (definition: any) => {
-    const rawPayload = definition?.raw_payload || definition;
-    const directScope = normalizeText(definition?.attribute_scope || rawPayload?.attribute_scope).toLowerCase();
-    if (directScope.includes('conversation')) return 'conversation';
-    if (directScope.includes('contact')) return 'contact';
-
-    const directModel = normalizeText(definition?.attribute_model || rawPayload?.attribute_model_type).toLowerCase();
-    if (directModel.includes('conversation')) return 'conversation';
-    if (directModel.includes('contact')) return 'contact';
-
-    const numericModel = Number(rawPayload?.attribute_model ?? definition?.attribute_model);
-    if (!Number.isNaN(numericModel)) {
-        return numericModel === 0 ? 'conversation' : 'contact';
-    }
-
-    return 'contact';
+type ErrorLike = {
+    name?: string;
+    message?: string;
 };
 
-const normalizeAttributeDefinition = (definition: any): ChatwootAttributeDefinition | null => {
-    const rawPayload = definition?.raw_payload || definition;
-    const attribute_key = normalizeText(definition?.attribute_key || rawPayload?.attribute_key || rawPayload?.key);
-    if (!attribute_key) return null;
+type SupabaseInboxRow = {
+    chatwoot_inbox_id?: number | string;
+    id?: number | string;
+    name?: string;
+    channel_type?: string;
+    website_url?: string;
+    website_token?: string;
+    provider?: string;
+    slug?: string;
+};
 
-    const chatwoot_attribute_id = Number(definition?.chatwoot_attribute_id ?? rawPayload?.id);
+type ConversationLabelsRow = {
+    labels?: unknown;
+};
+
+const isErrorLike = (error: unknown): error is ErrorLike =>
+    typeof error === 'object' && error !== null;
+
+const isAbortError = (error: unknown) =>
+    isErrorLike(error) && (
+        error.name === 'AbortError' ||
+        error.name === 'CanceledError' ||
+        error.message === 'canceled'
+    );
+
+const normalizeSupabaseInbox = (inbox: SupabaseInboxRow): Inbox | null => {
+    const id = Number(inbox.chatwoot_inbox_id ?? inbox.id);
+    if (!Number.isFinite(id)) return null;
 
     return {
-        chatwoot_attribute_id: Number.isNaN(chatwoot_attribute_id) ? undefined : chatwoot_attribute_id,
-        attribute_key,
-        attribute_display_name: normalizeText(definition?.attribute_display_name || rawPayload?.attribute_display_name || attribute_key),
-        attribute_display_type: normalizeText(definition?.attribute_display_type || rawPayload?.attribute_display_type || rawPayload?.type),
-        attribute_description: normalizeText(definition?.attribute_description || rawPayload?.attribute_description || rawPayload?.description || rawPayload?.regex_cue),
-        attribute_scope: resolveAttributeScope(definition),
-        regex_pattern: definition?.regex_pattern ?? rawPayload?.regex_pattern ?? null,
-        regex_cue: definition?.regex_cue ?? rawPayload?.regex_cue ?? null,
-        raw_payload: rawPayload
+        id,
+        name: inbox.name,
+        channel_type: inbox.channel_type,
+        website_url: inbox.website_url,
+        website_token: inbox.website_token,
+        provider: inbox.provider,
+        slug: inbox.slug
     };
-};
-
-const dedupeAttributeDefinitions = (definitions: any[]) => {
-    const byKey = new Map<string, ChatwootAttributeDefinition>();
-
-    definitions.forEach((definition) => {
-        const normalizedDefinition = normalizeAttributeDefinition(definition);
-        if (!normalizedDefinition) return;
-
-        const existing = byKey.get(normalizedDefinition.attribute_key);
-        byKey.set(normalizedDefinition.attribute_key, {
-            ...existing,
-            ...normalizedDefinition
-        });
-    });
-
-    return Array.from(byKey.values())
-        .filter((definition) => definition.attribute_scope !== 'conversation')
-        .sort((a, b) =>
-            (a.attribute_display_name || a.attribute_key).localeCompare(b.attribute_display_name || b.attribute_key)
-        );
 };
 
 export const DashboardDataProvider = ({ children }: { children: ReactNode }) => {
     const [conversations, setConversations] = useState<MinifiedConversation[]>([]);
     const [labelEvents, setLabelEvents] = useState<ConversationLabelEvent[]>([]);
     const [commercialAuditEvents, setCommercialAuditEvents] = useState<CommercialAuditEvent[]>([]);
-    const [inboxes, setInboxes] = useState<any[]>([]);
+    const [inboxes, setInboxes] = useState<Inbox[]>([]);
     const [labels, setLabels] = useState<string[]>([]);
-    const [contactAttributeDefinitions, setContactAttributeDefinitions] = useState<ChatwootAttributeDefinition[]>([]);
+    const [contactAttributeDefinitions, setContactAttributeDefinitions] = useState<ContactAttributeDefinition[]>([]);
     const [tagSettings, setTagSettings] = useState<TagConfig>(DEFAULT_TAG_CONFIG);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -322,20 +88,20 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
     const isFetchingRef = useRef(false);
     const lastHistoricalDetailRefreshAtRef = useRef(0);
 
-    const updateVisualState = async (newData: MinifiedConversation[], persist = true) => {
+    const updateVisualState = useCallback(async (newData: MinifiedConversation[], persist = true) => {
         conversationsRef.current = newData;
         setConversations(newData);
 
         if (persist && newData.length > 0) {
             try {
-                await StorageService.saveConversations(newData, { replaceAll: true });
+                await indexedConversationRepository.saveConversations(newData, { replaceAll: true });
             } catch (storageError) {
                 console.warn('[Dashboard] IndexedDB cache write failed:', storageError);
             }
         }
-    };
+    }, []);
 
-    const replaceConversation = async (conversation: MinifiedConversation) => {
+    const replaceConversation = useCallback(async (conversation: MinifiedConversation) => {
         let nextConversations: MinifiedConversation[] = [];
 
         setConversations((prev) => {
@@ -355,11 +121,11 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         });
 
         try {
-            await StorageService.saveConversations(nextConversations, { replaceAll: true });
+            await indexedConversationRepository.saveConversations(nextConversations, { replaceAll: true });
         } catch (storageError) {
             console.warn('[Dashboard] IndexedDB cache write failed after conversation patch:', storageError);
         }
-    };
+    }, []);
 
     const resolvedConversations = useMemo<ResolvedConversation[]>(() => {
         const patched = applyLatestLabelState(conversations, labelEvents);
@@ -383,84 +149,25 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
         [labels, resolvedConversations, labelEvents]
     );
 
-    const updateTagSettings = async (newConfig: TagConfig) => {
+    const updateTagSettings = useCallback(async (newConfig: TagConfig) => {
         const normalizedConfig = normalizeTagConfig(newConfig);
         setTagSettings(normalizedConfig);
-        persistTagSettingsLocally(normalizedConfig);
+        await dashboardSettingsRepository.saveTagSettings(normalizedConfig);
+    }, []);
 
+    const loadTagSettings = useCallback(async () => {
+        const saved = await dashboardSettingsRepository.loadTagSettings();
+        if (saved) setTagSettings(saved);
+    }, []);
+
+    const fetchInboxes = useCallback(async (signal: AbortSignal) => {
         try {
-            const { error: cwError } = await supabase
-                .schema('cw')
-                .from('dashboard_tag_settings')
-                .upsert({ account_id: 0, settings: normalizedConfig, updated_at: new Date().toISOString() }, { onConflict: 'account_id' });
-
-            if (cwError) throw cwError;
+            const inboxesData = await chatwootRepository.fetchInboxes(signal);
+            setInboxes(Array.isArray(inboxesData)
+                ? inboxesData.filter((inbox): inbox is Inbox => Boolean(inbox && inbox.id && inbox.channel_type))
+                : []);
             return;
-        } catch (cwError) {
-            console.warn('[Dashboard] cw.dashboard_tag_settings unavailable, falling back to public:', cwError);
-        }
-
-        try {
-            const { error: publicError } = await supabase
-                .from('dashboard_tag_settings')
-                .upsert({ account_id: 0, settings: normalizedConfig, updated_at: new Date().toISOString() }, { onConflict: 'account_id' });
-            if (publicError) throw publicError;
-        } catch (publicError) {
-            console.error('Failed to save dashboard tag settings:', publicError);
-            throw publicError;
-        }
-    };
-
-    const loadTagSettings = async () => {
-        try {
-            const { data, error: cwError } = await supabase
-                .schema('cw')
-                .from('dashboard_tag_settings')
-                .select('settings')
-                .eq('account_id', 0)
-                .maybeSingle();
-
-            if (cwError) throw cwError;
-            if (data?.settings) {
-                const normalizedConfig = normalizeTagConfig(data.settings);
-                setTagSettings(normalizedConfig);
-                persistTagSettingsLocally(normalizedConfig);
-                return;
-            }
-        } catch (cwError) {
-            console.warn('[Dashboard] Could not load settings from cw schema:', cwError);
-        }
-
-        try {
-            const { data, error: publicError } = await supabase
-                .from('dashboard_tag_settings')
-                .select('settings')
-                .eq('account_id', 0)
-                .maybeSingle();
-
-            if (publicError) throw publicError;
-            if (data?.settings) {
-                const normalizedConfig = normalizeTagConfig(data.settings);
-                setTagSettings(normalizedConfig);
-                persistTagSettingsLocally(normalizedConfig);
-                return;
-            }
-        } catch (publicError) {
-            console.warn('[Dashboard] Cloud settings load failed, using local/default:', publicError);
-        }
-
-        const saved = readLocalTagSettings();
-        if (saved) {
-            setTagSettings(saved);
-        }
-    };
-
-    const fetchInboxes = async (signal: AbortSignal) => {
-        try {
-            const inboxesData = await chatwootService.getInboxes({ signal });
-            setInboxes(Array.isArray(inboxesData) ? inboxesData.filter(i => i && i.id && i.channel_type) : []);
-            return;
-        } catch (apiError: any) {
+        } catch (apiError: unknown) {
             if (!isAbortError(apiError)) {
                 console.warn('[Dashboard] Chatwoot inboxes failed, trying Supabase:', apiError);
             }
@@ -474,23 +181,17 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 .order('name', { ascending: true });
 
             if (dbError) throw dbError;
-            setInboxes((data || []).map((inbox: any) => ({
-                id: inbox.chatwoot_inbox_id,
-                name: inbox.name,
-                channel_type: inbox.channel_type,
-                website_url: inbox.website_url,
-                website_token: inbox.website_token,
-                provider: inbox.provider,
-                slug: inbox.slug
-            })));
+            setInboxes(((data || []) as SupabaseInboxRow[])
+                .map(normalizeSupabaseInbox)
+                .filter((inbox): inbox is Inbox => Boolean(inbox)));
         } catch (dbError) {
             console.error('Failed to fetch inboxes from Supabase:', dbError);
         }
-    };
+    }, []);
 
-    const fetchLabels = async (signal: AbortSignal) => {
+    const fetchLabels = useCallback(async (signal: AbortSignal) => {
         try {
-            const labelsData = await chatwootService.getLabels({ signal });
+            const labelsData = await chatwootRepository.fetchLabels(signal);
             const normalizedApiLabels = Array.isArray(labelsData)
                 ? Array.from(new Set(labelsData.filter(l => typeof l === 'string').map(l => l.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b))
                 : [];
@@ -498,7 +199,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 setLabels(normalizedApiLabels);
                 return;
             }
-        } catch (labelsError: any) {
+        } catch (labelsError: unknown) {
             if (!isAbortError(labelsError)) {
                 console.warn('[Dashboard] Chatwoot labels failed, trying fallback:', labelsError);
             }
@@ -513,7 +214,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             if (dbError) throw dbError;
 
             const fallbackLabels = Array.from(new Set([
-                ...(data || []).flatMap((row: any) => Array.isArray(row?.labels) ? row.labels : []),
+                ...((data || []) as ConversationLabelsRow[]).flatMap((row) => Array.isArray(row.labels) ? row.labels : []),
                 ...conversationsRef.current.flatMap((conv) => Array.isArray(conv?.labels) ? conv.labels : [])
             ].map(label => String(label || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 
@@ -527,17 +228,16 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                     .filter(Boolean)
             )).sort((a, b) => a.localeCompare(b)));
         }
-    };
+    }, []);
 
-    const fetchContactAttributeDefinitions = async (signal: AbortSignal) => {
+    const fetchContactAttributeDefinitions = useCallback(async (signal: AbortSignal) => {
         try {
-            const apiDefinitions = await chatwootService.getAttributeDefinitions({ signal });
-            const normalizedDefinitions = dedupeAttributeDefinitions(apiDefinitions || []);
+            const normalizedDefinitions = await chatwootRepository.fetchContactAttributeDefinitions(signal);
             if (normalizedDefinitions.length > 0) {
                 setContactAttributeDefinitions(normalizedDefinitions);
                 return;
             }
-        } catch (attributeError: any) {
+        } catch (attributeError: unknown) {
             if (!isAbortError(attributeError)) {
                 console.warn('[Dashboard] Chatwoot attribute definitions failed, trying Supabase:', attributeError);
             }
@@ -552,42 +252,42 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 .order('attribute_display_name', { ascending: true });
 
             if (dbError) throw dbError;
-            setContactAttributeDefinitions(dedupeAttributeDefinitions(data || []));
+            setContactAttributeDefinitions(dedupeContactAttributeDefinitions((data || []) as unknown[]));
         } catch (dbError) {
             console.error('Failed to fetch contact attribute definitions from Supabase:', dbError);
             setContactAttributeDefinitions([]);
         }
-    };
+    }, []);
 
-    const fetchLabelEvents = async () => {
+    const fetchLabelEvents = useCallback(async () => {
         try {
-            const events = await LabelEventService.fetchLabelEvents();
+            const events = await labelEventClient.fetchLabelEvents();
             setLabelEvents(events);
         } catch (eventsError) {
             console.warn('[Dashboard] Could not load conversation label events:', eventsError);
             setLabelEvents([]);
         }
-    };
+    }, []);
 
-    const fetchCommercialAuditEvents = async () => {
+    const fetchCommercialAuditEvents = useCallback(async () => {
         try {
-            const events = await CommercialAuditService.fetchAuditEvents();
+            const events = await commercialAuditClient.fetchAuditEvents();
             setCommercialAuditEvents(events);
         } catch (eventsError) {
             console.warn('[Dashboard] Could not load commercial audit events:', eventsError);
             setCommercialAuditEvents([]);
         }
-    };
+    }, []);
 
-    const previousLiveFallback = () => {
-        const liveWindow = HybridDashboardService.getLiveWindow();
+    const previousLiveFallback = useCallback(() => {
+        const liveWindow = hybridConversationRepository.getLiveWindow();
         return conversationsRef.current.filter((conv) => {
             const timestamp = conv.timestamp || conv.created_at || 0;
             return timestamp >= liveWindow.liveStartUnix;
         });
-    };
+    }, []);
 
-    const refreshHybridData = async (signal: AbortSignal, showLoading = false) => {
+    const refreshHybridData = useCallback(async (signal: AbortSignal, showLoading = false) => {
         if (isFetchingRef.current) return;
         isFetchingRef.current = true;
 
@@ -595,8 +295,8 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
 
         try {
             const [historicalResult, liveResult] = await Promise.allSettled([
-                HybridDashboardService.fetchHistoricalBeforeLiveWindow(),
-                HybridDashboardService.fetchLiveConversations(signal)
+                hybridConversationRepository.fetchHistoricalBeforeLiveWindow(),
+                hybridConversationRepository.fetchLiveConversations(signal)
             ]);
 
             if (signal.aborted) return;
@@ -637,7 +337,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
 
                 if (staleHistoricalIds.length > 0) {
                     try {
-                        const refreshedHistoricalSnapshots = await HybridDashboardService.refreshConversationDetailsById(
+                        const refreshedHistoricalSnapshots = await hybridConversationRepository.refreshConversationDetailsById(
                             staleHistoricalIds,
                             {
                                 signal,
@@ -669,7 +369,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             else setDataSource('SUPABASE_ONLY');
 
             setError(null);
-        } catch (unexpectedError: any) {
+        } catch (unexpectedError: unknown) {
             if (!isAbortError(unexpectedError)) {
                 setError(errorMessage(unexpectedError));
             }
@@ -677,9 +377,9 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             isFetchingRef.current = false;
             setLoading(false);
         }
-    };
+    }, [fetchCommercialAuditEvents, fetchLabelEvents, previousLiveFallback, updateVisualState]);
 
-    const initData = async () => {
+    const initData = useCallback(async () => {
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
@@ -695,7 +395,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
             await loadTagSettings();
 
             try {
-                const cachedConversations = await StorageService.loadConversations();
+                const cachedConversations = await indexedConversationRepository.loadConversations();
                 if (cachedConversations.length > 0 && !signal.aborted) {
                     await updateVisualState(cachedConversations.map(c => ({ ...c, source: c.source || 'cache' })), false);
                 }
@@ -711,13 +411,22 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 fetchCommercialAuditEvents(),
                 refreshHybridData(signal, conversationsRef.current.length === 0)
             ]);
-        } catch (initError: any) {
+        } catch (initError: unknown) {
             if (!isAbortError(initError)) {
                 setError(errorMessage(initError));
                 setLoading(false);
             }
         }
-    };
+    }, [
+        fetchCommercialAuditEvents,
+        fetchContactAttributeDefinitions,
+        fetchInboxes,
+        fetchLabelEvents,
+        fetchLabels,
+        loadTagSettings,
+        refreshHybridData,
+        updateVisualState
+    ]);
 
     useEffect(() => {
         initData();
@@ -735,7 +444,7 @@ export const DashboardDataProvider = ({ children }: { children: ReactNode }) => 
                 abortControllerRef.current.abort();
             }
         };
-    }, []);
+    }, [initData, refreshHybridData]);
 
     return (
         <DashboardDataContext.Provider value={{

@@ -17,7 +17,7 @@ import {
     LabelList
 } from "recharts";
 
-import { useDashboardContext } from "@/context/DashboardDataContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
 
 const MetricInfo = ({ text }: { text: string }) => (
     <Tooltip>

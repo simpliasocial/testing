@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { useDashboardContext } from "@/context/DashboardDataContext";
-import { useAuth } from "@/context/AuthContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
+import type { ResolvedConversation } from "@/context/dashboardDataTypes";
+import { useAuth } from "@/context/useAuth";
 import { useDashboardData } from "@/hooks/useDashboardData";
+import type { HumanAppointmentMode } from "@/application/dashboard";
 import { CalendarCheck2, ArrowRightLeft, DollarSign, Loader2, TrendingUp } from "lucide-react";
 import {
     Select,
@@ -44,16 +46,24 @@ const modeCopy: Record<string, { label: string; description: string }> = {
     }
 };
 
-const parseTs = (ts: any): Date => {
+const parseTs = (ts: unknown): Date => {
     if (!ts) return new Date(0);
+    if (ts instanceof Date) return ts;
     const numeric = Number(ts);
-    if (Number.isNaN(numeric)) return new Date(ts);
+    if (Number.isNaN(numeric)) return new Date(String(ts));
     return new Date(numeric < 10000000000 ? numeric * 1000 : numeric);
 };
 
-const getCreatedDate = (conv: any): Date => parseTs(conv.created_at || conv.timestamp);
+const getCreatedDate = (conv: ResolvedConversation): Date => parseTs(conv.created_at || conv.timestamp);
 
-const labelsInclude = (conv: any, label: string) => Array.isArray(conv?.labels) && conv.labels.includes(label);
+const labelsInclude = (conv: Pick<ResolvedConversation, "labels">, label: string) =>
+    Array.isArray(conv?.labels) && conv.labels.includes(label);
+
+const getTooltipSales = (item: unknown) => {
+    const payload = (item as { payload?: { sales?: unknown } })?.payload;
+    const sales = Number(payload?.sales || 0);
+    return Number.isFinite(sales) ? sales : 0;
+};
 
 const PerformanceLayer = () => {
     const { globalFilters, tagSettings, labels, conversations, labelEvents } = useDashboardContext();
@@ -63,7 +73,10 @@ const PerformanceLayer = () => {
     });
     const { role } = useAuth();
 
-    const humanFollowupQueueTags = tagSettings.humanFollowupQueueTags || ['seguimiento_humano'];
+    const humanFollowupQueueTags = useMemo(
+        () => tagSettings.humanFollowupQueueTags || ['seguimiento_humano'],
+        [tagSettings.humanFollowupQueueTags]
+    );
     const humanAppointmentTargetLabel = tagSettings.humanAppointmentTargetLabel || 'cita_agendada_humano';
     const humanSaleTargetLabel = tagSettings.humanSaleTargetLabel || 'venta_exitosa';
     const defaultFromLabel = humanFollowupQueueTags[0] || "seguimiento_humano";
@@ -124,11 +137,11 @@ const PerformanceLayer = () => {
         const followupCurrent = filteredConversations.filter((conv) => labelsInclude(conv, transitionFromLabel)).length;
 
         const sortedLabelEvents = [...(labelEvents || [])].sort(
-            (a: any, b: any) => parseTs(a.occurred_at).getTime() - parseTs(b.occurred_at).getTime()
+            (a, b) => parseTs(a.occurred_at).getTime() - parseTs(b.occurred_at).getTime()
         );
         const trackingStartedAt = sortedLabelEvents[0]?.occurred_at || null;
         const trackingStartDate = trackingStartedAt ? parseTs(trackingStartedAt) : null;
-        const humanAppointmentMode: "exact" | "mixed" | "estimated_legacy" = !trackingStartDate
+        const humanAppointmentMode: HumanAppointmentMode = !trackingStartDate
             ? "estimated_legacy"
             : globalStart < trackingStartDate && globalEnd >= trackingStartDate
                 ? "mixed"
@@ -136,7 +149,7 @@ const PerformanceLayer = () => {
                     ? "estimated_legacy"
                     : "exact";
 
-        const filteredLabelEvents = sortedLabelEvents.filter((event: any) => {
+        const filteredLabelEvents = sortedLabelEvents.filter((event) => {
             const eventDate = parseTs(event.occurred_at);
             if (Number.isNaN(eventDate.getTime()) || eventDate < globalStart || eventDate > globalEnd) return false;
 
@@ -149,7 +162,7 @@ const PerformanceLayer = () => {
         });
 
         const exactHumanAppointmentIds = new Set<number>();
-        filteredLabelEvents.forEach((event: any) => {
+        filteredLabelEvents.forEach((event) => {
             const added = Array.isArray(event.added_labels) ? event.added_labels : [];
             const removed = Array.isArray(event.removed_labels) ? event.removed_labels : [];
             if (added.includes(transitionToLabel) && removed.includes(transitionFromLabel)) {
@@ -357,9 +370,9 @@ const PerformanceLayer = () => {
                                     <YAxis tickFormatter={(value) => `$${value}`} />
                                     <Tooltip
                                         cursor={{ fill: "transparent" }}
-                                        formatter={(value: number, name: string, item: any) => {
+                                        formatter={(value: number, name: string, item: unknown) => {
                                             if (name === "salesVolume") return [formatCurrency(value), "Monto vendido"];
-                                            return [item?.payload?.sales || 0, "Ventas"];
+                                            return [getTooltipSales(item), "Ventas"];
                                         }}
                                     />
                                     <Bar dataKey="salesVolume" fill="#059669" radius={[6, 6, 0, 0]}>

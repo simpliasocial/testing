@@ -1,105 +1,32 @@
-import { supabase } from '@/lib/supabase';
 import {
     getLiveWindow,
     getGuayaquilDateString,
-    getGuayaquilHour,
-    getGuayaquilHourLabel,
     guayaquilEndOfDayIso,
     guayaquilStartOfDayIso,
     toUnixSeconds
 } from '@/lib/guayaquilTime';
 import { chatwootService } from './ChatwootService';
+import { mapChatwootConversationToMinified } from './ConversationMapper';
+import type { IncomingMessageTrafficEvent, MinifiedConversation } from '@/domain/conversation';
 import {
-    mapChatwootConversationToMinified,
-    mapSupabaseConversationRowToMinified
-} from './ConversationMapper';
-import { MinifiedConversation } from './StorageService';
+    conversationActivityTimestamp as activityTimestamp,
+    uniqueConversationsById as uniqueById,
+} from '@/domain/conversation';
+import type { UnknownRecord } from '@/domain/common/types';
+import type { ConversationMessage } from '@/domain/lead';
+import { supabaseDashboardReadClient } from '@/infrastructure/supabase/SupabaseDashboardReadClient';
+import {
+    isIncomingCustomerMessage,
+    isPublicMessage,
+    mapIncomingMessageEvent,
+    messageTimestamp,
+    uniqueIncomingEvents,
+} from '@/shared/conversation/messageTraffic';
 
 const MAX_CHATWOOT_PAGES = 200;
-const SUPABASE_PAGE_SIZE = 1000;
 const DETAIL_REFRESH_BATCH_SIZE = 5;
 
-export interface IncomingMessageTrafficEvent {
-    id: string;
-    conversationId: number;
-    inboxId?: number;
-    createdAtIso: string;
-    createdAtUnix: number;
-    date: string;
-    hour: number;
-    hourLabel: string;
-    source: 'api' | 'supabase';
-}
-
-const activityTimestamp = (conv: MinifiedConversation) => conv.timestamp || conv.created_at || 0;
-
-const uniqueById = (conversations: MinifiedConversation[]) => {
-    const map = new Map<number, MinifiedConversation>();
-    conversations.forEach((conv) => {
-        if (conv.id) map.set(conv.id, conv);
-    });
-    return Array.from(map.values()).sort((a, b) => activityTimestamp(b) - activityTimestamp(a));
-};
-
-const toIsoFromTimestamp = (value: any) => {
-    if (!value) return '';
-    const numeric = Number(value);
-    if (!Number.isNaN(numeric)) {
-        return new Date(numeric < 10000000000 ? numeric * 1000 : numeric).toISOString();
-    }
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '' : date.toISOString();
-};
-
-const messageTimestamp = (message: any) => {
-    const iso = toIsoFromTimestamp(message?.created_at_chatwoot || message?.created_at || message?.timestamp);
-    return iso ? Math.floor(new Date(iso).getTime() / 1000) : 0;
-};
-
-const isIncomingCustomerMessage = (message: any) =>
-    message?.message_direction === 'incoming' ||
-    Number(message?.message_type) === 0 ||
-    String(message?.message_type || '').toLowerCase() === 'incoming' ||
-    String(message?.sender_type || '').toLowerCase() === 'contact';
-
-const isPublicMessage = (message: any) =>
-    !message?.private && !message?.is_private;
-
-const mapIncomingMessageEvent = (
-    message: any,
-    source: 'api' | 'supabase',
-    fallbackConversationId?: number,
-    fallbackInboxId?: number
-): IncomingMessageTrafficEvent | null => {
-    const createdAtIso = toIsoFromTimestamp(message?.created_at_chatwoot || message?.created_at || message?.timestamp);
-    if (!createdAtIso) return null;
-
-    const date = new Date(createdAtIso);
-    if (Number.isNaN(date.getTime())) return null;
-
-    const conversationId = Number(message?.chatwoot_conversation_id || message?.conversation_id || fallbackConversationId);
-    const inboxId = Number(message?.chatwoot_inbox_id || message?.inbox_id || fallbackInboxId);
-
-    return {
-        id: String(message?.chatwoot_message_id || message?.id || `${source}_${conversationId}_${date.getTime()}`),
-        conversationId,
-        inboxId: Number.isFinite(inboxId) ? inboxId : undefined,
-        createdAtIso,
-        createdAtUnix: Math.floor(date.getTime() / 1000),
-        date: getGuayaquilDateString(date),
-        hour: getGuayaquilHour(date),
-        hourLabel: getGuayaquilHourLabel(date),
-        source
-    };
-};
-
 const dateToGuayaquilDay = (date?: Date) => getGuayaquilDateString(date || new Date());
-
-const uniqueIncomingEvents = (events: IncomingMessageTrafficEvent[]) => {
-    const map = new Map<string, IncomingMessageTrafficEvent>();
-    events.forEach((event) => map.set(event.id, event));
-    return Array.from(map.values()).sort((a, b) => a.createdAtUnix - b.createdAtUnix);
-};
 
 const runInBatches = async <T, R>(items: T[], batchSize: number, worker: (item: T) => Promise<R>) => {
     const results: R[] = [];
@@ -112,6 +39,12 @@ const runInBatches = async <T, R>(items: T[], batchSize: number, worker: (item: 
 
 const uniqueIds = (values: number[]) =>
     Array.from(new Set(values.filter((value) => Number.isFinite(value) && value > 0)));
+
+type MessageWithConversationContext = {
+    message: ConversationMessage;
+    conversationId: number;
+    inboxId?: number;
+};
 
 export const mergeConversationsPreferApi = (
     historical: MinifiedConversation[],
@@ -135,11 +68,11 @@ export const HybridDashboardService = {
         search?: string;
         page?: number;
         paginated?: boolean;
-    }): Promise<{ payload: MinifiedConversation[]; meta: any }> {
+    }): Promise<{ payload: MinifiedConversation[]; meta: UnknownRecord }> {
         const payload: MinifiedConversation[] = [];
         let page = params.page || 1;
-        let maxPages = params.paginated ? page : MAX_CHATWOOT_PAGES;
-        let apiMeta: any = {};
+        const maxPages = params.paginated ? page : MAX_CHATWOOT_PAGES;
+        let apiMeta: UnknownRecord = {};
         const seenConversationIds = new Set<number>();
 
         while (page <= maxPages && !params.signal?.aborted) {
@@ -254,43 +187,7 @@ export const HybridDashboardService = {
         pageSize?: number;
         importedOnly?: boolean;
     } = {}): Promise<{ payload: MinifiedConversation[]; count: number }> {
-        const pageSize = params.pageSize || SUPABASE_PAGE_SIZE;
-        const payload: MinifiedConversation[] = [];
-        let page = params.page || 1;
-        let totalCount = 0;
-
-        while (true) {
-            const from = (page - 1) * pageSize;
-            const to = from + pageSize - 1;
-
-            let query = supabase
-                .schema('cw')
-                .from('conversations_current')
-                .select('*', { count: 'exact' });
-
-            if (params.beforeIso) query = query.lt('created_at_chatwoot', params.beforeIso);
-            if (params.sinceIso) query = query.gte('created_at_chatwoot', params.sinceIso);
-            if (params.untilIso) query = query.lte('created_at_chatwoot', params.untilIso);
-            if (params.importedOnly) query = query.lt('chatwoot_conversation_id', 0);
-            if (params.search) {
-                query = query.or(`nombre_completo.ilike.%${params.search}%,celular.ilike.%${params.search}%,correo.ilike.%${params.search}%,meta->sender->>name.ilike.%${params.search}%`);
-            }
-
-            const { data, error, count } = await query
-                .order('created_at_chatwoot', { ascending: false })
-                .range(from, to);
-
-            if (error) throw error;
-
-            totalCount = count || totalCount;
-            const rows = data || [];
-            payload.push(...rows.map(mapSupabaseConversationRowToMinified));
-
-            if (params.page || rows.length < pageSize) break;
-            page += 1;
-        }
-
-        return { payload: uniqueById(payload), count: totalCount || payload.length };
+        return supabaseDashboardReadClient.fetchConversations(params);
     },
 
     async fetchHistoricalBeforeLiveWindow() {
@@ -314,44 +211,7 @@ export const HybridDashboardService = {
         untilIso: string;
         selectedInboxes?: number[];
     }): Promise<IncomingMessageTrafficEvent[]> {
-        const pageSize = SUPABASE_PAGE_SIZE;
-        const payload: IncomingMessageTrafficEvent[] = [];
-        let page = 1;
-
-        while (true) {
-            const from = (page - 1) * pageSize;
-            const to = from + pageSize - 1;
-
-            let query = supabase
-                .schema('cw')
-                .from('messages')
-                .select('chatwoot_message_id, chatwoot_conversation_id, chatwoot_inbox_id, message_direction, message_type, sender_type, is_private, created_at_chatwoot')
-                .eq('message_direction', 'incoming')
-                .eq('is_private', false)
-                .gte('created_at_chatwoot', params.sinceIso)
-                .lte('created_at_chatwoot', params.untilIso);
-
-            if (params.selectedInboxes && params.selectedInboxes.length > 0) {
-                query = query.in('chatwoot_inbox_id', params.selectedInboxes);
-            }
-
-            const { data, error } = await query
-                .order('created_at_chatwoot', { ascending: true })
-                .range(from, to);
-
-            if (error) throw error;
-
-            const rows = data || [];
-            rows.forEach((message: any) => {
-                const event = mapIncomingMessageEvent(message, 'supabase');
-                if (event) payload.push(event);
-            });
-
-            if (rows.length < pageSize) break;
-            page += 1;
-        }
-
-        return payload;
+        return supabaseDashboardReadClient.fetchIncomingMessageEvents(params);
     },
 
     async fetchLiveIncomingMessageEvents(params: {
@@ -370,17 +230,21 @@ export const HybridDashboardService = {
             !params.selectedInboxes?.length || params.selectedInboxes.includes(Number(conv.inbox_id))
         );
 
-        const messageLists = await runInBatches(filteredConversations, 5, async (conv) => {
+        const messageLists = await runInBatches<MinifiedConversation, MessageWithConversationContext[]>(
+            filteredConversations,
+            5,
+            async (conv) => {
             const existingMessages = Array.isArray(conv.messages) && conv.messages.length > 0
                 ? conv.messages
                 : await chatwootService.getMessages(conv.id, { signal: params.signal });
 
-            return existingMessages.map((message: any) => ({
+            return existingMessages.map((message) => ({
                 message,
                 conversationId: conv.id,
                 inboxId: conv.inbox_id
             }));
-        });
+            }
+        );
 
         const events: IncomingMessageTrafficEvent[] = [];
         messageLists.flat().forEach(({ message, conversationId, inboxId }) => {

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/context/useAuth";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -29,10 +29,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import {
-    ChatwootAttributeDefinition,
-    useDashboardContext
-} from "@/context/DashboardDataContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
+import type { ResolvedConversation } from "@/context/dashboardDataTypes";
 import {
     formatDateTime,
     getConversationMessageRole,
@@ -52,7 +50,7 @@ import {
     normalize,
 } from "@/lib/leadDisplay";
 import { chatwootService } from "@/services/ChatwootService";
-import { SupabaseService } from "@/services/SupabaseService";
+import { supabaseHistoricalClient } from "@/infrastructure/supabase/SupabaseHistoricalClient";
 import { formatBusinessLabel, formatFieldLabel } from "@/lib/displayCopy";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { cn } from "@/lib/utils";
@@ -72,6 +70,16 @@ import {
     WINDOWED_LIST_VISIBLE_ROWS,
     WINDOWED_TABLE_MAX_HEIGHT_PX,
 } from "@/lib/windowedList";
+import {
+    buildScoreAttributeOptions,
+    extractLeadLabels,
+    parseDate,
+    percent,
+    resolveLeadCampaign,
+    scoreAverage,
+    unique,
+    type ScoreDimension,
+} from "@/features/scoring/model/leadScoringModel";
 import {
     Bar,
     BarChart,
@@ -99,18 +107,10 @@ import {
     Target,
     TrendingUp
 } from "lucide-react";
-
-type ScoreDimension = "label" | "campaign";
-
-interface ScoreAttributeOption {
-    key: string;
-    label: string;
-    description: string;
-    type: string;
-}
+import type { ConversationMessage, Inbox } from "@/domain/lead";
 
 interface PreparedLead {
-    lead: any;
+    lead: ResolvedConversation;
     score: number | null;
     bucket: ScoreBucket;
     bucketLabel: string;
@@ -121,49 +121,15 @@ interface PreparedLead {
     attributeLabel: string;
 }
 
-const unique = (values: string[]) =>
-    Array.from(new Set(values.map(value => value?.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-
 const BUCKET_ORDER = SCORE_BUCKET_ORDER;
 const BUCKET_COPY = SCORE_BUCKET_COPY;
 const normalizeThresholds = normalizeScoreThresholds;
 
-const parseDate = (value: unknown) => {
-    if (!value) return new Date(0);
-    const numeric = Number(value);
-    if (!Number.isNaN(numeric)) return new Date(numeric < 10000000000 ? numeric * 1000 : numeric);
-    const date = new Date(String(value));
-    return Number.isNaN(date.getTime()) ? new Date(0) : date;
+const getTooltipPayloadNumber = (item: unknown, key: string) => {
+    const payload = (item as { payload?: Record<string, unknown> })?.payload;
+    const value = Number(payload?.[key] || 0);
+    return Number.isFinite(value) ? value : 0;
 };
-
-const scoreAverage = (items: PreparedLead[]) =>
-    items.length > 0 ? Math.round((items.reduce((sum, item) => sum + (item.score || 0), 0) / items.length) * 10) / 10 : 0;
-
-const percent = (count: number, total: number) =>
-    total > 0 ? Math.round((count / total) * 100) : 0;
-
-const isNumericAttributeDefinition = (definition: ChatwootAttributeDefinition) => {
-    const type = String(definition.attribute_display_type || "").trim().toLowerCase();
-    return ["number", "integer", "decimal", "float"].some(token => type.includes(token));
-};
-
-const toAttributeOption = (definition: ChatwootAttributeDefinition): ScoreAttributeOption | null => {
-    const key = String(definition.attribute_key || "").trim();
-    if (!key) return null;
-
-    return {
-        key,
-        label: formatFieldLabel(definition.attribute_display_name || key),
-        description: String(definition.attribute_description || "").trim(),
-        type: String(definition.attribute_display_type || "number").trim()
-    };
-};
-
-const extractLeadLabels = (lead: any) =>
-    unique([...(lead?.resolvedLabels || []), ...(lead?.labels || [])].map(label => String(label || "")));
-
-const resolveLeadCampaign = (lead: any) =>
-    String(lead?.resolvedAttrs?.utm_campaign || lead?.resolvedAttrs?.campana || lead?.resolvedAttrs?.origen || "").trim() || "Sin campaña";
 
 const EmptyState = ({ text }: { text: string }) => (
     <div className="flex min-h-[220px] items-center justify-center rounded-lg border border-dashed px-4 text-center text-sm text-muted-foreground">
@@ -197,12 +163,12 @@ const LeadScoringLayer = () => {
     const [appointmentLabelsDraft, setAppointmentLabelsDraft] = useState<string[]>([]);
     const [thresholdHotDraft, setThresholdHotDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.hotMin));
     const [thresholdWarmDraft, setThresholdWarmDraft] = useState(String(DEFAULT_SCORE_THRESHOLDS.warmMin));
-    const [viewingLead, setViewingLead] = useState<any | null>(null);
-    const [historyMessages, setHistoryMessages] = useState<any[]>([]);
+    const [viewingLead, setViewingLead] = useState<ResolvedConversation | null>(null);
+    const [historyMessages, setHistoryMessages] = useState<ConversationMessage[]>([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
 
     const inboxMap = useMemo(
-        () => new Map(inboxes.map((inbox: any) => [Number(inbox.id), inbox])),
+        () => new Map<number, Inbox>(inboxes.map((inbox) => [Number(inbox.id), inbox])),
         [inboxes]
     );
 
@@ -216,23 +182,10 @@ const LeadScoringLayer = () => {
         [tagSettings.scoreThresholds]
     );
 
-    const scoreAttributeOptions = useMemo(() => {
-        const byKey = new Map<string, ScoreAttributeOption>();
-
-        contactAttributeDefinitions
-            .filter(isNumericAttributeDefinition)
-            .forEach((definition) => {
-                const option = toAttributeOption(definition);
-                if (!option) return;
-                byKey.set(option.key, option);
-            });
-
-        return Array.from(byKey.values()).sort((a, b) => {
-            if (a.key === "score_interes") return -1;
-            if (b.key === "score_interes") return 1;
-            return a.label.localeCompare(b.label);
-        });
-    }, [contactAttributeDefinitions]);
+    const scoreAttributeOptions = useMemo(
+        () => buildScoreAttributeOptions(contactAttributeDefinitions),
+        [contactAttributeDefinitions]
+    );
 
     const defaultScoreAttributeKey = useMemo(
         () => scoreAttributeOptions.find(option => option.key === "score_interes")?.key || scoreAttributeOptions[0]?.key || "",
@@ -338,16 +291,16 @@ const LeadScoringLayer = () => {
         setThresholdWarmDraft(String(DEFAULT_SCORE_THRESHOLDS.warmMin));
     };
 
-    const handleOpenHistory = async (lead: any) => {
+    const handleOpenHistory = async (lead: ResolvedConversation) => {
         setViewingLead(lead);
         setHistoryMessages([]);
         setLoadingHistory(true);
 
         try {
-            let history: any[] = [];
+            let history: ConversationMessage[] = [];
             const isLivePreferred = lead.source !== "supabase";
 
-            const fetchApiMessages = async () => {
+            const fetchApiMessages = async (): Promise<ConversationMessage[]> => {
                 try {
                     return await chatwootService.getMessages(lead.id);
                 } catch (apiError) {
@@ -356,9 +309,9 @@ const LeadScoringLayer = () => {
                 }
             };
 
-            const fetchSupabaseMessages = async () => {
+            const fetchSupabaseMessages = async (): Promise<ConversationMessage[]> => {
                 try {
-                    return await SupabaseService.getHistoricalMessages(lead.id);
+                    return await supabaseHistoricalClient.getHistoricalMessages(lead.id);
                 } catch (dbError) {
                     console.warn("[LeadScoringLayer] Supabase history failed:", dbError);
                     return [];
@@ -377,8 +330,9 @@ const LeadScoringLayer = () => {
                 }
             }
 
-            if ((!history || history.length === 0) && getLastMessage(lead)) {
-                history = [getLastMessage(lead)];
+            const lastMessage = getLastMessage(lead);
+            if ((!history || history.length === 0) && lastMessage) {
+                history = [lastMessage];
             }
 
             setHistoryMessages(getDisplayMessages(history || []));
@@ -421,7 +375,7 @@ const LeadScoringLayer = () => {
     const preparedLeads = useMemo<PreparedLead[]>(() => {
         const selectedAttributeLabel = selectedScoreAttribute?.label || formatFieldLabel(activeScoreAttributeKey) || "Sin campo";
 
-        return dateFilteredLeads.map((lead: any) => {
+        return dateFilteredLeads.map((lead) => {
             const inbox = lead.inbox_id ? inboxMap.get(Number(lead.inbox_id)) : null;
             const score = activeScoreAttributeKey ? parseNumericScore(lead.resolvedAttrs[activeScoreAttributeKey]) : null;
             const bucket = bucketFromScore(score, activeScoreThresholds);
@@ -492,8 +446,8 @@ const LeadScoringLayer = () => {
     const scoredLeadCount = scoredFilteredLeads.length;
     const filteredMissingScoreCount = filteredLeads.filter(item => item.score === null).length;
 
-    const isAppointmentLead = (lead: any) => {
-        const hasAppointmentLabel = activeAppointmentLabels.length > 0 && lead.resolvedLabels.some((l: string) => activeAppointmentLabels.includes(l));
+    const isAppointmentLead = (lead: ResolvedConversation) => {
+        const hasAppointmentLabel = activeAppointmentLabels.length > 0 && lead.resolvedLabels.some((label) => activeAppointmentLabels.includes(label));
         const hasSale = lead.resolvedStage === 'sale';
         return hasAppointmentLabel || hasSale;
     };
@@ -949,7 +903,7 @@ const LeadScoringLayer = () => {
                                         <CartesianGrid strokeDasharray="3 3" horizontal vertical={false} strokeOpacity={0.12} />
                                         <XAxis type="number" domain={scoreDomain} />
                                         <YAxis dataKey="name" type="category" width={108} axisLine={false} tickLine={false} />
-                                        <Tooltip formatter={(value: number, _name: string, item: any) => [`${value}`, `${item?.payload?.leads || 0} leads`]} />
+                                        <Tooltip formatter={(value: number, _name: string, item: unknown) => [`${value}`, `${getTooltipPayloadNumber(item, "leads")} leads`]} />
                                         <Bar dataKey="score" fill="#243d90" radius={[0, 6, 6, 0]}>
                                             <LabelList dataKey="score" position="right" style={{ fontWeight: 700 }} />
                                         </Bar>
@@ -983,7 +937,7 @@ const LeadScoringLayer = () => {
                                         <CartesianGrid strokeDasharray="3 3" horizontal vertical={false} strokeOpacity={0.12} />
                                         <XAxis type="number" domain={scoreDomain} />
                                         <YAxis dataKey="name" type="category" width={128} axisLine={false} tickLine={false} />
-                                        <Tooltip formatter={(value: number, _name: string, item: any) => [`${value}`, `${item?.payload?.leads || 0} leads`]} />
+                                        <Tooltip formatter={(value: number, _name: string, item: unknown) => [`${value}`, `${getTooltipPayloadNumber(item, "leads")} leads`]} />
                                         <Bar dataKey="score" fill="#0f9d76" radius={[0, 6, 6, 0]}>
                                             <LabelList dataKey="score" position="right" style={{ fontWeight: 700 }} />
                                         </Bar>
@@ -1006,7 +960,7 @@ const LeadScoringLayer = () => {
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.12} />
                                         <XAxis dataKey="name" axisLine={false} tickLine={false} />
                                         <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-                                        <Tooltip formatter={(value: number, _name: string, item: any) => [`${value}%`, `${item?.payload?.converted || 0} de ${item?.payload?.total || 0}`]} />
+                                        <Tooltip formatter={(value: number, _name: string, item: unknown) => [`${value}%`, `${getTooltipPayloadNumber(item, "converted")} de ${getTooltipPayloadNumber(item, "total")}`]} />
                                         <Bar dataKey="conversion" radius={[6, 6, 0, 0]}>
                                             {conversionByBucket.map(row => <Cell key={row.bucket} fill={row.fill} />)}
                                             <LabelList dataKey="conversion" position="top" formatter={(value: number) => `${value}%`} style={{ fontWeight: 700 }} />
@@ -1187,7 +1141,7 @@ const LeadScoringLayer = () => {
                                         No hay mensajes disponibles para este lead.
                                     </div>
                                 )}
-                                {historyMessages.map((message: any, index) => {
+                                {historyMessages.map((message, index) => {
                                     const role = getConversationMessageRole(message);
                                     const isOutgoing = role === "outgoing";
 
@@ -1330,7 +1284,14 @@ const MultiFilterSelect = ({
 
 
 
-const ChartCard = ({ title, description, children, action }: any) => (
+interface ChartCardProps {
+    title: string;
+    description: string;
+    children: ReactNode;
+    action?: ReactNode;
+}
+
+const ChartCard = ({ title, description, children, action }: ChartCardProps) => (
     <Card>
         <CardHeader>
             <div className="flex items-start justify-between gap-4">

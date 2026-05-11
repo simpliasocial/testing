@@ -4,13 +4,12 @@ import { KPICard } from "@/components/dashboard/KPICard";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { useDashboardContext } from "@/context/DashboardDataContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
 import { GUAYAQUIL_TIMEZONE, getGuayaquilDateString } from "@/lib/guayaquilTime";
 import { getInboxChannelName } from "@/lib/leadDisplay";
-import {
-    HybridDashboardService,
-    IncomingMessageTrafficEvent
-} from "@/services/HybridDashboardService";
+import { HybridDashboardService } from "@/services/HybridDashboardService";
+import type { IncomingMessageTrafficEvent } from "@/domain/conversation";
+import type { Inbox } from "@/domain/lead";
 import {
     AlertCircle,
     Clock,
@@ -71,15 +70,29 @@ const OperationalEfficiency = () => {
     const trafficHasLoadedRef = useRef(false);
     const lastTrafficFilterKeyRef = useRef("");
 
+    const trafficStartMs = globalFilters.startDate?.getTime() || 0;
+    const trafficEndMs = globalFilters.endDate?.getTime() || trafficStartMs;
+    const selectedInboxKey = (globalFilters.selectedInboxes || []).join(",");
+    const liveFetchMs = lastLiveFetchAt?.getTime() || 0;
+    const selectedInboxIds = useMemo(
+        () => selectedInboxKey
+            ? selectedInboxKey.split(",").map(Number).filter(Number.isFinite)
+            : [],
+        [selectedInboxKey]
+    );
+    const inboxMap = useMemo(
+        () => new Map<number, Inbox>(inboxes.map((inbox) => [Number(inbox.id), inbox])),
+        [inboxes]
+    );
 
     useEffect(() => {
-        if (!globalFilters.startDate) return;
+        if (!trafficStartMs) return;
 
         const controller = new AbortController();
         const trafficFilterKey = [
-            globalFilters.startDate?.getTime() || 0,
-            globalFilters.endDate?.getTime() || globalFilters.startDate?.getTime() || 0,
-            (globalFilters.selectedInboxes || []).join(",")
+            trafficStartMs,
+            trafficEndMs || trafficStartMs,
+            selectedInboxKey
         ].join("|");
         const isFilterChange = lastTrafficFilterKeyRef.current !== trafficFilterKey;
         const shouldBlockChart = !trafficHasLoadedRef.current || isFilterChange;
@@ -94,9 +107,9 @@ const OperationalEfficiency = () => {
         setTrafficError(null);
 
         HybridDashboardService.fetchHybridIncomingMessageEvents({
-            startDate: globalFilters.startDate,
-            endDate: globalFilters.endDate || globalFilters.startDate,
-            selectedInboxes: globalFilters.selectedInboxes || [],
+            startDate: new Date(trafficStartMs),
+            endDate: new Date(trafficEndMs || trafficStartMs),
+            selectedInboxes: selectedInboxIds,
             signal: controller.signal
         })
             .then((events) => {
@@ -129,13 +142,14 @@ const OperationalEfficiency = () => {
 
         return () => controller.abort();
     }, [
-        globalFilters.startDate?.getTime(),
-        globalFilters.endDate?.getTime(),
-        (globalFilters.selectedInboxes || []).join(","),
-        lastLiveFetchAt?.getTime()
+        trafficStartMs,
+        trafficEndMs,
+        selectedInboxKey,
+        selectedInboxIds,
+        liveFetchMs
     ]);
 
-    const operational = (data.operationalMetrics || {}) as any;
+    const operational = data.operationalMetrics;
     const ownerRows = data.ownerPerformance || [];
 
 
@@ -175,14 +189,13 @@ const OperationalEfficiency = () => {
 
 
     const selectedChannelLabel = useMemo(() => {
-        const selectedInboxes = globalFilters.selectedInboxes || [];
-        if (selectedInboxes.length === 0) return "Todos los canales";
-        const names = Array.from(new Set(selectedInboxes
-            .map((id) => inboxes.find((inbox: any) => Number(inbox.id) === Number(id)))
-            .filter(Boolean)
-            .map((inbox: any) => getInboxChannelName(inbox))));
+        if (selectedInboxIds.length === 0) return "Todos los canales";
+        const names = Array.from(new Set(selectedInboxIds
+            .map((id) => inboxMap.get(Number(id)))
+            .filter((inbox): inbox is Inbox => Boolean(inbox))
+            .map((inbox) => getInboxChannelName(inbox))));
         return names.join(", ");
-    }, [globalFilters.selectedInboxes, inboxes]);
+    }, [selectedInboxIds, inboxMap]);
 
     if (loading) {
         return (
@@ -207,7 +220,7 @@ const OperationalEfficiency = () => {
     const responseSamples = operational.firstResponseCount || 0;
     const leadsWithoutResponse = operational.leadsSinRespuesta || 0;
     const leadsWithOwner = operational.leadsWithOwnerCount || 0;
-    const unassignedLeads = operational.unassignedLeadsCount || ownerRows.find((owner: any) => owner.source === "sin_asignar")?.leads || 0;
+    const unassignedLeads = operational.unassignedLeadsCount || ownerRows.find((owner) => owner.source === "sin_asignar")?.leads || 0;
     const leadsWithOwnerPercentage = operational.leadsWithOwnerPercentage || 0;
     const startLabel = formatDateFilter(globalFilters.startDate);
     const endLabel = formatDateFilter(globalFilters.endDate || globalFilters.startDate);
@@ -286,7 +299,7 @@ const OperationalEfficiency = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y">
-                                    {ownerRows.map((owner: any) => (
+                                    {ownerRows.map((owner) => (
                                         <tr key={owner.name} className="hover:bg-muted/20">
                                             <td className="px-4 py-3 font-medium">{owner.name}</td>
                                             <td className="px-4 py-3">

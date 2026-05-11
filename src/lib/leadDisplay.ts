@@ -1,6 +1,26 @@
 import { config } from "@/config";
-import { MinifiedConversation } from "@/services/StorageService";
+import type { ConversationMessage, Inbox, LeadLike } from "@/domain/lead";
+import { asRecord } from "@/domain/common/types";
 import { resolveLeadAttributes } from "./leadAttributes";
+
+type LeadDisplayInput = Partial<LeadLike> & {
+    additional_attributes?: unknown;
+    channel?: unknown;
+    channel_name?: unknown;
+    channel_type?: unknown;
+    last_message?: unknown;
+    name?: unknown;
+    raw_payload?: unknown;
+};
+
+type InboxDisplayInput = Partial<Inbox> & {
+    channel?: unknown;
+};
+
+type MessageDisplayInput = Partial<ConversationMessage> & {
+    attachment?: unknown;
+    direction?: unknown;
+};
 
 export const cleanText = (value: unknown) => String(value ?? "").trim();
 
@@ -25,13 +45,13 @@ export const money = (value: number) =>
 
 export const getAttrs = resolveLeadAttributes;
 
-export const getLeadName = (lead: Partial<MinifiedConversation> | any) => {
+export const getLeadName = (lead: LeadDisplayInput) => {
     const attrs = getAttrs(lead);
     const customName = cleanText(attrs.nombre_completo);
     return customName || cleanText(lead?.meta?.sender?.name) || cleanText(lead?.name) || "Sin Nombre";
 };
 
-export const getRawLeadPhone = (lead: Partial<MinifiedConversation> | any) =>
+export const getRawLeadPhone = (lead: LeadDisplayInput) =>
     cleanText(lead?.meta?.sender?.phone_number);
 
 const CHANNEL_ALIAS_LABELS: Array<{ label: string; tokens: string[] }> = [
@@ -54,39 +74,41 @@ const resolveSocialChannelLabel = (value: unknown) => {
     return matched?.label || "";
 };
 
-export const getInboxChannelName = (inbox?: any) =>
-    channelLabelFromType(
-        inbox?.channel_type,
+export const getInboxChannelName = (inbox?: InboxDisplayInput | null) => {
+    const channel = asRecord(inbox?.channel);
+    return channelLabelFromType(
+        cleanText(inbox?.channel_type),
         [
             inbox?.name,
             inbox?.provider,
             inbox?.slug,
             inbox?.website_url,
             inbox?.website_token,
-            inbox?.channel?.type
+            channel.type
         ].filter(Boolean).join(" ")
     );
+};
 
-export const isWhatsappChannel = (lead: Partial<MinifiedConversation> | any, channelOverride = "") => {
+export const isWhatsappChannel = (lead: LeadDisplayInput, channelOverride = "") => {
     return channelLabelFromType(
-        lead?.channel_type,
-        `${lead?.channel || ""} ${channelOverride}`
+        cleanText(lead?.channel_type),
+        `${cleanText(lead?.channel)} ${channelOverride}`
     ) === "WhatsApp";
 };
 
-export const getLeadPhone = (lead: Partial<MinifiedConversation> | any, channelOverride = "") => {
+export const getLeadPhone = (lead: LeadDisplayInput, channelOverride = "") => {
     const attrs = getAttrs(lead);
     const customPhone = cleanText(attrs.celular);
     if (customPhone) return customPhone;
     return isWhatsappChannel(lead, channelOverride) ? getRawLeadPhone(lead) : "";
 };
 
-export const getLeadEmail = (lead: Partial<MinifiedConversation> | any) => {
+export const getLeadEmail = (lead: LeadDisplayInput) => {
     const attrs = getAttrs(lead);
     return cleanText(attrs.correo) || cleanText(lead?.meta?.sender?.email);
 };
 
-export const getLeadOperationDate = (lead: Partial<MinifiedConversation> | any) => {
+export const getLeadOperationDate = (lead: LeadDisplayInput) => {
     const attrs = getAttrs(lead);
     const raw = attrs.fecha_monto_operacion;
     if (!raw) return "";
@@ -118,7 +140,7 @@ export const formatDateTime = (value: unknown) => {
     });
 };
 
-const getMessageNumericType = (message: any) => {
+const getMessageNumericType = (message?: MessageDisplayInput | null) => {
     const numeric = Number(message?.message_type);
     if (!Number.isNaN(numeric)) return numeric;
 
@@ -130,20 +152,23 @@ const getMessageNumericType = (message: any) => {
     return null;
 };
 
-const hasRenderableMessagePayload = (message: any) => {
+const hasRenderableMessagePayload = (message?: MessageDisplayInput | null) => {
+    const contentAttributes = asRecord(message?.content_attributes);
     if (cleanText(message?.content)) return true;
     if (Array.isArray(message?.attachments) && message.attachments.length > 0) return true;
     if (Array.isArray(message?.attachment) && message.attachment.length > 0) return true;
-    if (Array.isArray(message?.content_attributes?.attachments) && message.content_attributes.attachments.length > 0) return true;
+    if (Array.isArray(contentAttributes.attachments) && contentAttributes.attachments.length > 0) return true;
     return false;
 };
 
-export const getConversationMessageRole = (message: any): "incoming" | "outgoing" | null => {
+export const getConversationMessageRole = (messageValue?: unknown): "incoming" | "outgoing" | null => {
+    const message = asRecord(messageValue) as MessageDisplayInput;
     if (!message) return null;
     if (message?.is_private === true || message?.private === true) return null;
 
+    const sender = asRecord(message.sender);
     const direction = normalize(message?.message_direction || message?.direction);
-    const senderType = normalize(message?.sender_type || message?.sender?.type || message?.sender?.sender_type);
+    const senderType = normalize(message?.sender_type || sender.type || sender.sender_type);
     const contentType = normalize(message?.content_type);
     const numericType = getMessageNumericType(message);
 
@@ -162,20 +187,22 @@ export const getConversationMessageRole = (message: any): "incoming" | "outgoing
     return null;
 };
 
-export const isRenderableConversationMessage = (message: any) =>
+export const isRenderableConversationMessage = (message: unknown): message is MessageDisplayInput =>
     getConversationMessageRole(message) !== null;
 
-export const getDisplayMessages = (messages: any[] = []) =>
+export const getDisplayMessages = (messages: unknown[] = []) =>
     (messages || [])
+        .map((message) => asRecord(message) as MessageDisplayInput)
         .filter(isRenderableConversationMessage)
         .sort((a, b) => toUnixSeconds(a?.created_at || a?.created_at_chatwoot) - toUnixSeconds(b?.created_at || b?.created_at_chatwoot));
 
-export const getMessageText = (message: any) => {
+export const getMessageText = (messageValue: unknown) => {
+    const message = asRecord(messageValue);
     if (!message) return "";
     return cleanText(message?.content) || "[Adjunto / contenido no textual]";
 };
 
-export const getLastMessage = (lead: Partial<MinifiedConversation> | any) => {
+export const getLastMessage = (lead: LeadDisplayInput) => {
     const displayMessages = getDisplayMessages(Array.isArray(lead?.messages) ? lead.messages : []);
     if (displayMessages.length > 0) return displayMessages[displayMessages.length - 1];
     if (isRenderableConversationMessage(lead?.last_non_activity_message)) return lead.last_non_activity_message;
@@ -183,10 +210,10 @@ export const getLastMessage = (lead: Partial<MinifiedConversation> | any) => {
     return null;
 };
 
-export const getMessagePreview = (lead: Partial<MinifiedConversation> | any) =>
+export const getMessagePreview = (lead: LeadDisplayInput) =>
     getMessageText(getLastMessage(lead)) || "Sin mensajes";
 
-export const getMessageTimestamp = (lead: Partial<MinifiedConversation> | any) =>
+export const getMessageTimestamp = (lead: LeadDisplayInput) =>
     getLastMessage(lead)?.created_at || lead?.timestamp || lead?.created_at;
 
 export const getChatwootUrl = (conversationId: number | string) => {
@@ -220,29 +247,30 @@ export const channelLabelFromType = (type?: string, fallback?: string) => {
     return "Otro";
 };
 
-export const getLeadChannelName = (lead: Partial<MinifiedConversation> | any, inbox?: any) => {
+export const getLeadChannelName = (lead: LeadDisplayInput, inbox?: InboxDisplayInput | null) => {
     const attrs = getAttrs(lead);
+    const senderAdditional = asRecord(lead?.meta?.sender?.additional_attributes);
     const fallbackHints = [
         attrs.canal,
         lead?.channel,
         lead?.channel_name,
         lead?.source,
-        lead?.meta?.sender?.additional_attributes?.channel,
-        lead?.meta?.sender?.additional_attributes?.social_channel,
-        lead?.meta?.sender?.additional_attributes?.provider,
-        lead?.meta?.sender?.additional_attributes?.platform,
-        lead?.meta?.sender?.additional_attributes?.source,
-        lead?.meta?.sender?.additional_attributes?.service,
-        lead?.meta?.sender?.additional_attributes?.channel_type,
+        senderAdditional.channel,
+        senderAdditional.social_channel,
+        senderAdditional.provider,
+        senderAdditional.platform,
+        senderAdditional.source,
+        senderAdditional.service,
+        senderAdditional.channel_type,
         lead?.meta?.sender?.identifier,
         getInboxChannelName(inbox),
         inbox?.name
     ].filter(Boolean).join(" ");
 
-    return channelLabelFromType(lead?.channel_type || inbox?.channel_type, fallbackHints);
+    return channelLabelFromType(cleanText(lead?.channel_type || inbox?.channel_type), fallbackHints);
 };
 
-export const getLeadInboxName = (lead: Partial<MinifiedConversation> | any, inbox?: any) =>
+export const getLeadInboxName = (lead: LeadDisplayInput, inbox?: InboxDisplayInput | null) =>
     cleanText(inbox?.name || lead?.channel);
 
 const shouldInspectUrlKey = (key: string) => {
@@ -341,7 +369,7 @@ const findExternalUrl = (value: unknown, depth = 0, visited = new Set<unknown>()
     return "";
 };
 
-const constructSocialUrl = (channel: string, identifier: string) => {
+const constructSocialUrl = (channel: string, identifier: unknown) => {
     if (!identifier) return "";
     const cleanId = identifier.toString().trim().replace(/^@/, "");
 
@@ -360,20 +388,21 @@ const constructSocialUrl = (channel: string, identifier: string) => {
     }
 };
 
-export const getLeadExternalUrl = (lead: Partial<MinifiedConversation> | any, channelOverride = "") => {
-    if (lead?.perfil_url) return lead.perfil_url;
+export const getLeadExternalUrl = (lead: LeadDisplayInput, channelOverride = "") => {
+    const profileUrl = cleanText(lead?.perfil_url);
+    if (profileUrl) return profileUrl;
 
-    const sender = lead?.meta?.sender || {};
+    const sender = asRecord(lead?.meta?.sender);
     const attrs = getAttrs(lead);
     const channelName = getLeadChannelName(lead);
     const channelHint = normalize(`${channelOverride} ${lead?.channel_type || ""} ${lead?.channel || ""} ${attrs.canal || ""} ${channelName}`);
 
     const searchable = {
         custom_attributes: attrs,
-        additional_attributes: lead?.additional_attributes || sender.additional_attributes || {},
+        additional_attributes: asRecord(lead?.additional_attributes || sender.additional_attributes),
         sender,
-        meta: lead?.meta || {},
-        raw_payload: lead?.raw_payload || {}
+        meta: asRecord(lead?.meta),
+        raw_payload: asRecord(lead?.raw_payload)
     };
 
     // 1. Try to find an explicit URL already in the data

@@ -35,10 +35,34 @@ import {
 import { Button } from "@/components/ui/button";
 import { channelLabelFromType } from "@/lib/leadDisplay";
 
+type HistoricalConversationRow = {
+    created_at_chatwoot?: string | null;
+    first_reply_created_at?: string | null;
+    status?: string | null;
+    labels?: unknown;
+    canal?: string | null;
+};
+
+type AggregatedHistoryRow = {
+    date: string;
+    leads: number;
+    contacted: number;
+    interested: number;
+    appointments: number;
+    lost: number;
+    backlog: number;
+    responseTimes: number[];
+    slaBreaches: number;
+    timestamp: number;
+};
+
+const asLabelList = (labels: unknown) =>
+    Array.isArray(labels) ? labels.map((label) => String(label || "").trim()).filter(Boolean) : [];
+
 const HistoricalTrendLayer = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [rawData, setRawData] = useState<any[]>([]);
+    const [rawData, setRawData] = useState<HistoricalConversationRow[]>([]);
     const [stats, setStats] = useState({ totalSyncLeads: 0, firstSyncDate: "" });
 
     // Filters
@@ -63,15 +87,16 @@ const HistoricalTrendLayer = () => {
                     return;
                 }
 
-                setRawData(data);
+                const rows = data as HistoricalConversationRow[];
+                setRawData(rows);
 
-                const dates = data.filter(d => d.created_at_chatwoot).map(d => new Date(d.created_at_chatwoot).getTime());
+                const dates = rows.filter(d => d.created_at_chatwoot).map(d => new Date(d.created_at_chatwoot || "").getTime());
                 setStats({
-                    totalSyncLeads: data.length,
+                    totalSyncLeads: rows.length,
                     firstSyncDate: dates.length > 0 ? new Date(Math.min(...dates)).toLocaleDateString() : "N/A"
                 });
 
-            } catch (err: any) {
+            } catch (err: unknown) {
                 console.error("Historical trend fetch error:", err);
                 setError("No se pudo cargar el historial. Intenta nuevamente.");
             } finally {
@@ -87,25 +112,14 @@ const HistoricalTrendLayer = () => {
             if (!d.created_at_chatwoot) return false;
             const date = new Date(d.created_at_chatwoot);
             const matchesYear = selectedYear === 'all' || date.getFullYear().toString() === selectedYear;
-            const channelName = channelLabelFromType(undefined, d.canal);
+            const channelName = channelLabelFromType(undefined, d.canal || undefined);
             const matchesChannel = selectedChannel === 'all' || channelName === selectedChannel;
             return matchesYear && matchesChannel;
         });
     }, [rawData, selectedYear, selectedChannel]);
 
     const aggregatedData = useMemo(() => {
-        const map = new Map<string, {
-            date: string,
-            leads: number,
-            contacted: number,
-            interested: number,
-            appointments: number,
-            lost: number,
-            backlog: number,
-            responseTimes: number[],
-            slaBreaches: number,
-            timestamp: number
-        }>();
+        const map = new Map<string, AggregatedHistoryRow>();
 
         filteredData.forEach(conv => {
             const d = new Date(conv.created_at_chatwoot);
@@ -146,18 +160,18 @@ const HistoricalTrendLayer = () => {
                 row.backlog++;
             }
 
-            const lbls = Array.isArray(conv.labels) ? conv.labels : [];
+            const lbls = asLabelList(conv.labels);
             const isContacted = conv.first_reply_created_at || conv.status !== 'new';
             if (isContacted) row.contacted++;
 
-            if (lbls.some((l: string) => ['interesado', 'crear_confianza', 'crear_urgencia'].includes(l.toLowerCase()))) {
+            if (lbls.some((l) => ['interesado', 'crear_confianza', 'crear_urgencia'].includes(l.toLowerCase()))) {
                 row.interested++;
             }
 
-            if (lbls.some((l: string) => ['cita', 'venta', 'booking', 'cita_agendada', 'venta_exitosa'].includes(l.toLowerCase()))) {
+            if (lbls.some((l) => ['cita', 'venta', 'booking', 'cita_agendada', 'venta_exitosa'].includes(l.toLowerCase()))) {
                 row.appointments++;
             }
-            if (lbls.some((l: string) => ['perdido', 'descartado', 'spam', 'desinteresado'].includes(l.toLowerCase()))) {
+            if (lbls.some((l) => ['perdido', 'descartado', 'spam', 'desinteresado'].includes(l.toLowerCase()))) {
                 row.lost++;
             }
 
@@ -190,14 +204,14 @@ const HistoricalTrendLayer = () => {
     }, [filteredData, timeGrain]);
 
     const summaryStats = useMemo(() => {
-        let leads = filteredData.length;
+        const leads = filteredData.length;
         let appointments = 0;
         let backlog = 0;
         let slaBreaches = 0;
         const responseTimes: number[] = [];
 
         filteredData.forEach(conv => {
-            const lbls = Array.isArray(conv.labels) ? conv.labels : [];
+            const lbls = asLabelList(conv.labels);
             if (lbls.some(l => ['cita', 'venta', 'booking', 'cita_agendada', 'venta_exitosa'].includes(l.toLowerCase()))) {
                 appointments++;
             }
@@ -241,10 +255,14 @@ const HistoricalTrendLayer = () => {
     };
 
     const channels = useMemo(
-        () => Array.from(new Set(rawData.map(d => channelLabelFromType(undefined, d.canal)).filter(channel => channel && channel !== "Otro"))),
+        () => Array.from(new Set(rawData.map(d => channelLabelFromType(undefined, d.canal || undefined)).filter(channel => channel && channel !== "Otro"))),
         [rawData]
     );
-    const years = useMemo(() => Array.from(new Set(rawData.map(d => new Date(d.created_at_chatwoot).getFullYear()))).sort(), [rawData]);
+    const years = useMemo(() => Array.from(new Set(
+        rawData
+            .map(d => new Date(d.created_at_chatwoot || "").getFullYear())
+            .filter(Number.isFinite)
+    )).sort((a, b) => a - b), [rawData]);
 
     if (loading) {
         return (

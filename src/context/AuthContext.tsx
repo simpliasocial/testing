@@ -1,18 +1,7 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { User } from '@supabase/supabase-js';
-
-type UserRole = 'admin' | 'user';
-
-interface AuthContextType {
-    user: User | null;
-    role: UserRole | null;
-    loading: boolean;
-    signIn: (username: string, pass: string) => Promise<{ error: any }>;
-    signOut: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+import type { User } from '@supabase/supabase-js';
+import { AuthContext, type UserRole } from './authContextValue';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [user, setUser] = useState<User | null>(null);
@@ -50,7 +39,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         else if (username.toLowerCase() === 'test') email = 'test@simplia.com';
         else if (!username.includes('@')) email = `${username}@simplia.com`;
 
-        const { data, error } = await supabase.auth.signInWithPassword({
+        const { error } = await supabase.auth.signInWithPassword({
             email,
             password: pass,
         });
@@ -68,12 +57,4 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             {children}
         </AuthContext.Provider>
     );
-};
-
-export const useAuth = () => {
-    const context = useContext(AuthContext);
-    if (context === undefined) {
-        throw new Error('useAuth must be used within an AuthProvider');
-    }
-    return context;
 };

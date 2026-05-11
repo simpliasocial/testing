@@ -1192,7 +1192,7 @@ const htmlEscape = (value: unknown) => cleanText(value)
     .replace(/"/g, "&quot;");
 
 const sheetName = (value: string) => cleanText(value)
-    .replace(/[\\/?*\[\]:]/g, " ")
+    .replace(/[\\/?*[\]:]/g, " ")
     .slice(0, 31) || "Reporte";
 
 const uniqueSheetName = (value: string, usedNames: Set<string>) => {

@@ -23,10 +23,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
-import { useAuth } from "@/context/AuthContext";
-import { DEFAULT_TAG_CONFIG, useDashboardContext } from "@/context/DashboardDataContext";
+import { useAuth } from "@/context/useAuth";
+import { DEFAULT_TAG_CONFIG } from "@/domain/dashboard";
+import { useDashboardContext } from "@/context/useDashboardContext";
 import { useDashboardData } from "@/hooks/useDashboardData";
-import { downloadDashboardReport } from "@/lib/reportExport";
+import { downloadDashboardReport } from "@/infrastructure/report/DashboardReportExporter";
 import { formatFieldLabel, friendlyErrorMessage } from "@/lib/displayCopy";
 import {
     CRITICAL_REPORT_PROFILES,
@@ -105,9 +106,9 @@ export function TabExportMenu({
 
     const canConfigureColumns = role === "admin" && Boolean(tabId);
 
-    const handleDownload = (formatId: ReportFileFormat) => {
+    const handleDownload = async (formatId: ReportFileFormat) => {
         try {
-            downloadDashboardReport(formatId, {
+            await downloadDashboardReport(formatId, {
                 title: reportTitle,
                 tabIds: resolvedTabIds,
                 conversations,
@@ -378,5 +379,3 @@ export function TabExportMenu({
         </>
     );
 }
-
-export const criticalProfileDefaults = CRITICAL_REPORT_PROFILES;

@@ -1,4 +1,6 @@
-import type { ResolvedConversation, TagConfig } from "@/context/DashboardDataContext";
+import type { TagConfig } from "@/domain/dashboard";
+import type { ResolvedConversation } from "@/context/dashboardDataTypes";
+import { parseAmount as parseLeadAmount } from "@/domain/lead";
 import { formatBusinessLabel } from "@/lib/displayCopy";
 import { cleanText, getAttrs, getLeadName } from "@/lib/leadDisplay";
 
@@ -44,15 +46,7 @@ const normalizeLabels = (labels: unknown): string[] =>
         ? Array.from(new Set(labels.map((label) => cleanText(label)).filter(Boolean)))
         : [];
 
-export const parseAmount = (value: unknown) => {
-    const raw = cleanText(value);
-    if (!raw) return 0;
-    const normalized = raw.includes(",") && !raw.includes(".")
-        ? raw.replace(",", ".")
-        : raw.replace(/,/g, "");
-    const parsed = Number.parseFloat(normalized.replace(/[^0-9.-]/g, ""));
-    return Number.isNaN(parsed) ? 0 : parsed;
-};
+export const parseAmount = parseLeadAmount;
 
 export const getSaleLabels = (tagSettings?: Partial<TagConfig>) =>
     Array.from(new Set([
@@ -61,7 +55,9 @@ export const getSaleLabels = (tagSettings?: Partial<TagConfig>) =>
         "venta_exitosa",
     ].map((label) => cleanText(label)).filter(Boolean)));
 
-export const getCommercialLabels = (conversation: Partial<ResolvedConversation> | any) =>
+type CommercialConversation = Partial<ResolvedConversation>;
+
+export const getCommercialLabels = (conversation: CommercialConversation) =>
     normalizeLabels(
         conversation?.resolvedLabels?.length
             ? conversation.resolvedLabels
@@ -69,23 +65,23 @@ export const getCommercialLabels = (conversation: Partial<ResolvedConversation> 
     );
 
 export const hasCurrentSaleLabel = (
-    conversation: Partial<ResolvedConversation> | any,
+    conversation: CommercialConversation,
     tagSettings?: Partial<TagConfig>,
 ) => {
     const labels = new Set(getCommercialLabels(conversation).map(normalizeLabel));
     return getSaleLabels(tagSettings).some((label) => labels.has(normalizeLabel(label)));
 };
 
-export const getCurrentAmount = (conversation: Partial<ResolvedConversation> | any) =>
+export const getCurrentAmount = (conversation: CommercialConversation) =>
     parseAmount(getAttrs(conversation).monto_operacion);
 
 export const isCurrentSale = (
-    conversation: Partial<ResolvedConversation> | any,
+    conversation: CommercialConversation,
     tagSettings?: Partial<TagConfig>,
 ) => hasCurrentSaleLabel(conversation, tagSettings) && getCurrentAmount(conversation) > 0;
 
 export const getCurrentSaleAmount = (
-    conversation: Partial<ResolvedConversation> | any,
+    conversation: CommercialConversation,
     tagSettings?: Partial<TagConfig>,
 ) => isCurrentSale(conversation, tagSettings) ? getCurrentAmount(conversation) : 0;
 
@@ -98,7 +94,7 @@ const defaultParseDate = (value: unknown) => {
 };
 
 export const getCommercialSaleDate = (
-    conversation: Partial<ResolvedConversation> | any,
+    conversation: CommercialConversation,
     parseDate: (value: unknown) => Date = defaultParseDate,
 ) => {
     const attrs = getAttrs(conversation);
@@ -106,7 +102,7 @@ export const getCommercialSaleDate = (
 };
 
 export const getSaleAccountingStatus = (
-    conversation: Partial<ResolvedConversation> | any,
+    conversation: CommercialConversation,
     tagSettings?: Partial<TagConfig>,
 ): CommercialSaleStatus => {
     const amount = getCurrentAmount(conversation);

@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
 
+type SupabaseQueryResult<T> = {
+    data: T[] | null;
+    error: Error | null;
+};
+
+type SupabaseQueryBuilder<T> = PromiseLike<SupabaseQueryResult<T>>;
+type SupabaseQueryTransform<T> = (queryBuilder: SupabaseQueryBuilder<T>) => SupabaseQueryBuilder<T>;
+
 /**
  * Custom hook to get the authenticated Supabase user.
  * @returns {User | null} The authenticated user or null.
@@ -46,7 +54,7 @@ export function useSupabaseAuth() {
  */
 export function useSupabaseQuery<T>(
     table: string,
-    query?: (queryBuilder: any) => any
+    query?: SupabaseQueryTransform<T>
 ) {
     const [data, setData] = useState<T[] | null>(null);
     const [error, setError] = useState<Error | null>(null);
@@ -56,7 +64,7 @@ export function useSupabaseQuery<T>(
         const fetchData = async () => {
             try {
                 setLoading(true);
-                let queryBuilder = supabase.from(table).select('*');
+                let queryBuilder = supabase.from(table).select('*') as unknown as SupabaseQueryBuilder<T>;
 
                 if (query) {
                     queryBuilder = query(queryBuilder);
@@ -74,7 +82,7 @@ export function useSupabaseQuery<T>(
         };
 
         fetchData();
-    }, [table]);
+    }, [table, query]);
 
     return { data, error, loading };
 }

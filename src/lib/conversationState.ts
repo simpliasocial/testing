@@ -1,19 +1,7 @@
-import type { ConversationLabelEvent } from '@/services/LabelEventService';
+import type { ConversationLabelEvent } from '@/domain/conversation';
 import type { MinifiedConversation } from '@/services/StorageService';
+import { normalizeLabels, labelsMatch, resolveLeadStage as resolveDomainLeadStage } from '@/domain/lead';
 import { resolveLeadAttributes } from './leadAttributes';
-
-const normalizeLabels = (labels: unknown): string[] => {
-    if (!Array.isArray(labels)) return [];
-
-    return Array.from(new Set(
-        labels
-            .map((label) => String(label || '').trim())
-            .filter(Boolean)
-    )).sort((a, b) => a.localeCompare(b));
-};
-
-const labelsMatch = (left: string[], right: string[]) =>
-    left.length === right.length && left.every((label, index) => label === right[index]);
 
 const eventTimestamp = (event: ConversationLabelEvent) => {
     const occurredAt = new Date(event?.occurred_at || event?.detected_at || 0).getTime();
@@ -86,33 +74,7 @@ export const resolveLeadStage = (lead: MinifiedConversation, tags: {
     humanSalesQueueTags?: string[];
     humanSaleTargetLabel?: string;
 }) => {
-    const labels = lead.labels || [];
-
-    // 1. Sale (Highest priority)
-    const saleLabels = [
-        ...(tags.saleTags || []),
-        tags.humanSaleTargetLabel || 'venta_exitosa'
-    ].filter(Boolean);
-    if (labels.some(l => saleLabels.includes(l))) return 'sale';
-
-    // 2. Appointment
-    const appointmentLabels = [
-        ...(tags.appointmentTags || []),
-        ...(tags.humanSalesQueueTags || []),
-        tags.humanAppointmentTargetLabel || 'cita_agendada_humano'
-    ].filter(Boolean);
-    if (labels.some(l => appointmentLabels.includes(l))) return 'appointment';
-
-    // 3. Unqualified
-    if (labels.some(l => (tags.unqualifiedTags || []).includes(l))) return 'unqualified';
-
-    // 4. Human Followup
-    if (labels.some(l => (tags.humanFollowupQueueTags || []).includes(l))) return 'followup';
-
-    // 5. SQL
-    if (labels.some(l => (tags.sqlTags || []).includes(l))) return 'sql';
-
-    return 'other';
+    return resolveDomainLeadStage(lead, tags);
 };
 
 export const collectKnownLabels = (params: {

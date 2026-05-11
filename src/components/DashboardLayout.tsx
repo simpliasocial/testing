@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,16 +16,7 @@ import {
     RefreshCw,
     Gauge
 } from 'lucide-react';
-import ExecutiveOverview from '@/pages/layers/ExecutiveOverview';
-import FunnelLayer from '@/pages/layers/FunnelLayer';
-import OperationalEfficiency from '@/pages/layers/OperationalEfficiency';
-import LeadActionQueue from '@/pages/layers/LeadActionQueue';
-import PerformanceLayer from '@/pages/layers/PerformanceLayer';
-import TrendLayer from '@/pages/layers/TrendLayer';
-import LeadScoringLayer from '@/pages/layers/LeadScoringLayer';
-import ReportingLayer from '@/pages/layers/ReportingLayer';
-import ChatwootPage from '@/pages/ChatwootPage';
-import { useDashboardContext } from '@/context/DashboardDataContext';
+import { useDashboardContext } from '@/context/useDashboardContext';
 import { DateRangePicker } from '@/components/dashboard/DateRangePicker';
 import { ChannelSelector } from '@/components/dashboard/ChannelSelector';
 import { TagConfigDialog } from '@/components/dashboard/TagConfigDialog';
@@ -33,7 +24,23 @@ import { TabExportMenu } from '@/components/dashboard/TabExportMenu';
 import type { ReportTabId } from '@/lib/reportCatalog';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { DateRange } from 'react-day-picker';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth } from '@/context/useAuth';
+
+const ExecutiveOverview = lazy(() => import('@/features/dashboard/ExecutiveOverview'));
+const FunnelLayer = lazy(() => import('@/features/dashboard/FunnelLayer'));
+const OperationalEfficiency = lazy(() => import('@/features/dashboard/OperationalEfficiency'));
+const LeadActionQueue = lazy(() => import('@/features/followup/LeadActionQueue'));
+const PerformanceLayer = lazy(() => import('@/features/dashboard/PerformanceLayer'));
+const TrendLayer = lazy(() => import('@/features/dashboard/TrendLayer'));
+const LeadScoringLayer = lazy(() => import('@/features/scoring/LeadScoringLayer'));
+const ReportingLayer = lazy(() => import('@/features/reporting/ReportingLayer'));
+const ChatwootPage = lazy(() => import('@/features/conversations/ConversationsPage'));
+
+const TabFallback = () => (
+    <div className="flex min-h-[360px] items-center justify-center rounded-lg border bg-card text-sm text-muted-foreground">
+        Cargando modulo...
+    </div>
+);
 
 const DashboardLayout = () => {
     const [activeTab, setActiveTab] = useState('overview');
@@ -77,6 +84,12 @@ const DashboardLayout = () => {
         <div className="flex justify-end">
             <TabExportMenu tabId={tabId} compact />
         </div>
+    );
+
+    const renderLazyTab = (children: ReactNode) => (
+        <Suspense fallback={<TabFallback />}>
+            {children}
+        </Suspense>
     );
 
     const statusBadge = () => {
@@ -206,45 +219,45 @@ const DashboardLayout = () => {
                     <div className="mt-6 transition-all duration-300">
                         <TabsContent value="overview" className="mt-0 space-y-6">
                             {renderTabExport('overview')}
-                            <ExecutiveOverview />
+                            {renderLazyTab(<ExecutiveOverview />)}
                         </TabsContent>
 
                         <TabsContent value="funnel" className="mt-0 space-y-6">
                             {renderTabExport('funnel')}
-                            <FunnelLayer />
+                            {renderLazyTab(<FunnelLayer />)}
                         </TabsContent>
 
                         <TabsContent value="operational" className="mt-0 space-y-6">
                             {renderTabExport('operational')}
-                            <OperationalEfficiency />
+                            {renderLazyTab(<OperationalEfficiency />)}
                         </TabsContent>
 
                         <TabsContent value="followup" className="mt-0">
-                            <LeadActionQueue />
+                            {renderLazyTab(<LeadActionQueue />)}
                         </TabsContent>
 
                         <TabsContent value="performance" className="mt-0 space-y-6">
                             {renderTabExport('performance')}
-                            <PerformanceLayer />
+                            {renderLazyTab(<PerformanceLayer />)}
                         </TabsContent>
 
                         <TabsContent value="trends" className="mt-0 space-y-6">
                             {renderTabExport('trends')}
-                            <TrendLayer />
+                            {renderLazyTab(<TrendLayer />)}
                         </TabsContent>
 
                         <TabsContent value="scoring" className="mt-0 space-y-6">
                             {renderTabExport('scoring')}
-                            <LeadScoringLayer />
+                            {renderLazyTab(<LeadScoringLayer />)}
                         </TabsContent>
 
                         <TabsContent value="chats" className="mt-0 space-y-6">
                             {renderTabExport('chats')}
-                            <ChatwootPage />
+                            {renderLazyTab(<ChatwootPage />)}
                         </TabsContent>
 
                         <TabsContent value="reporting" className="mt-0">
-                            <ReportingLayer />
+                            {renderLazyTab(<ReportingLayer />)}
                         </TabsContent>
                     </div>
                 </Tabs>

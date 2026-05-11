@@ -29,8 +29,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
-import { DEFAULT_TAG_CONFIG, useDashboardContext } from "@/context/DashboardDataContext";
-import { useAuth } from "@/context/AuthContext";
+import { DEFAULT_TAG_CONFIG } from "@/domain/dashboard";
+import { useDashboardContext } from "@/context/useDashboardContext";
+import { useAuth } from "@/context/useAuth";
 import { TabExportMenu } from "@/components/dashboard/TabExportMenu";
 import { LeadImportWizard } from "@/components/dashboard/LeadImportWizard";
 import {
@@ -46,10 +47,12 @@ import {
     type ReportTabId,
 } from "@/lib/reportCatalog";
 
+type ReportFrequency = "daily" | "weekly" | "monthly";
+
 interface ScheduledReport {
     id: string;
     name: string;
-    frequency: "daily" | "weekly" | "monthly";
+    frequency: ReportFrequency;
     schedule_days: string[] | null;
     schedule_month_day: number | null;
     schedule_time: string;
@@ -81,6 +84,10 @@ const PROFILE_AREAS: Record<CriticalProfileKey, string> = {
 };
 
 const profileKeys = Object.keys(CRITICAL_REPORT_PROFILES) as CriticalProfileKey[];
+const reportFrequencies: ReportFrequency[] = ["daily", "weekly", "monthly"];
+
+const resolveReportFrequency = (value: unknown): ReportFrequency =>
+    reportFrequencies.includes(value as ReportFrequency) ? value as ReportFrequency : "weekly";
 
 const normalizeEmailList = (value: string) => value
     .split(/[;,\n]/)
@@ -252,7 +259,7 @@ const ReportingLayer = () => {
     const openEditReport = (report: ScheduledReport) => {
         setEditingReport(report);
         setScheduleName(report.name || "");
-        setFrequency((report.frequency as any) || "weekly");
+        setFrequency(resolveReportFrequency(report.frequency));
         setWeekday(report.schedule_days?.[0] || "1");
         setMonthDay(report.schedule_month_day?.toString() || "1");
         setScheduleTime(report.schedule_time?.slice(0, 5) || "08:00");

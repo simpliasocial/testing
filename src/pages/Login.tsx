@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/context/AuthContext';
+import { useAuth } from '@/context/useAuth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Lock, User } from 'lucide-react';
+
+const errorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : 'Error al iniciar sesión';
 
 const Login = () => {
     const [username, setUsername] = useState('');
@@ -26,9 +29,9 @@ const Login = () => {
             if (signInError) throw signInError;
 
             navigate('/');
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Login error:', err);
-            setError(err.message || 'Error al iniciar sesión');
+            setError(errorMessage(err));
         } finally {
             setLoading(false);
         }

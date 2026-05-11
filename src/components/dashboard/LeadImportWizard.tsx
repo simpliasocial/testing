@@ -28,7 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/context/useAuth";
 import {
     buildLeadImportPreview,
     createDefaultLeadImportMapping,
@@ -46,6 +46,7 @@ import {
     type LeadImportCommitPlan,
     type LeadImportMapping,
     type LeadImportPreview,
+    type LeadImportPreviewRow,
     type LeadImportSaveResult,
     type LeadImportTargetDefinition,
     type LeadImportTargetField,
@@ -143,7 +144,7 @@ const issueReasonForGroup = (reason: string) => {
 const fieldLabelFor = (field?: string) =>
     visibleTargets.find((target) => target.id === field)?.label || "Fila";
 
-const rowValueFor = (row: any, field: LeadImportTargetField) => {
+const rowValueFor = (row: LeadImportPreviewRow, field: LeadImportTargetField) => {
     switch (field) {
         case "externalId":
             return row.externalLeadId;

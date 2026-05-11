@@ -1,6 +1,11 @@
 import * as xlsx from "xlsx";
 import { format } from "date-fns";
-import type { DashboardFilters, ResolvedConversation, TagConfig } from "@/context/DashboardDataContext";
+import type { DashboardFilters, TagConfig } from "@/domain/dashboard";
+import type { ResolvedConversation } from "@/context/dashboardDataTypes";
+import type { UnknownRecord } from "@/domain/common/types";
+import { asRecord } from "@/domain/common/types";
+import type { ConversationMessage, Inbox } from "@/domain/lead";
+import type { ReportSection } from "@/domain/report";
 import {
     DEFAULT_REPORT_COLUMN_FIELDS,
     REPORT_TAB_LABELS,
@@ -30,132 +35,100 @@ import {
     type CommercialAuditEvent,
 } from "@/lib/commercialFacts";
 import {
+    exportCsvSections,
+    exportExcelSections,
+    exportPdfSections,
+} from "@/infrastructure/report/reportFileWriters";
+import {
     bucketFromScore,
     formatScoreValue,
-    getBucketRangeLabel,
     normalizeScoreThresholds,
     parseNumericScore,
     SCORE_BUCKET_COPY,
     SCORE_BUCKET_ORDER,
     type ScoreBucket,
 } from "@/lib/leadScoreClassification";
+import {
+    buildFunnelConversionRows,
+    buildFunnelRows,
+    buildLabelRows,
+    buildNamedValueRows,
+    buildQualityConfigRows,
+    buildQualityDistributionRows,
+    buildSalesSummaryRows,
+    buildSourceRows,
+    buildStageRows,
+    buildStatusRows,
+    endOfLocalDay,
+    ensureReportRows,
+    filterReportConversations,
+    formatConversationStatus,
+    formatCurrencyValue,
+    formatDataOrigin,
+    formatDuration,
+    formatLeadStage,
+    formatPercentValue,
+    getReportConversationLabels,
+    metricRow,
+    numberCell,
+    parseTimestampMs,
+    safeDivision,
+    safeFilePart,
+    safeSheetName,
+    startOfLocalDay,
+    withSection,
+} from "@/features/reporting/model/reportExportModel";
+import { formatReportDateTime, REPORT_TIME_ZONE } from "@/shared/report/reportFormatting";
 
-export interface ReportSection {
-    title: string;
-    rows: Array<Record<string, unknown>>;
-    kind?: "summary" | "kpi" | "analysis" | "detail";
-    sheetName?: string;
-    description?: string;
+type ReportInbox = Inbox & {
+    channel?: unknown;
+};
+
+type ReportCell = unknown;
+type ReportAoa = ReportCell[][];
+type InboxMap = Map<number, ReportInbox>;
+
+type OwnerPerformanceRow = UnknownRecord & {
+    name?: unknown;
+    appointments?: unknown;
+    leads?: unknown;
+    unanswered?: unknown;
+    winRate?: unknown;
+    source?: unknown;
+};
+
+interface DashboardReportData {
+    campaignData?: unknown;
+    channelData?: unknown;
+    disqualificationReasons?: unknown;
+    funnelData?: unknown;
+    historicalFunnelData?: unknown;
+    humanMetrics?: unknown;
+    kpis?: unknown;
+    operationalMetrics?: unknown;
+    ownerPerformance?: unknown;
+    trendMetrics?: unknown;
 }
 
 export interface DashboardReportInput {
     title: string;
     tabIds: ReportTabId[];
     conversations: ResolvedConversation[];
-    inboxes: any[];
+    inboxes: ReportInbox[];
     tagSettings: TagConfig;
     globalFilters: DashboardFilters;
-    dashboardData?: any;
+    dashboardData?: DashboardReportData;
     commercialAuditEvents?: CommercialAuditEvent[];
 }
 
-const STAGE_LABELS: Record<string, string> = {
-    sale: "Venta exitosa",
-    appointment: "Cita agendada",
-    unqualified: "No calificado",
-    followup: "Seguimiento humano",
-    sql: "SQL",
-    other: "Otro",
-};
+const getInboxMap = (inboxes: ReportInbox[]): InboxMap =>
+    new Map((inboxes || []).map((inbox) => [Number(inbox.id), inbox]));
 
-const safeSheetName = (name: string) => cleanText(name)
-    .replace(/[\\/?*\[\]:]/g, " ")
-    .slice(0, 31) || "Reporte";
+const asRecordArray = (value: unknown): UnknownRecord[] =>
+    Array.isArray(value) ? value.map(asRecord) : [];
 
-const safeFilePart = (name: string) => cleanText(name)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toLowerCase() || "reporte";
-
-const parseTimestampMs = (value: unknown) => {
-    if (!value) return 0;
-    const numeric = Number(value);
-    if (!Number.isNaN(numeric)) return numeric < 10000000000 ? numeric * 1000 : numeric;
-    const date = new Date(String(value));
-    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
-};
-
-const startOfLocalDay = (date: Date) => {
-    const next = new Date(date);
-    next.setHours(0, 0, 0, 0);
-    return next;
-};
-
-const endOfLocalDay = (date: Date) => {
-    const next = new Date(date);
-    next.setHours(23, 59, 59, 999);
-    return next;
-};
-
-const normalizeCell = (value: unknown) => {
-    if (value === null || value === undefined) return "";
-    if (Array.isArray(value)) return value.map(normalizeCell).filter(Boolean).join(", ");
-    if (typeof value === "object") {
-        try {
-            return JSON.stringify(value);
-        } catch {
-            return String(value);
-        }
-    }
-    return String(value);
-};
-
-const numberCell = (value: unknown) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const formatConversationStatus = (value: unknown) => {
-    const status = cleanText(value).toLowerCase();
-    if (status === "open") return "Abierto";
-    if (status === "resolved") return "Resuelto";
-    if (status === "pending") return "Pendiente";
-    if (status === "snoozed") return "Pausado";
-    return formatBusinessLabel(value) || "";
-};
-
-const formatDataOrigin = (value: unknown) => {
-    const source = cleanText(value).toLowerCase();
-    if (source === "api") return "Datos recientes";
-    if (source === "supabase") return "Historial disponible";
-    if (source === "cache") return "Información guardada";
-    return formatBusinessLabel(value) || "";
-};
-
-export const filterReportConversations = (
-    conversations: ResolvedConversation[],
-    filters: DashboardFilters,
-) => {
-    const start = filters.startDate ? startOfLocalDay(filters.startDate).getTime() : null;
-    const end = filters.endDate ? endOfLocalDay(filters.endDate).getTime() : null;
-    const selectedInboxes = filters.selectedInboxes || [];
-
-    return conversations.filter((conversation) => {
-        if (selectedInboxes.length > 0 && !selectedInboxes.includes(Number(conversation.inbox_id))) {
-            return false;
-        }
-
-        const createdAt = parseTimestampMs(conversation.created_at || conversation.timestamp);
-        if (start !== null && createdAt < start) return false;
-        if (end !== null && createdAt > end) return false;
-
-        return true;
-    });
-};
-
-const getInboxMap = (inboxes: any[]) => new Map((inboxes || []).map((inbox) => [Number(inbox.id), inbox]));
+const getOwnerPerformanceRows = (dashboardData?: DashboardReportData): OwnerPerformanceRow[] =>
+    asRecordArray(dashboardData?.ownerPerformance) as OwnerPerformanceRow[];
 
 const getScoreValue = (conversation: ResolvedConversation, tagSettings: TagConfig) => {
     const attrs = getAttrs(conversation);
@@ -181,7 +154,7 @@ const getCampaignValue = (conversation: ResolvedConversation) => {
 const getFieldValue = (
     field: string,
     conversation: ResolvedConversation,
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
     tagSettings: TagConfig,
 ) => {
     const attrs = getAttrs(conversation);
@@ -200,7 +173,7 @@ const getFieldValue = (
         case "Canal": return canal;
         case "Estados":
         case "Etiquetas": return formatBusinessList(conversation.resolvedLabels?.length ? conversation.resolvedLabels : conversation.labels || []);
-        case "Etapa": return STAGE_LABELS[conversation.resolvedStage] || conversation.resolvedStage || "Otro";
+        case "Etapa": return formatLeadStage(conversation.resolvedStage);
         case "Estado": return formatConversationStatus(conversation.status);
         case "Correo": return getLeadEmail(conversation);
         case "Monto": return parseAmount(attrs.monto_operacion) || attrs.monto_operacion || "";
@@ -220,7 +193,7 @@ const getFieldValue = (
         case "Ultima Interaccion": return formatDateTime(conversation.timestamp || conversation.created_at);
         case "ID Contacto": return conversation.meta?.sender?.id || "";
         case "ID Inbox": return conversation.inbox_id || "";
-        case "ID Cuenta": return (conversation as any).account_id || "";
+        case "ID Cuenta": return (conversation as ResolvedConversation & { account_id?: unknown }).account_id || "";
         case "Origen Dato": return formatDataOrigin(conversation.source);
         default: return attrs[field] ?? attrs[field.toLowerCase()] ?? "";
     }
@@ -234,7 +207,7 @@ const getFieldsForTab = (tabId: ReportTabId, tagSettings: TagConfig) => {
 const buildConversationRows = (
     tabId: ReportTabId,
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
     tagSettings: TagConfig,
 ) => {
     const fields = getFieldsForTab(tabId, tagSettings);
@@ -249,7 +222,7 @@ const buildConversationRows = (
 
 const buildScoringRows = (
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
     tagSettings: TagConfig,
 ) => conversations
     .map((conversation) => {
@@ -263,7 +236,7 @@ const buildScoringRows = (
             "Nombre del Lead": getLeadName(conversation),
             Canal: canal,
             Número: getLeadPhone(conversation, canal),
-            Estados: formatBusinessList(getConversationLabels(conversation), " | "),
+            Estados: formatBusinessList(getReportConversationLabels(conversation), " | "),
             "Historial de mensajes": getMessagePreview(conversation),
             "URL comercial": getLeadExternalUrl(conversation, canal),
             "Enlace de conversación": getChatwootUrl(conversation.id),
@@ -281,77 +254,6 @@ const buildScoringRows = (
         return scoreB - scoreA;
     });
 
-const rowsFromArray = (items: any[] = [], labelKey = "name", valueKey = "value") =>
-    items.map((item) => ({
-        Nombre: labelKey === "label"
-            ? formatBusinessLabel(item?.[labelKey] ?? item?.label ?? item?.date ?? item?.name ?? "")
-            : item?.[labelKey] ?? item?.label ?? item?.date ?? item?.name ?? "",
-        Valor: item?.[valueKey] ?? item?.count ?? item?.leads ?? item?.sales ?? 0,
-        Porcentaje: item?.percentage ?? item?.rate ?? item?.winRate ?? "",
-    }));
-
-const REPORT_TIME_ZONE = "America/Guayaquil";
-
-const currencyFormatter = new Intl.NumberFormat("es-EC", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-});
-
-const integerFormatter = new Intl.NumberFormat("es-EC", { maximumFractionDigits: 0 });
-
-const decimalFormatter = new Intl.NumberFormat("es-EC", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-});
-
-const formatIntegerValue = (value: unknown) => integerFormatter.format(numberCell(value));
-
-const formatCurrencyValue = (value: unknown) => currencyFormatter.format(numberCell(value));
-
-const formatPercentValue = (value: unknown) => {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return "";
-    const percent = Math.abs(numeric) > 0 && Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
-    return `${decimalFormatter.format(percent)}%`;
-};
-
-const formatDuration = (seconds: unknown) => {
-    const totalSeconds = Math.max(0, Math.round(numberCell(seconds)));
-    if (totalSeconds < 60) return `${totalSeconds}s`;
-    const minutes = Math.floor(totalSeconds / 60);
-    const remainingSeconds = totalSeconds % 60;
-    if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    return `${hours}h ${remainingMinutes}m`;
-};
-
-const formatReportDateTime = (value: unknown = new Date()) => {
-    const date = value instanceof Date ? value : new Date(parseTimestampMs(value));
-    if (Number.isNaN(date.getTime())) return "";
-    return new Intl.DateTimeFormat("es-EC", {
-        timeZone: REPORT_TIME_ZONE,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-    }).format(date);
-};
-
-const ensureReportRows = (rows: Array<Record<string, unknown>>, message = "Sin datos con los filtros actuales") =>
-    rows.length > 0 ? rows : [{ Estado: "Sin datos", Detalle: message }];
-
-const withSection = (sectionName: string, rows: Array<Record<string, unknown>>) =>
-    ensureReportRows(rows, `Sin datos para ${sectionName}`).map((row) => ({
-        Sección: sectionName,
-        ...row,
-    }));
-
-const safeDivision = (value: number, base: number) => (base > 0 ? value / base : 0);
-
 const getResponsibleValue = (conversation: ResolvedConversation) => {
     const attrs = getAttrs(conversation);
     return attrs.responsable || conversation.meta?.assignee?.name || "Sin responsable";
@@ -363,16 +265,16 @@ const getConversationRevenue = (conversation: ResolvedConversation, tagSettings:
 const getConversationStage = (conversation: ResolvedConversation) =>
     conversation.resolvedStage || "other";
 
-const getReportMessageTimestampMs = (message: any) =>
+const getReportMessageTimestampMs = (message: ConversationMessage) =>
     parseTimestampMs(message?.created_at_chatwoot || message?.created_at || message?.timestamp);
 
-const isIncomingReportMessage = (message: any) =>
+const isIncomingReportMessage = (message: ConversationMessage) =>
     message?.message_direction === "incoming" ||
     Number(message?.message_type) === 0 ||
     cleanText(message?.message_type).toLowerCase() === "incoming" ||
     cleanText(message?.sender_type).toLowerCase() === "contact";
 
-const hasReportMessageSenderSignal = (message: any) =>
+const hasReportMessageSenderSignal = (message: ConversationMessage) =>
     message?.message_direction !== undefined ||
     message?.message_type !== undefined ||
     message?.sender_type !== undefined;
@@ -380,14 +282,14 @@ const hasReportMessageSenderSignal = (message: any) =>
 const getReportConversationMessages = (conversation: ResolvedConversation) =>
     Array.isArray(conversation.messages)
         ? [...conversation.messages]
-            .filter((message: any) => !message?.private && !message?.is_private && getReportMessageTimestampMs(message) > 0)
-            .sort((a: any, b: any) => getReportMessageTimestampMs(a) - getReportMessageTimestampMs(b))
+            .filter((message) => !message?.private && !message?.is_private && getReportMessageTimestampMs(message) > 0)
+            .sort((a, b) => getReportMessageTimestampMs(a) - getReportMessageTimestampMs(b))
         : [];
 
 const hasUnansweredCustomerMessage = (conversation: ResolvedConversation) => {
-    if ((conversation as any).waiting_since) return true;
+    if (conversation.waiting_since) return true;
 
-    const lastNonActivityMessage = (conversation as any).last_non_activity_message;
+    const lastNonActivityMessage = conversation.last_non_activity_message;
     if (lastNonActivityMessage && hasReportMessageSenderSignal(lastNonActivityMessage)) {
         return isIncomingReportMessage(lastNonActivityMessage);
     }
@@ -457,10 +359,10 @@ const createBucketCounter = () =>
 
 const buildDimensionRows = (
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
     tagSettings: TagConfig,
     dimensionLabel: string,
-    resolveDimension: (conversation: ResolvedConversation, inboxMap: Map<number, any>) => unknown,
+    resolveDimension: (conversation: ResolvedConversation, inboxMap: InboxMap) => unknown,
 ) => {
     const thresholds = normalizeScoreThresholds(tagSettings.scoreThresholds);
     const grouped = new Map<string, {
@@ -525,125 +427,6 @@ const buildDimensionRows = (
         .sort((a, b) => numberCell(b.Leads) - numberCell(a.Leads));
 };
 
-const buildStatusRows = (conversations: ResolvedConversation[]) => {
-    const grouped = new Map<string, number>();
-    conversations.forEach((conversation) => {
-        const status = formatConversationStatus(conversation.status) || "Sin estado";
-        grouped.set(status, (grouped.get(status) || 0) + 1);
-    });
-    return Array.from(grouped.entries())
-        .map(([Estado, Leads]) => ({ Estado, Leads }))
-        .sort((a, b) => b.Leads - a.Leads);
-};
-
-const buildStageRows = (conversations: ResolvedConversation[]) => {
-    const grouped = new Map<string, number>();
-    conversations.forEach((conversation) => {
-        const stage = STAGE_LABELS[getConversationStage(conversation)] || "Otro";
-        grouped.set(stage, (grouped.get(stage) || 0) + 1);
-    });
-    return Array.from(grouped.entries())
-        .map(([Etapa, Leads]) => ({ Etapa, Leads }))
-        .sort((a, b) => b.Leads - a.Leads);
-};
-
-const buildLabelRows = (conversations: ResolvedConversation[]) => {
-    const grouped = new Map<string, number>();
-    conversations.forEach((conversation) => {
-        getConversationLabels(conversation).forEach((label) => {
-            const display = formatBusinessLabel(label) || "Sin etiqueta";
-            grouped.set(display, (grouped.get(display) || 0) + 1);
-        });
-    });
-    return Array.from(grouped.entries())
-        .map(([Etiqueta, Leads]) => ({ Etiqueta, Leads }))
-        .sort((a, b) => b.Leads - a.Leads);
-};
-
-const buildSourceRows = (conversations: ResolvedConversation[]) => {
-    const grouped = new Map<string, number>();
-    conversations.forEach((conversation) => {
-        const source = formatDataOrigin(conversation.source) || "Sin origen";
-        grouped.set(source, (grouped.get(source) || 0) + 1);
-    });
-    return Array.from(grouped.entries())
-        .map(([Origen, Leads]) => ({ Origen, Leads }))
-        .sort((a, b) => b.Leads - a.Leads);
-};
-
-const buildQualityDistributionRows = (conversations: ResolvedConversation[], tagSettings: TagConfig) => {
-    const thresholds = normalizeScoreThresholds(tagSettings.scoreThresholds);
-    const bucketCounts = new Map<ScoreBucket, number>(SCORE_BUCKET_ORDER.map((bucket) => [bucket, 0]));
-    let missingScoreCount = 0;
-
-    conversations.forEach((conversation) => {
-        const score = getScoreNumber(conversation, tagSettings);
-        const bucket = bucketFromScore(score, thresholds);
-        bucketCounts.set(bucket, (bucketCounts.get(bucket) || 0) + 1);
-        if (score === null) missingScoreCount += 1;
-    });
-
-    return SCORE_BUCKET_ORDER.map((bucket) => ({
-        Nivel: SCORE_BUCKET_COPY[bucket].label,
-        Rango: getBucketRangeLabel(bucket, thresholds),
-        Leads: bucketCounts.get(bucket) || 0,
-        Porcentaje: formatPercentValue(safeDivision(bucketCounts.get(bucket) || 0, conversations.length) * 100),
-        "Sin puntaje incluidos": bucket === "cold" ? missingScoreCount : "",
-    }));
-};
-
-const buildQualityConfigRows = (conversations: ResolvedConversation[], tagSettings: TagConfig) => {
-    const thresholds = normalizeScoreThresholds(tagSettings.scoreThresholds);
-    const scoreField = cleanText(tagSettings.scoreAttributeKey) || "score / lead_score / puntaje";
-    const missingScoreCount = conversations.filter((conversation) => getScoreNumber(conversation, tagSettings) === null).length;
-
-    return [
-        { Metrica: "Campo de puntaje usado", Valor: scoreField },
-        { Metrica: "Total encontrados", Valor: conversations.length },
-        { Metrica: "Sin puntaje incluidos en Frío", Valor: missingScoreCount },
-        { Metrica: "Desde Caliente", Valor: thresholds.hotMin },
-        { Metrica: "Desde Tibio", Valor: thresholds.warmMin },
-        { Metrica: "Rangos usados", Valor: SCORE_BUCKET_ORDER.map((bucket) => `${SCORE_BUCKET_COPY[bucket].label}: ${getBucketRangeLabel(bucket, thresholds)}`).join(" | ") },
-    ];
-};
-
-const buildFunnelRows = (items: any[] = [], sectionName: string) =>
-    rowsFromArray(items, "label", "value").map((row, index) => ({
-        Sección: sectionName,
-        Orden: index + 1,
-        Etapa: row.Nombre,
-        Leads: row.Valor,
-        Porcentaje: formatPercentValue(row.Porcentaje),
-    }));
-
-const buildFunnelConversionRows = (items: any[] = []) => {
-    const normalized = rowsFromArray(items, "label", "value");
-    return normalized.slice(1).map((row, index) => {
-        const previous = normalized[index];
-        const current = numberCell(row.Valor);
-        const base = numberCell(previous?.Valor);
-        return {
-            Desde: previous?.Nombre || "",
-            Hacia: row.Nombre,
-            "Base anterior": base,
-            Resultado: current,
-            Conversión: formatPercentValue(safeDivision(current, base) * 100),
-        };
-    });
-};
-
-const buildNamedValueRows = (
-    items: any[] = [],
-    nameLabel: string,
-    valueLabel: string,
-    labelKey = "name",
-    valueKey = "value",
-) => rowsFromArray(items, labelKey, valueKey).map((row) => ({
-    [nameLabel]: row.Nombre,
-    [valueLabel]: row.Valor,
-    Porcentaje: formatPercentValue(row.Porcentaje),
-}));
-
 const getSelectedInboxSummary = (input: DashboardReportInput) => {
     const selectedIds = input.globalFilters.selectedInboxes || [];
     if (selectedIds.length === 0) return "Todos los canales";
@@ -693,23 +476,16 @@ const buildSummaryRows = (
     ];
 };
 
-const metricRow = (Metrica: string, Valor: unknown, Formula: string, Interpretación: string) => ({
-    Metrica,
-    Valor,
-    Formula,
-    Interpretación,
-});
-
 const buildKpiRows = (
     tabId: ReportTabId,
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
-    dashboardData: any,
+    inboxMap: InboxMap,
+    dashboardData: DashboardReportData | undefined,
     tagSettings: TagConfig,
 ) => {
-    const kpis = dashboardData?.kpis || {};
-    const operational = dashboardData?.operationalMetrics || {};
-    const human = dashboardData?.humanMetrics || {};
+    const kpis = asRecord(dashboardData?.kpis);
+    const operational = asRecord(dashboardData?.operationalMetrics);
+    const human = asRecord(dashboardData?.humanMetrics);
     const totals = getConversationSummary(conversations, tagSettings);
 
     if (tabId === "overview") {
@@ -759,8 +535,8 @@ const buildKpiRows = (
     }
 
     if (tabId === "performance") {
-        const owners = Array.isArray(dashboardData?.ownerPerformance) ? dashboardData.ownerPerformance : [];
-        const bestOwner = [...owners].sort((a: any, b: any) => numberCell(b.appointments) - numberCell(a.appointments))[0];
+        const owners = getOwnerPerformanceRows(dashboardData);
+        const bestOwner = [...owners].sort((a, b) => numberCell(b.appointments) - numberCell(a.appointments))[0];
         const followupCount = numberCell(human.followupCurrent ?? human.followup ?? totals.followups);
         const humanAppointments = numberCell(human.humanAppointmentConversions ?? human.appointments ?? totals.appointments);
         const humanConversion = human.humanAppointmentConversionRate ?? human.conversionRate ?? safeDivision(humanAppointments, followupCount + humanAppointments) * 100;
@@ -811,18 +587,18 @@ const buildKpiRows = (
 const buildAnalysisRows = (
     tabId: ReportTabId,
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
-    dashboardData: any,
+    inboxMap: InboxMap,
+    dashboardData: DashboardReportData | undefined,
     tagSettings: TagConfig,
 ) => {
-    const trends = dashboardData?.trendMetrics || {};
+    const trends = asRecord(dashboardData?.trendMetrics);
     const addRows: Array<Record<string, unknown>> = [];
     const add = (sectionName: string, rows: Array<Record<string, unknown>>) => {
         addRows.push(...withSection(sectionName, rows));
     };
 
     if (tabId === "overview") {
-        add("Embudo resumido", buildFunnelRows(dashboardData?.funnelData || [], "Embudo resumido").map(({ Sección, ...row }) => row));
+        add("Embudo resumido", buildFunnelRows(asRecordArray(dashboardData?.funnelData), "Embudo resumido").map(({ Sección, ...row }) => row));
         add("Leads por canal", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
             const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
             return getLeadChannelName(conversation, inbox);
@@ -832,11 +608,11 @@ const buildAnalysisRows = (
     }
 
     if (tabId === "funnel") {
-        add("Embudo actual", buildFunnelRows(dashboardData?.funnelData || [], "Embudo actual").map(({ Sección, ...row }) => row));
-        add("Embudo histórico", buildFunnelRows(dashboardData?.historicalFunnelData || [], "Embudo histórico").map(({ Sección, ...row }) => row));
-        add("Conversión entre etapas", buildFunnelConversionRows(dashboardData?.funnelData || []));
+        add("Embudo actual", buildFunnelRows(asRecordArray(dashboardData?.funnelData), "Embudo actual").map(({ Sección, ...row }) => row));
+        add("Embudo histórico", buildFunnelRows(asRecordArray(dashboardData?.historicalFunnelData), "Embudo histórico").map(({ Sección, ...row }) => row));
+        add("Conversión entre etapas", buildFunnelConversionRows(asRecordArray(dashboardData?.funnelData)));
         add("Distribución por etapa", buildStageRows(conversations));
-        add("Pérdidas y descalificación", buildNamedValueRows(dashboardData?.disqualificationReasons || trends.disqualificationStats || [], "Motivo", "Leads"));
+        add("Pérdidas y descalificación", buildNamedValueRows(asRecordArray(dashboardData?.disqualificationReasons || trends.disqualificationStats), "Motivo", "Leads"));
         return addRows;
     }
 
@@ -858,13 +634,13 @@ const buildAnalysisRows = (
             const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
             return getLeadChannelName(conversation, inbox);
         }));
-        add("Ventas por día", buildNamedValueRows(dashboardData?.humanMetrics?.salesByDate || [], "Fecha", "Ventas", "date", "sales"));
+        add("Ventas por día", buildNamedValueRows(asRecordArray(asRecord(dashboardData?.humanMetrics).salesByDate), "Fecha", "Ventas", "date", "sales"));
         add("Detalle por responsable", buildDimensionRows(conversations, inboxMap, tagSettings, "Responsable", getResponsibleValue));
         return addRows;
     }
 
     if (tabId === "performance") {
-        add("Ranking por responsable", (dashboardData?.ownerPerformance || []).map((owner: any) => ({
+        add("Ranking por responsable", getOwnerPerformanceRows(dashboardData).map((owner) => ({
             Responsable: owner.name || "Sin responsable",
             Leads: owner.leads || 0,
             Citas: owner.appointments || 0,
@@ -877,9 +653,9 @@ const buildAnalysisRows = (
     }
 
     if (tabId === "trends") {
-        add("Leads por canal", buildNamedValueRows(trends.channelLeads || dashboardData?.channelData || [], "Canal", "Leads"));
-        add("Campañas", buildNamedValueRows(dashboardData?.campaignData || trends.campaignList || [], "Campaña", "Leads", "name", "leads"));
-        add("Ingresos por periodo", buildNamedValueRows(trends.revenuePeaks || trends.revenuePeakDays || [], "Periodo", "Monto", "date", "value"));
+        add("Leads por canal", buildNamedValueRows(asRecordArray(trends.channelLeads || dashboardData?.channelData), "Canal", "Leads"));
+        add("Campañas", buildNamedValueRows(asRecordArray(dashboardData?.campaignData || trends.campaignList), "Campaña", "Leads", "name", "leads"));
+        add("Ingresos por periodo", buildNamedValueRows(asRecordArray(trends.revenuePeaks || trends.revenuePeakDays), "Periodo", "Monto", "date", "value"));
         add("Calidad por canal", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
             const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
             return getLeadChannelName(conversation, inbox);
@@ -888,8 +664,9 @@ const buildAnalysisRows = (
     }
 
     if (tabId === "scoring") {
-        add("Rangos usados", buildQualityConfigRows(conversations, tagSettings));
-        add("Distribución de calidad", buildQualityDistributionRows(conversations, tagSettings));
+        const qualityItems = conversations.map((conversation) => ({ score: getScoreNumber(conversation, tagSettings) }));
+        add("Rangos usados", buildQualityConfigRows(qualityItems, tagSettings));
+        add("Distribución de calidad", buildQualityDistributionRows(qualityItems, tagSettings));
         add("Promedio por canal", buildDimensionRows(conversations, inboxMap, tagSettings, "Canal", (conversation, map) => {
             const inbox = conversation.inbox_id ? map.get(Number(conversation.inbox_id)) : undefined;
             return getLeadChannelName(conversation, inbox);
@@ -916,7 +693,7 @@ const buildTabReportSections = (
     input: DashboardReportInput,
     tabId: ReportTabId,
     filteredConversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
 ): ReportSection[] => {
     const tabLabel = REPORT_TAB_LABELS[tabId];
     const isSingleTab = input.tabIds.length === 1;
@@ -987,13 +764,8 @@ const getRangeLabel = (filters: DashboardFilters) => ({
     end: filters.endDate ? format(filters.endDate, "yyyy-MM-dd") : "Todo",
 });
 
-const getConversationLabels = (conversation: ResolvedConversation) =>
-    conversation.resolvedLabels?.length
-        ? conversation.resolvedLabels
-        : conversation.labels || [];
-
 const hasAnyLabel = (conversation: ResolvedConversation, labels: string[]) => {
-    const labelSet = new Set(getConversationLabels(conversation));
+    const labelSet = new Set(getReportConversationLabels(conversation));
     return labels.some((label) => labelSet.has(label));
 };
 
@@ -1031,7 +803,7 @@ const getReportLabelUniverse = (conversations: ResolvedConversation[]) => {
 
     return Array.from(new Set([
         ...baseLabels,
-        ...conversations.flatMap(getConversationLabels),
+        ...conversations.flatMap(getReportConversationLabels),
     ].map((label) => cleanText(label)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 };
 
@@ -1040,7 +812,7 @@ const buildLabelSummaryAoa = (
         title: string;
         conversations: ResolvedConversation[];
         referenceConversations: ResolvedConversation[];
-        inboxes: any[];
+        inboxes: ReportInbox[];
         filters: DashboardFilters;
         totalLabel: string;
     },
@@ -1050,7 +822,7 @@ const buildLabelSummaryAoa = (
     const inboxMap = getInboxMap(params.inboxes);
     const inboxes = params.inboxes || [];
 
-    const rows: any[][] = [
+    const rows: ReportAoa = [
         ["Fecha Inicio", start],
         ["Fecha Fin", end],
         ["Reporte", params.title],
@@ -1065,7 +837,7 @@ const buildLabelSummaryAoa = (
     labels.forEach((label) => labelCounts.set(label, { total: 0, byInbox: new Map() }));
 
     params.conversations.forEach((conversation) => {
-        getConversationLabels(conversation).forEach((label) => {
+        getReportConversationLabels(conversation).forEach((label) => {
             const row = labelCounts.get(label);
             if (!row) return;
 
@@ -1112,7 +884,7 @@ const formatExcelTimestamp = (value: unknown) => {
 
 const buildCompleteLeadRowsAoa = (
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
     tagSettings: TagConfig,
 ) => {
     const headers = [
@@ -1158,8 +930,8 @@ const buildCompleteLeadRowsAoa = (
                 getLeadName(conversation),
                 getLeadPhone(conversation, canal),
                 canal,
-                formatBusinessList(getConversationLabels(conversation), " | "),
-                STAGE_LABELS[conversation.resolvedStage] || conversation.resolvedStage || "Otro",
+                formatBusinessList(getReportConversationLabels(conversation), " | "),
+                formatLeadStage(conversation.resolvedStage),
                 formatConversationStatus(conversation.status),
                 attrs.responsable || "",
                 conversation.meta?.assignee?.name || "",
@@ -1187,7 +959,7 @@ const buildCompleteLeadRowsAoa = (
     ];
 };
 
-const appendAoaSheet = (workbook: xlsx.WorkBook, rows: any[][], sheetName: string) => {
+const appendAoaSheet = (workbook: xlsx.WorkBook, rows: ReportAoa, sheetName: string) => {
     const worksheet = xlsx.utils.aoa_to_sheet(rows);
     if (worksheet["!ref"]) worksheet["!autofilter"] = { ref: worksheet["!ref"] };
     worksheet["!cols"] = (rows[0] || []).map(() => ({ wch: 22 }));
@@ -1250,7 +1022,7 @@ const exportChatsWorkbook = (input: DashboardReportInput, fileName: string) => {
 
 const buildQueueRows = (
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
     tagSettings: TagConfig,
 ) => conversations.map((conversation) => {
     const attrs = getAttrs(conversation);
@@ -1262,8 +1034,8 @@ const buildQueueRows = (
         "Nombre del Lead": getLeadName(conversation),
         Canal: canal,
         Número: getLeadPhone(conversation, canal),
-        Estados: formatBusinessList(getConversationLabels(conversation), " | "),
-        Etapa: STAGE_LABELS[conversation.resolvedStage] || conversation.resolvedStage || "Otro",
+        Estados: formatBusinessList(getReportConversationLabels(conversation), " | "),
+        Etapa: formatLeadStage(conversation.resolvedStage),
         Responsable: attrs.responsable || "",
         "Agente asignado": conversation.meta?.assignee?.name || "",
         Agencia: attrs.agencia || "",
@@ -1301,7 +1073,7 @@ const filterSalesConversations = (conversations: ResolvedConversation[], filters
 
 const buildSalesRows = (
     conversations: ResolvedConversation[],
-    inboxMap: Map<number, any>,
+    inboxMap: InboxMap,
 ) => conversations.map((conversation) => {
     const attrs = getAttrs(conversation);
     const inbox = conversation.inbox_id ? inboxMap.get(Number(conversation.inbox_id)) : undefined;
@@ -1313,7 +1085,7 @@ const buildSalesRows = (
         "Nombre del Lead": getLeadName(conversation),
         Teléfono: getLeadPhone(conversation, canal),
         Canal: canal,
-        Estados: formatBusinessList(getConversationLabels(conversation), " | "),
+        Estados: formatBusinessList(getReportConversationLabels(conversation), " | "),
         Monto: attrs.monto_operacion || "",
         "Monto numérico": amount,
         "Fecha en que se registró el monto": attrs.fecha_monto_operacion || "",
@@ -1339,24 +1111,8 @@ const exportFollowupWorkbook = (input: DashboardReportInput, fileName: string) =
     const appointmentRows = filteredConversations.filter((conversation) => hasAnyLabel(conversation, appointmentTags));
     const saleConversations = filterSalesConversations(input.conversations, input.globalFilters, input.tagSettings);
     const salesRows = buildSalesRows(saleConversations, inboxMap);
-    const salesTotal = salesRows.reduce((sum, row) => sum + numberCell(row["Monto numérico"]), 0);
-    const byChannel = new Map<string, { Canal: string; Ventas: number; Monto: number }>();
-    const byMonth = new Map<string, { Periodo: string; Ventas: number; Monto: number }>();
+    const salesSummary = buildSalesSummaryRows(salesRows);
     const { start, end } = getRangeLabel(input.globalFilters);
-
-    salesRows.forEach((row) => {
-        const channel = cleanText(row.Canal) || "Otro";
-        const channelRow = byChannel.get(channel) || { Canal: channel, Ventas: 0, Monto: 0 };
-        channelRow.Ventas += 1;
-        channelRow.Monto += numberCell(row["Monto numérico"]);
-        byChannel.set(channel, channelRow);
-
-        const month = cleanText(row["Fecha en que se registró el monto"]).slice(0, 7) || "Sin fecha";
-        const monthRow = byMonth.get(month) || { Periodo: month, Ventas: 0, Monto: 0 };
-        monthRow.Ventas += 1;
-        monthRow.Monto += numberCell(row["Monto Numerico"]);
-        byMonth.set(month, monthRow);
-    });
 
     if (followupRows.length === 0 && appointmentRows.length === 0 && salesRows.length === 0) {
         throw new Error("No hay datos de seguimiento para exportar con los filtros actuales.");
@@ -1375,8 +1131,8 @@ const exportFollowupWorkbook = (input: DashboardReportInput, fileName: string) =
         ["Leads en Cola de Trabajo Diaria", followupRows.length],
         ["Leads en Citas Agendadas", appointmentRows.length],
         ["Ventas Exitosas", salesRows.length],
-        ["Monto Total Ventas", salesTotal],
-        ["Ticket Promedio", salesRows.length > 0 ? salesTotal / salesRows.length : 0],
+        ["Monto Total Ventas", salesSummary.salesTotal],
+        ["Ticket Promedio", salesRows.length > 0 ? salesSummary.salesTotal / salesRows.length : 0],
     ], "Resumen Seguimiento");
 
     appendJsonSheet(workbook, buildQueueRows(followupRows, inboxMap, input.tagSettings), "Cola Trabajo Diaria");
@@ -1386,195 +1142,14 @@ const exportFollowupWorkbook = (input: DashboardReportInput, fileName: string) =
         ["Fecha Fin", end],
         ["Generado", format(new Date(), "yyyy-MM-dd HH:mm:ss")],
         ["Ventas exitosas", salesRows.length],
-        ["Monto total", salesTotal],
-        ["Ticket promedio", salesRows.length > 0 ? salesTotal / salesRows.length : 0],
+        ["Monto total", salesSummary.salesTotal],
+        ["Ticket promedio", salesRows.length > 0 ? salesSummary.salesTotal / salesRows.length : 0],
     ], "Reporte Ventas Exitosas");
-    appendJsonSheet(workbook, Array.from(byChannel.values()), "Ventas Por Canal");
-    appendJsonSheet(workbook, Array.from(byMonth.values()), "Ventas Por Mes");
+    appendJsonSheet(workbook, salesSummary.byChannel, "Ventas Por Canal");
+    appendJsonSheet(workbook, salesSummary.byMonth, "Ventas Por Mes");
     appendJsonSheet(workbook, salesRows, "Detalle Ventas");
 
     xlsx.writeFile(workbook, fileName);
-};
-
-const downloadBlob = (blob: Blob, fileName: string) => {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-};
-
-const csvEscape = (value: unknown) => {
-    const text = normalizeCell(value);
-    if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-    return text;
-};
-
-const getSectionColumns = (section: ReportSection) =>
-    Array.from(new Set(section.rows.flatMap((row) => Object.keys(row))));
-
-const sectionToCsv = (section: ReportSection) => {
-    const columns = getSectionColumns(section);
-    const lines = [
-        [csvEscape("Seccion"), csvEscape(section.title)].join(","),
-        [csvEscape("Tipo"), csvEscape(section.kind || "datos")].join(","),
-        [csvEscape("Descripcion"), csvEscape(section.description || "")].join(","),
-        columns.map(csvEscape).join(","),
-        ...section.rows.map((row) => columns.map((column) => csvEscape(row[column])).join(",")),
-    ];
-    return lines.join("\n");
-};
-
-const exportCsv = (sections: ReportSection[], fileName: string) => {
-    const csv = sections.map(sectionToCsv).join("\n\n");
-    downloadBlob(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }), fileName);
-};
-
-const getColumnWidths = (rows: Array<Record<string, unknown>>, columns: string[]) =>
-    columns.map((column) => {
-        const maxContentLength = rows.reduce((max, row) => Math.max(max, normalizeCell(row[column]).length), column.length);
-        return { wch: Math.min(48, Math.max(14, maxContentLength + 2)) };
-    });
-
-const getUniqueSheetName = (name: string, usedNames: Set<string>) => {
-    const base = safeSheetName(name).slice(0, 31);
-    if (!usedNames.has(base)) {
-        usedNames.add(base);
-        return base;
-    }
-
-    let index = 2;
-    while (true) {
-        const suffix = ` ${index}`;
-        const candidate = `${base.slice(0, 31 - suffix.length)}${suffix}`;
-        if (!usedNames.has(candidate)) {
-            usedNames.add(candidate);
-            return candidate;
-        }
-        index += 1;
-    }
-};
-
-const exportExcel = (sections: ReportSection[], fileName: string) => {
-    const workbook = xlsx.utils.book_new();
-    const usedNames = new Set<string>();
-    sections.forEach((section, index) => {
-        const columns = getSectionColumns(section);
-        const worksheet = xlsx.utils.json_to_sheet(section.rows, { header: columns });
-        if (worksheet["!ref"]) worksheet["!autofilter"] = { ref: worksheet["!ref"] };
-        worksheet["!cols"] = getColumnWidths(section.rows, columns);
-        xlsx.utils.book_append_sheet(workbook, worksheet, getUniqueSheetName(section.sheetName || `${index + 1} ${section.title}`, usedNames));
-    });
-    xlsx.writeFile(workbook, fileName);
-};
-
-const toPdfSafeText = (value: unknown) => normalizeCell(value)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const wrapLine = (line: string, maxLength = 96) => {
-    const clean = toPdfSafeText(line);
-    if (clean.length <= maxLength) return [clean];
-
-    const chunks: string[] = [];
-    let remaining = clean;
-    while (remaining.length > maxLength) {
-        const splitIndex = remaining.lastIndexOf(" ", maxLength);
-        const index = splitIndex > 20 ? splitIndex : maxLength;
-        chunks.push(remaining.slice(0, index));
-        remaining = remaining.slice(index).trim();
-    }
-    if (remaining) chunks.push(remaining);
-    return chunks;
-};
-
-const pdfEscape = (text: string) => text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-
-const sectionsToPdfLines = (title: string, sections: ReportSection[]) => {
-    const lines = [
-        title,
-        "Reporte ejecutivo del dashboard",
-        `Generado: ${formatReportDateTime()}`,
-        `Zona horaria: ${REPORT_TIME_ZONE}`,
-        "Nota: el PDF prioriza lectura ejecutiva. El detalle completo y filtrable vive en Excel/CSV.",
-        "",
-    ];
-
-    sections.forEach((section) => {
-        lines.push(section.title);
-        if (section.description) lines.push(section.description);
-        const columns = getSectionColumns(section).slice(0, section.kind === "detail" ? 8 : 10);
-        const rowLimit = section.kind === "detail" ? 40 : 120;
-        if (columns.length > 0) lines.push(columns.join(" | "));
-        section.rows.slice(0, rowLimit).forEach((row) => {
-            lines.push(columns.map((column) => normalizeCell(row[column])).join(" | "));
-        });
-        if (section.rows.length > rowLimit) lines.push(`... ${section.rows.length - rowLimit} filas adicionales en Excel/CSV`);
-        lines.push("");
-    });
-
-    return lines.flatMap((line) => wrapLine(line));
-};
-
-const buildPdfBlob = (lines: string[]) => {
-    const pageLines: string[][] = [];
-    const linesPerPage = 48;
-    for (let index = 0; index < lines.length; index += linesPerPage) {
-        pageLines.push(lines.slice(index, index + linesPerPage));
-    }
-
-    const objects: string[] = [];
-    const addObject = (body: string) => {
-        objects.push(body);
-        return objects.length;
-    };
-
-    const catalogId = addObject("<< /Type /Catalog /Pages 2 0 R >>");
-    const pagesPlaceholderId = addObject("__PAGES__");
-    const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-    const pageIds: number[] = [];
-
-    pageLines.forEach((page) => {
-        const streamLines = ["BT", "/F1 9 Tf", "40 800 Td"];
-        page.forEach((line, index) => {
-            if (index > 0) streamLines.push("0 -14 Td");
-            streamLines.push(`(${pdfEscape(line)}) Tj`);
-        });
-        streamLines.push("ET");
-        const stream = streamLines.join("\n");
-        const contentId = addObject(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
-        const pageId = addObject(`<< /Type /Page /Parent ${pagesPlaceholderId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`);
-        pageIds.push(pageId);
-    });
-
-    objects[pagesPlaceholderId - 1] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
-
-    let pdf = "%PDF-1.4\n";
-    const offsets = [0];
-    objects.forEach((body, index) => {
-        offsets.push(pdf.length);
-        pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
-    });
-    const xrefOffset = pdf.length;
-    pdf += `xref\n0 ${objects.length + 1}\n`;
-    pdf += "0000000000 65535 f \n";
-    offsets.slice(1).forEach((offset) => {
-        pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
-    });
-    pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-
-    return new Blob([pdf], { type: "application/pdf" });
-};
-
-const exportPdf = (title: string, sections: ReportSection[], fileName: string) => {
-    const lines = sectionsToPdfLines(title, sections);
-    downloadBlob(buildPdfBlob(lines), fileName);
 };
 
 export const downloadDashboardReport = (formatId: ReportFileFormat, input: DashboardReportInput) => {
@@ -1596,7 +1171,7 @@ export const downloadDashboardReport = (formatId: ReportFileFormat, input: Dashb
         throw new Error("No hay datos para exportar con los filtros actuales.");
     }
 
-    if (formatId === "excel") exportExcel(sections, `${baseName}.xlsx`);
-    if (formatId === "csv") exportCsv(sections, `${baseName}.csv`);
-    if (formatId === "pdf") exportPdf(input.title, sections, `${baseName}.pdf`);
+    if (formatId === "excel") exportExcelSections(sections, `${baseName}.xlsx`);
+    if (formatId === "csv") exportCsvSections(sections, `${baseName}.csv`);
+    if (formatId === "pdf") exportPdfSections(input.title, sections, `${baseName}.pdf`);
 };

@@ -2,11 +2,23 @@ import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
 import * as xlsx from "xlsx";
 import { format } from "date-fns";
-import { useDashboardContext } from "@/context/DashboardDataContext";
+import { useDashboardContext } from "@/context/useDashboardContext";
 import { config } from "@/config";
 import { toast } from "sonner";
 import { getAttrs, getLeadChannelName, getLeadExternalUrl } from "@/lib/leadDisplay";
 import { formatBusinessList, formatFieldLabel } from "@/lib/displayCopy";
+
+type ExportCell = string | number | boolean;
+type ExportRow = Record<string, ExportCell>;
+type ExportConversationExtras = {
+    account_id?: unknown;
+    source?: unknown;
+};
+
+const toExportCell = (value: unknown): ExportCell => {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+    return String(value ?? "");
+};
 
 export function ExportToExcel() {
     const { conversations, inboxes, tagSettings } = useDashboardContext();
@@ -34,7 +46,8 @@ export function ExportToExcel() {
                 const createdAt = conv.created_at ? new Date(conv.created_at * 1000) : null;
                 const lastActivity = conv.timestamp ? new Date(conv.timestamp * 1000) : null;
 
-                const row: any = {};
+                const row: ExportRow = {};
+                const extraFields = conv as typeof conv & ExportConversationExtras;
 
                 activeFields.forEach(field => {
                     const displayField = formatFieldLabel(field);
@@ -44,28 +57,28 @@ export function ExportToExcel() {
                     }
                     switch (field) {
                         case "ID": row[displayField] = conv.id; break;
-                        case "Nombre": row[displayField] = conv.meta?.sender?.name || allAttrs.nombre_completo || ""; break;
-                        case "Telefono": row[displayField] = allAttrs.celular || conv.meta?.sender?.phone_number || ""; break;
+                        case "Nombre": row[displayField] = toExportCell(conv.meta?.sender?.name || allAttrs.nombre_completo); break;
+                        case "Telefono": row[displayField] = toExportCell(allAttrs.celular || conv.meta?.sender?.phone_number); break;
                         case "Canal": row[displayField] = canal; break;
                         case "Estados":
                         case "Etiquetas": row[displayField] = formatBusinessList(conv.labels || []); break;
-                        case "Correo": row[displayField] = allAttrs.correo || conv.meta?.sender?.email || ""; break;
-                        case "Monto": row[displayField] = allAttrs.monto_operacion || ""; break;
-                        case "Fecha Monto": row[displayField] = allAttrs.fecha_monto_operacion || ""; break;
-                        case "Agencia": row[displayField] = allAttrs.agencia || ""; break;
-                        case "Check-in": row[displayField] = allAttrs.checkincat || ""; break;
-                        case "Check-out": row[displayField] = allAttrs.checkoutcat || ""; break;
-                        case "Campana": row[displayField] = allAttrs.campana || ""; break;
-                        case "Ciudad": row[displayField] = allAttrs.ciudad || ""; break;
-                        case "Responsable": row[displayField] = allAttrs.responsable || conv.meta?.assignee?.name || ""; break;
+                        case "Correo": row[displayField] = toExportCell(allAttrs.correo || conv.meta?.sender?.email); break;
+                        case "Monto": row[displayField] = toExportCell(allAttrs.monto_operacion); break;
+                        case "Fecha Monto": row[displayField] = toExportCell(allAttrs.fecha_monto_operacion); break;
+                        case "Agencia": row[displayField] = toExportCell(allAttrs.agencia); break;
+                        case "Check-in": row[displayField] = toExportCell(allAttrs.checkincat); break;
+                        case "Check-out": row[displayField] = toExportCell(allAttrs.checkoutcat); break;
+                        case "Campana": row[displayField] = toExportCell(allAttrs.campana); break;
+                        case "Ciudad": row[displayField] = toExportCell(allAttrs.ciudad); break;
+                        case "Responsable": row[displayField] = toExportCell(allAttrs.responsable || conv.meta?.assignee?.name); break;
                         case "URL Red Social": row[displayField] = getLeadExternalUrl(conv, canal); break;
                         case "Fecha Ingreso": row[displayField] = createdAt ? format(createdAt, "yyyy-MM-dd HH:mm:ss") : ""; break;
                         case "Ultima Interaccion": row[displayField] = lastActivity ? format(lastActivity, "yyyy-MM-dd HH:mm:ss") : ""; break;
-                        case "ID Contacto": row[displayField] = conv.meta?.sender?.id || ""; break;
+                        case "ID Contacto": row[displayField] = toExportCell(conv.meta?.sender?.id); break;
                         case "ID Inbox": row[displayField] = conv.inbox_id || ""; break;
-                        case "ID Cuenta": row[displayField] = (conv as any).account_id || ""; break;
-                        case "Origen Dato": row[displayField] = (conv as any).source || ""; break;
-                        default: row[displayField] = allAttrs[field] || ""; break;
+                        case "ID Cuenta": row[displayField] = toExportCell(extraFields.account_id); break;
+                        case "Origen Dato": row[displayField] = toExportCell(extraFields.source); break;
+                        default: row[displayField] = toExportCell(allAttrs[field]); break;
                     }
                 });
 

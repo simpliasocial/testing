@@ -1,0 +1,543 @@
+ya eras estoy realizando est eplan de implmeantacion
+# Plan: Refactor Arquitectónico Seguro de SimpliaLeads Dashboard
+
+## Summary
+Refactorizar primero la app productiva: `src`, Supabase Edge Functions/migrations relacionadas y configuración de calidad. La arquitectura recomendada es **Feature-Sliced Clean Architecture con Ports & Adapters**, porque el proyecto es un dashboard React con mucho dominio comercial, integraciones externas y reportes, no un backend monolítico ni un sistema que necesite microservicios.
+
+El objetivo es mantener el comportamiento actual, ordenar el código por responsabilidad, reducir archivos gigantes, tipar el dominio y dejar una base escalable para leads, conversaciones, scoring, reportes y sincronización.
+
+## Key Changes
+- Trabajar en una branch nueva: `codex/app-architecture-refactor`, sin tocar los documentos ni scripts no productivos salvo que bloqueen build/lint.
+- Separar responsabilidades en capas:
+  - `app`: providers, router, layout, configuración global.
+  - `features`: pantallas y flujos por negocio: dashboard, followup, scoring, reporting, conversations.
+  - `domain`: tipos, reglas puras, estados de lead, scoring, métricas, filtros, reportes.
+  - `application`: casos de uso y view models.
+  - `infrastructure`: Chatwoot, Supabase, IndexedDB, Excel/PDF/CSV, mappers externos.
+  - `shared`: UI común, formatters, fechas, utilidades puras.
+- Convertir servicios actuales en adapters:
+  - `ChatwootService`, `SupabaseService`, `StorageService` pasan a interfaces/repositorios.
+  - `ConversationMapper` queda como mapper DTO externo -> dominio.
+  - Reglas duplicadas de canal, score, labels, fechas y reportes se centralizan.
+- Dividir archivos grandes:
+  - `LeadActionQueue.tsx`, `LeadScoringLayer.tsx`, `reportExport.ts`, `leadImport.ts`, `DashboardDataContext.tsx`, `useDashboardData.ts`.
+  - Cada pantalla queda como composición de componentes pequeños + hooks/use-cases.
+- Crear tipos de dominio reemplazando `any` progresivamente:
+  - `Lead`, `Conversation`, `ConversationMessage`, `Inbox`, `LeadStage`, `TagConfig`, `DashboardMetrics`, `ReportDefinition`, `ReportRun`.
+- Mantener comentarios técnicos en inglés. La UI visible puede seguir en español porque es texto de producto para usuarios.
+
+## Implementation Sequence
+- Phase 1: Safety baseline
+  - Crear branch.
+  - Registrar estado inicial: build pasa, `lint` falla con 304 errores, `tsc` falla con errores reales de tipos.
+  - Añadir scripts mínimos: `typecheck`, `check`.
+  - No activar `strict` todavía; primero estabilizar.
+- Phase 2: Domain foundation
+  - Crear `src/domain` con tipos y reglas puras.
+  - Extraer parseo de fechas, labels, canales, monto, lead stage, scoring y métricas base.
+  - Añadir tests unitarios para esas reglas.
+- Phase 3: Data/application layer
+  - Reemplazar `DashboardDataContext` gigante por provider delgado + use-cases.
+  - Mantener React Query como patrón principal de fetching/caching.
+  - Definir repositorios: Chatwoot, Supabase, LocalStorage/IndexedDB.
+- Phase 4: Feature slices
+  - Refactorizar por prioridad: dashboard overview, follow-up queue, scoring, reporting, conversations.
+  - Cada feature tendrá `components`, `hooks`, `model/viewModel` y `index`.
+  - No cambiar UX visible salvo correcciones necesarias.
+- Phase 5: Quality hardening
+  - Reducir errores de lint por dominio productivo.
+  - Corregir errores de `tsc`.
+  - Añadir code-splitting por tabs pesados para bajar bundle principal.
+  - Documentar arquitectura en `ARCHITECTURE.md`.
+
+## Patterns To Apply
+- Repository/Adapter para Chatwoot, Supabase e IndexedDB.
+- Mapper para transformar APIs externas a modelos internos.
+- Strategy para lead stage, scoring thresholds y perfiles de reportes.
+- Builder/Factory para exportes Excel/PDF/CSV.
+- Facade para consumo de datos del dashboard desde UI.
+- ViewModel/Presenter para que las pantallas no calculen reglas de negocio.
+
+## Test Plan
+- Unit tests para reglas puras: stage, score, amount parsing, channel resolution, label state, report rows.
+- Typecheck: `npx tsc -p tsconfig.app.json --noEmit`.
+- Lint: `npm run lint`, inicialmente como baseline y luego como gate.
+- Build: `npm run build`.
+- Manual QA de tabs críticos: Estrategia, Embudo, Operación, Seguimiento, Calidad, Conversaciones, Reportes.
+- Verificar exportes Excel/PDF/CSV con datos vacíos y datos reales.
+
+## Assumptions
+- Primera fase excluye documentos `.docx`, `.pdf`, assets de manuales y scripts de generación documental.
+- No se cambian migraciones históricas ya aplicadas; nuevas migraciones solo si aparece una necesidad real.
+- No se reescribe desde cero: se migra por partes para proteger el negocio.
+- Los textos visibles para el usuario siguen en español; comentarios y nombres técnicos nuevos van en inglés.
+
+
+
+Donde sto ay se hizo:
+Implemented the first safe architecture refactor slice on branch codex-app-architecture-refactor because the requested slash branch was blocked by local git ref permissions.
+
+What changed:
+
+
+Added architecture layers: src/app, src/domain, src/application, src/features, src/infrastructure, src/shared.
+
+Split app composition into AppProviders and AppRouter.
+
+Added domain rules for lead stages, labels, channels, score thresholds, amount parsing, reports, and dashboard types.
+
+Added ports/adapters for Chatwoot, hybrid conversations, IndexedDB, and conversation mapping.
+
+Added feature entrypoints and lazy-loaded dashboard tabs, cutting the main production bundle from ~1.18 MB to ~386 KB.
+
+Added typecheck, test:domain, and check scripts.
+
+Documented the target architecture in ARCHITECTURE.md.
+
+Fixed existing TypeScript errors in chart props, tag config typing, index dashboard data adaptation, timestamp mapping, and button handlers.
+
+
+Verification:
+
+
+npm run typecheck passes.
+
+npm run test:domain passes.
+
+npm run lint passes with warnings only; existing any/hook warnings remain as migration debt.
+
+npm run build passes. One large chunk remains: DashboardLayout around 590 KB.
+
+Dev server is running at http://127.0.0.1:8080/.
+
+
+I left the pre-existing dirty docs/scripts/assets untouched. They still show in git status, but they are not part of this refactor.
+
+
+
+architecture.md
+SimpliaLeads Dashboard Architecture
+Target Style
+The app now moves toward a feature-sliced clean architecture with ports and adapters. The goal is to protect the commercial domain from UI and infrastructure details while keeping the current product behavior stable.
+
+Layers
+src/app: app providers, router, route-level loading boundaries, and global composition.
+src/features: business-facing slices such as dashboard, follow-up, scoring, reporting, and conversations.
+src/domain: pure types and business rules for leads, stages, scoring, channels, reports, and dashboard metrics.
+src/application: use-case contracts and ports consumed by the app layer.
+src/infrastructure: adapters for Chatwoot, Supabase, IndexedDB, mapping, and export mechanisms.
+src/shared: cross-cutting helpers with no business ownership.
+Rules
+UI components should render view models and dispatch intents; they should not own integration details.
+Domain modules must stay pure and testable: no React, no Supabase client, no browser APIs.
+Infrastructure adapters translate external payloads into domain/application contracts.
+New technical comments and code identifiers should use English. User-visible copy can remain Spanish.
+Refactors should be incremental and behavior-preserving unless a product change is explicitly requested.
+Current Baseline
+Production build compiles.
+Type checking now has a dedicated script and should be kept green before deeper strictness is enabled.
+Lint is configured as a migration gate: existing any usage is warning-level while new domain code should prefer explicit types.
+Next Refactor Targets
+Move dashboard metric calculation from useDashboardData into application/domain modules.
+Split LeadActionQueue, LeadScoringLayer, reportExport, and leadImport into feature-local components, hooks, and builders.
+Replace direct service imports from UI with application ports and infrastructure adapters.
+Consolidate duplicated channel, score, label, and report logic between frontend and Supabase Edge Functions.
+
+También seguí avanzando: extraje settings a src/infrastructure/settings, mapeo de atributos Chatwoot a src/infrastructure/chatwoot, tipé mejor el context, bajé warnings, mantuve el code-splitting de tabs/reportes y dejé la arquitectura documentada en ARCHITECTURE.md.
+
+Ojo honesto: la QA visual con browser automation no se pudo ejecutar porque el plugin del navegador pide Node >=22.22.0 y el runtime disponible está en 22.14.0. Pero por build, typecheck, lint, tests y smoke HTTP, la app está funcional a nivel técnico.
+
+No toqué los docs/assets sucios que ya estaban en el repo. La rama sigue en codex-app-architecture-refactor. Siguiente bloque lógico: partir useDashboardData.ts en casos de uso/view models de métricas, porque ahí todavía vive bastante negocio mezclado.
+
+
+Listo, seguí con el refactor y lo dejé verificado.
+
+Avance principal: useDashboardData.ts bajó de ~813 líneas a 568, moviendo reglas puras a src/application/dashboard/metrics y el contrato de datos a src/application/dashboard/viewModel.ts. Ahora están separados: rango de fechas, appointments recientes, embudo/labels, métricas de primera respuesta y canales. También agregué tests unitarios para esas reglas.
+
+Verificación final:
+
+npm run typecheck: OK
+npm run test:unit: OK
+npm run lint: OK, 0 errors, bajó a 264 warnings
+npm run build: OK
+Smoke HTTP http://127.0.0.1:8080/: 200 OK
+También actualicé scripts:
+
+test:application
+test:unit
+check ahora corre typecheck + test:unit + build
+Siguiente bloque natural: seguir vaciando useDashboardData.ts con ownerPerformance, operationalMetrics, humanMetrics y después atacar LeadActionQueue.tsx por componentes/hooks pequeños.
+
+Seguimos y cerré otro tramo grande con verificación.
+
+Hice tres refactors seguros:
+
+
+Extraje métricas operativas/owners a operationalMetrics.ts.
+
+Saqué reglas puras de seguimiento a leadActionQueueModel.ts. LeadActionQueue bajó de 2407 a 1992 líneas.
+
+Saqué reglas puras de scoring a leadScoringModel.ts. LeadScoringLayer quedó en 1293 líneas.
+
+
+También añadí tests nuevos en:
+
+
+dashboardViewModel.test.mjs
+
+followupModel.test.mjs
+
+scoringModel.test.mjs
+
+
+Verificación final:
+
+
+npm run typecheck: pasa
+
+npm run test:unit: pasa
+
+npm run lint: 0 errores, 260 warnings
+
+npm run build: pasa
+
+Smoke local http://127.0.0.1:8080/: 200
+
+
+El siguiente bloque natural sería reportExport.ts o seguir partiendo LeadActionQueue en componentes internos más pequeños. Ahí ya toca ir con bisturí, porque es zona de exportes y flujos manuales.
+
+
+Seguí con dos cortes más y todo quedó verificado.
+
+Moví reglas puras de seguimiento a leadActionQueueModel.ts: búsqueda de colas, filtro de ventas y total de ventas. LeadActionQueue bajó a 1972 líneas.
+
+También empecé a ordenar exportes en reportExportModel.ts: nombres seguros de hojas/archivos, fechas, normalización de celdas, estado/origen y filtro de conversaciones por fecha/inbox. reportExport.ts bajó a 1527 líneas.
+
+Pruebas nuevas/reforzadas:
+
+
+followupModel.test.mjs
+
+reportExportModel.test.mjs
+
+
+Verificación final:
+
+
+npm run typecheck: pasa
+
+npm run test:unit: pasa
+
+npm run lint: 0 errores, 258 warnings
+
+npm run build: pasa
+
+Smoke http://127.0.0.1:8080/: 200
+
+
+La siguiente zona buena para continuar es extraer cálculos de reportExport.ts por secciones: scoring, calidad, funnel y ventas.
+
+
+
+isto, seguimos y cerré otro bloque fuerte de reporting.
+
+Moví más lógica pura desde reportExport.ts hacia reportExportModel.ts: formatters, filas de embudo, filas nombre/valor, resumen de ventas por canal/mes, distribuciones de estado/etapa/etiqueta/origen y reglas de calidad/scoring. También corregí un bug real: el resumen mensual de ventas estaba leyendo "Monto Numerico" pero la fila usa "Monto numérico", entonces el monto mensual podía quedar en 0.
+
+Añadí cobertura en reportExportModel.test.mjs. Estado verificado:
+
+
+npm run typecheck: pasa
+
+npm run test:unit: pasa
+
+npm run lint: pasa con 0 errors, quedan 254 warnings
+
+npm run build: pasa
+
+Smoke local http://127.0.0.1:8080/: 200
+
+
+reportExport.ts bajó a 1334 líneas y el model de reporting quedó en 364 líneas testeadas. El siguiente bloque natural es seguir sacando del exportador las filas especiales de chats/follow-up o empezar a tipar servicios/adapters (ChatwootService, ConversationMapper, StorageService) para reducir los any que quedan.
+
+
+
+Seguimos bien. En este tramo hice dos cortes importantes:
+
+
+Separé los writers genéricos de reportes a reportFileWriters.ts: CSV, Excel y PDF ya viven en infrastructure, no dentro del generador de secciones.
+
+Moví tipos compartidos de reportes/conversaciones a dominio y dejé el mapper real en ConversationMapper.ts. El archivo legacy de services ahora queda como facade temporal para no romper imports.
+
+Añadí tests del mapper en conversationMapper.test.mjs.
+
+Tipé eventos de IndexedDB en StorageService.ts.
+
+
+Verificación completa:
+
+
+npm run typecheck: pasa
+
+npm run test:unit: pasa
+
+npm run lint: pasa con 0 errors, bajamos a 229 warnings
+
+npm run build: pasa
+
+Smoke http://127.0.0.1:8080/: 200
+
+
+Además, reportExport.ts bajó a 1136 líneas. El siguiente frente natural es ChatwootService / SupabaseService: convertirlos en adapters más tipados y dejar los servicios legacy como facades mientras migramos consumidores.
+
+
+Listo, avancé otra tanda grande y quedó funcionando.
+
+En esta pasada dejé más clara la arquitectura de infraestructura:
+
+
+ChatwootService, SupabaseService, SupabaseSyncService y LabelEventService ahora son facades pequeñas hacia adapters en src/infrastructure.
+
+Moví lectura histórica a SupabaseHistoricalClient.ts.
+
+Moví lectura híbrida de Supabase a SupabaseDashboardReadClient.ts.
+
+Moví sync/persistencia a SupabaseSyncClient.ts.
+
+Moví eventos de etiquetas a LabelEventClient.ts.
+
+Saqué reglas puras a dominio/shared: delta de etiquetas, deduplicación de conversaciones y normalización de eventos de mensajes.
+
+
+Verificado:
+
+
+npm run typecheck pasa.
+
+npm run test:unit pasa.
+
+npm run lint pasa con 0 errors, bajó a 199 warnings.
+
+npm run build pasa.
+
+Smoke local http://127.0.0.1:8080/ devuelve 200.
+
+
+Estamos en branch codex-app-architecture-refactor. Siguiente frente lógico: reducir los any grandes que quedaron en SupabaseSyncClient, reportExport.ts y pantallas pesadas, y luego seguir adelgazando DashboardDataContext.
+
+
+Listo, seguimos y quedó otra tanda sólida.
+
+Avancé en tres frentes:
+
+
+SupabaseSyncClient quedó sin any explícitos y normaliza payloads externos con UnknownRecord.
+
+HybridDashboardService, SyncService, auth/login y auditoría comercial quedaron más tipados.
+
+Moví auditoría comercial a infraestructura: CommercialAuditClient.ts, dejando facade compatible en services.
+
+leadDisplay.ts quedó tipado con modelos de dominio para leads, inboxes y mensajes.
+
+
+Verificación completa:
+
+
+npm run typecheck pasa.
+
+npm run test:unit pasa.
+
+npm run lint pasa con 0 errors; warnings bajaron de 199 al inicio de esta tanda a 140.
+
+npm run build pasa.
+
+Smoke local http://127.0.0.1:8080/ devuelve 200.
+
+
+Queda como siguiente bloque natural atacar src/lib/reportExport.ts, que todavía concentra bastantes any, y después las pantallas pesadas (LeadActionQueue, LeadScoringLayer, ReportsPage).
+
+Listo, seguimos y dejamos otro tramo bien cerrado.
+
+En esta pasada limpié y tipé varias piezas productivas: ReportsPage.tsx, ReportingLayer.tsx, TrendLayer.tsx, HistoricalTrendLayer.tsx, Index.tsx, ChatwootPage.tsx, PerformanceLayer.tsx y OperationalEfficiency.tsx, además de componentes compartidos de dashboard/export/import.
+
+Verificación:
+
+
+npm run typecheck: pasa.
+
+npm run lint: pasa con 44 warnings, bajamos desde 109 en esta continuación.
+
+npm run test:unit: pasa completo.
+
+npm run build: pasa.
+
+Smoke local http://127.0.0.1:8080/: responde 200.
+
+
+Queda deuda concentrada principalmente en LeadActionQueue, LeadScoringLayer, algunos warnings de shadcn/ui, useSupabase, DashboardDataContext y un warning menor en la Edge Function de reportes. La branch actual es codex-app-architecture-refactor.
+
+
+Listo, seguimos y dejé esta tanda cerrada con verificación real.
+
+Avancé en:
+
+
+Tipado seguro de LeadActionQueue.tsx y LeadScoringLayer.
+
+Eliminación de any en SupabaseExample y useSupabase.
+
+Separación correcta de providers/hooks para AuthContext y DashboardDataContext.
+
+Limpieza de warnings de Fast Refresh en UI moviendo variants/helpers a archivos propios.
+
+Corrección menor en la Edge Function de reportes.
+
+
+Verificación:
+
+
+npm run typecheck pasa.
+
+npm run lint pasa con 0 warnings.
+
+npm run test:unit pasa.
+
+npm run build pasa.
+
+Dejé Vite corriendo en http://127.0.0.1:8080.
+
+Smoke en navegador integrado: cargó /login con título Testings Funnel Agent Dashboard | Simplia AI.
+
+
+Nota: el primer build y el primer arranque de Vite fallaron por permisos del sandbox (EPERM con esbuild / .vite), los repetí fuera del sandbox y quedaron bien. No hice commit ni staging. Siguiente paso natural: seguir reduciendo archivos grandes y mover lógica de LeadActionQueue hacia casos de uso/modelos de feature.
+
+
+
+isto, avancé otro corte seguro.
+
+Extraje la lógica pura del reporte de ventas desde LeadActionQueue hacia src/features/followup/model/salesReportExportModel.ts. Ahora el componente solo orquesta Excel/toasts, y el armado de detalle, resumen, agrupación por canal y agrupación por mes queda testeado como modelo de feature.
+
+También agregué pruebas en tests/features/followupModel.test.mjs.
+
+Verificación:
+
+npm run typecheck pasa.
+npm run lint pasa limpio.
+npm run test:unit pasa.
+npm run build pasa.
+Smoke local http://127.0.0.1:8080/ responde 200.
+Siguiente corte recomendado: extraer de LeadActionQueue el workflow de actualización de lead/cambio de estado hacia un hook o use case de features/followup, porque todavía concentra Chatwoot, label events, refresh y UI state en el mismo archivo.
+
+
+
+Listo, avancé otro corte de arquitectura.
+
+Extraje el workflow de actualización de leads fuera de LeadActionQueue.tsx:
+
+
+Nuevo modelo puro: src/features/followup/model/leadWorkflowModel.ts
+
+Nuevo hook/use case: src/features/followup/hooks/useLeadWorkflowUpdate.ts
+
+Nuevas pruebas para merge de atributos/contacto inválido en tests/features/followupModel.test.mjs
+
+
+LeadActionQueue ahora ya no orquesta directamente labels, attrs, refresh de conversación, eventos y reparación Supabase; solo llama applyLeadWorkflowUpdate.
+
+Verificación:
+
+
+npm run typecheck pasa.
+
+npm run lint pasa.
+
+npm run test:unit pasa.
+
+npm run build pasa.
+
+Smoke local http://127.0.0.1:8080/ responde 200.
+
+
+Siguiente corte lógico: sacar la carga/normalización de definiciones de atributos desde LeadActionQueue a un hook propio (useFollowupAttributeDefinitions).
+
+
+
+Listo, hice otro corte seguro.
+
+Moví la carga/normalización de definiciones de atributos desde LeadActionQueue.tsx al nuevo hook useFollowupAttributeDefinitions.ts. Mantiene el mismo flujo: Chatwoot primero, fallback a Supabase, normalización, merge con campos locales e inferidos.
+
+Verificación:
+
+
+npm run typecheck pasa.
+
+npm run lint pasa.
+
+npm run test:unit pasa.
+
+npm run build pasa.
+
+Smoke local http://127.0.0.1:8080/ responde 200.
+
+
+LeadActionQueue queda más limpio: ya no maneja fetching de definiciones, workflow de actualización ni construcción del reporte de ventas. Siguiente corte recomendado: extraer la lógica de historial de mensajes a useLeadMessageHistory.
+
+
+Listo, otro corte terminado.
+
+Moví la lógica de historial de mensajes a useLeadMessageHistory.ts. Ahora LeadActionQueue ya no consulta directamente Chatwoot/Supabase para el historial; solo llama openHistory(lead) y renderiza el modal.
+
+Verificación:
+
+
+npm run typecheck pasa.
+
+npm run lint pasa.
+
+npm run test:unit pasa.
+
+npm run build pasa.
+
+Smoke local http://127.0.0.1:8080/ responde 200.
+
+
+Siguiente corte recomendado: separar la configuración de flujo humano (humanConfig, listas, guardar config, campos configurados) en un hook tipo useHumanFlowConfig.
+
+
+Listo, seguí y dejé otro tramo grande en verde.
+
+Refactoricé LeadActionQueue para que ya no sea una pantalla gigante de todo mezclado. Ahora compone piezas de feature:
+
+
+LeadActionQueue.tsx bajó a 853 líneas.
+
+Nuevos componentes/hook de follow-up:
+
+HumanFlowConfigPanel
+
+FollowupQueueTable
+
+SalesReportPanel
+
+WorkflowField
+
+LeadMessageHistoryDialog
+
+useHumanFlowConfig
+
+useSalesReportExport
+
+
+
+
+
+También saqué de la pantalla la lógica de configuración humana, exportación Excel, tabla de colas, campos dinámicos y diálogo de historial. La UI debería seguir igual; lo que cambió fue la organización interna.
+
+Verificado todo:
+npm run typecheck
+npm run lint
+npm run test:unit
+npm run build
+Y smoke local:
+
+http://127.0.0.1:8080/ -> 200
+Nota: el repo sigue con muchos archivos ya modificados/no trackeados de documentación, assets y arquitectura previa. No los revertí ni los mezclé; seguí trabajando sobre la app productiva como veníamos.

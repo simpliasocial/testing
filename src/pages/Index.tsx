@@ -22,13 +22,34 @@ import { Loader2 } from "lucide-react";
 
 import { SectionCard } from "@/components/dashboard/SectionCard";
 import { ExportToExcel } from "@/components/dashboard/ExportToExcel";
+import type { DashboardValuePoint } from "@/application/dashboard";
 
 const ALL_TIME_VALUE = "-1";
+const CHANNEL_COLOR_CLASSES = [
+  "bg-emerald-500",
+  "bg-blue-500",
+  "bg-pink-500",
+  "bg-slate-500",
+];
+
+const getChannelIcon = (name: string) => {
+  const normalized = name.toLowerCase();
+  if (normalized.includes("facebook") || normalized.includes("messenger")) return "Facebook";
+  if (normalized.includes("instagram")) return "Instagram";
+  return "MessageCircle";
+};
+
+type DisqualificationPoint = DashboardValuePoint & { reason?: string };
+
+const valuePointCount = (item: DashboardValuePoint) => Number(item.count ?? item.value ?? 0);
+
+const valuePointLabel = (item: DashboardValuePoint, fallback: string) =>
+  String(item.label || item.name || item.key || fallback);
 
 const Index = () => {
   const [selectedMonth, setSelectedMonth] = useState<Date | null>(null); // null means "All Time"
   const [selectedWeek, setSelectedWeek] = useState<string>("1");
-  const { loading, error, data, refetch } = useDashboardData(selectedMonth, selectedWeek);
+  const { loading, error, data, refetch } = useDashboardData(selectedMonth);
 
   if (loading) {
     return (
@@ -47,6 +68,31 @@ const Index = () => {
   }
 
   const { kpis, funnelData, recentAppointments, channelData, weeklyTrend, monthlyTrend, disqualificationReasons, dataCapture, responseTime } = data;
+  const funnelChartData = funnelData.map((stage) => ({
+    label: valuePointLabel(stage, "Sin etapa"),
+    value: Number(stage.value || 0),
+    percentage: kpis.totalLeads > 0 ? Math.round((Number(stage.value || 0) / kpis.totalLeads) * 100) : 0,
+    color: stage.color || "hsl(224, 62%, 32%)",
+  }));
+  const channelBreakdownData = channelData.map((channel, index) => ({
+    name: valuePointLabel(channel, "Sin canal"),
+    count: valuePointCount(channel),
+    percentage: Number(channel.percentage || 0),
+    icon: getChannelIcon(String(channel.name || "")),
+    color: CHANNEL_COLOR_CLASSES[index % CHANNEL_COLOR_CLASSES.length],
+  }));
+  const totalDisqualificationReasons = disqualificationReasons.reduce(
+    (sum, item) => sum + valuePointCount(item),
+    0,
+  );
+  const disqualificationReasonData = (disqualificationReasons as DisqualificationPoint[]).map((item) => {
+    const count = valuePointCount(item);
+    return {
+      reason: item.reason || valuePointLabel(item, "Sin motivo"),
+      count,
+      percentage: item.percentage ?? (totalDisqualificationReasons > 0 ? Math.round((count / totalDisqualificationReasons) * 100) : 0),
+    };
+  });
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(value);
@@ -177,7 +223,7 @@ const Index = () => {
           icon={Filter}
           className="xl:col-span-2"
         >
-          <FunnelChart stages={funnelData} />
+          <FunnelChart stages={funnelChartData} />
         </SectionCard>
 
         <div className="space-y-4">
@@ -217,7 +263,7 @@ const Index = () => {
           subtitle={`Rendimiento - ${periodLabel}`}
           icon={MessageSquare}
         >
-          <ChannelBreakdown data={channelData} />
+          <ChannelBreakdown data={channelBreakdownData} />
         </SectionCard>
 
         <SectionCard
@@ -297,7 +343,7 @@ const Index = () => {
           icon={AlertTriangle}
           className="lg:col-span-2"
         >
-          <DisqualificationReasons data={disqualificationReasons} />
+          <DisqualificationReasons data={disqualificationReasonData} />
         </SectionCard>
       </div>
 
