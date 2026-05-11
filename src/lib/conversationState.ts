@@ -1,7 +1,7 @@
 import type { ConversationLabelEvent } from '@/domain/conversation';
 import type { MinifiedConversation } from '@/services/StorageService';
 import { normalizeLabels, labelsMatch, resolveLeadStage as resolveDomainLeadStage } from '@/domain/lead';
-import { resolveLeadAttributes } from './leadAttributes';
+import { resolveLeadAttributes } from '@/domain/lead';
 
 const eventTimestamp = (event: ConversationLabelEvent) => {
     const occurredAt = new Date(event?.occurred_at || event?.detected_at || 0).getTime();

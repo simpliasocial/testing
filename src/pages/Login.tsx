@@ -7,8 +7,12 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Lock, User } from 'lucide-react';
 
-const errorMessage = (error: unknown) =>
-    error instanceof Error ? error.message : 'Error al iniciar sesión';
+const errorMessage = (error: unknown) => {
+    const msg = error instanceof Error ? error.message : (error as { message?: string })?.message || '';
+    if (msg.includes('Invalid login credentials')) return 'Usuario o contraseña incorrectos';
+    if (msg.includes('Email not confirmed')) return 'Verifica tu correo electrónico para iniciar sesión';
+    return msg || 'Error al iniciar sesión. Verifica tus credenciales.';
+};
 
 const Login = () => {
     const [username, setUsername] = useState('');
@@ -52,6 +56,11 @@ const Login = () => {
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
+                    {error && (
+                        <div className="mb-4 p-3 rounded-md bg-red-500/10 border border-red-500/50 text-red-500 text-sm font-medium text-center animate-in fade-in zoom-in-95 duration-200">
+                            {error}
+                        </div>
+                    )}
                     <form onSubmit={handleLogin} className="space-y-4">
                         <div className="space-y-2">
                             <Label htmlFor="username">Usuario</Label>

@@ -8,6 +8,9 @@ export const isRecord = (value: unknown): value is UnknownRecord =>
 export const asRecord = (value: unknown): UnknownRecord =>
     isRecord(value) ? value : {};
 
+export const asRecordArray = (value: unknown): UnknownRecord[] =>
+    Array.isArray(value) ? value.filter(isRecord) : [];
+
 export const cleanText = (value: unknown) => String(value ?? "").trim();
 
 export const normalizeSearchText = (value: unknown) =>

@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/ExecutiveOverview";
+export { default } from "./components/ExecutiveOverview";

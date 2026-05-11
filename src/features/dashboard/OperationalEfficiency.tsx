@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/OperationalEfficiency";
+export { default } from "./components/OperationalEfficiency";

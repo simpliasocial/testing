@@ -1,1 +1,1 @@
-export { default } from "@/pages/ChatwootPage";
+export { default } from "./components/ConversationsLayer";

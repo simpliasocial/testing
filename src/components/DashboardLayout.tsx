@@ -17,14 +17,15 @@ import {
     Gauge
 } from 'lucide-react';
 import { useDashboardContext } from '@/context/useDashboardContext';
-import { DateRangePicker } from '@/components/dashboard/DateRangePicker';
-import { ChannelSelector } from '@/components/dashboard/ChannelSelector';
-import { TagConfigDialog } from '@/components/dashboard/TagConfigDialog';
-import { TabExportMenu } from '@/components/dashboard/TabExportMenu';
-import type { ReportTabId } from '@/lib/reportCatalog';
+import { DateRangePicker } from '@/shared/ui/dashboard/DateRangePicker';
+import { ChannelSelector } from '@/shared/ui/dashboard/ChannelSelector';
+import { TagConfigDialog } from '@/features/dashboard/components/TagConfigDialog';
+import { TabExportMenu } from '@/features/dashboard/components/TabExportMenu';
+import type { ReportTabId } from '@/features/reporting/domain/reportCatalog';
 import { startOfMonth, endOfMonth } from 'date-fns';
 import { DateRange } from 'react-day-picker';
 import { useAuth } from '@/context/useAuth';
+import { getVisibleTabs, getDefaultTab, isAdmin, type TabId } from '@/domain/auth/permissions';
 
 const ExecutiveOverview = lazy(() => import('@/features/dashboard/ExecutiveOverview'));
 const FunnelLayer = lazy(() => import('@/features/dashboard/FunnelLayer'));
@@ -43,7 +44,8 @@ const TabFallback = () => (
 );
 
 const DashboardLayout = () => {
-    const [activeTab, setActiveTab] = useState('overview');
+    const { role, signOut } = useAuth();
+    const [activeTab, setActiveTab] = useState(() => getDefaultTab(role));
     const {
         dataSource,
         globalFilters,
@@ -55,7 +57,6 @@ const DashboardLayout = () => {
         lastLiveFetchAt,
         liveError
     } = useDashboardContext();
-    const { role, signOut } = useAuth();
 
     useEffect(() => {
         if (!globalFilters.startDate) {
@@ -172,7 +173,8 @@ const DashboardLayout = () => {
                                 { id: 'scoring', label: 'Calidad', icon: Gauge },
                                 { id: 'chats', label: 'Conversaciones', icon: Search },
                                 { id: 'reporting', label: 'Reportes', icon: FileText },
-                            ].map((tab) => (
+                            ].filter(tab => getVisibleTabs(role).includes(tab.id as TabId))
+                            .map((tab) => (
                                 <TabsTrigger
                                     key={tab.id}
                                     value={tab.id}
@@ -196,7 +198,7 @@ const DashboardLayout = () => {
                                     value={{ from: globalFilters.startDate, to: globalFilters.endDate }}
                                     onChange={handleDateRangeChange}
                                 />
-                                {activeTab === 'overview' && role === 'admin' && (
+                                {activeTab === 'overview' && isAdmin(role) && (
                                     <>
                                         <div className="h-8 w-px bg-border mx-1 hidden sm:block" />
                                         <TagConfigDialog

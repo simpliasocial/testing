@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/FunnelLayer";
+export { default } from "./components/FunnelLayer";

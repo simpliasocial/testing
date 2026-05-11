@@ -1,5 +1,5 @@
 import type { DashboardReportInput } from "@/lib/reportExport";
-import type { ReportFileFormat } from "@/lib/reportCatalog";
+import type { ReportFileFormat } from "@/features/reporting/domain/reportCatalog";
 
 export const downloadDashboardReport = async (
     formatId: ReportFileFormat,

@@ -1,4 +1,4 @@
-import { resolveLeadAttributes } from "../../../lib/leadAttributes";
+import { resolveLeadAttributes } from "@/domain/lead";
 import { formatFieldLabel } from "../../../lib/displayCopy";
 import { parseAmount } from "../../../domain/lead";
 

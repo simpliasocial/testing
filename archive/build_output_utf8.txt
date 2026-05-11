@@ -1,0 +1,32 @@
+﻿
+> vite_react_shadcn_ts@0.0.0 build
+> vite build
+
+[36mvite v5.4.19 [32mbuilding for production...[36m[39m
+transforming...
+node.exe : Browserslist: browsers data (caniuse-lite) is 11 months old. Please run:
+At C:\Program Files\nodejs\npm.ps1:29 char:3
++   & $NODE_EXE $NPM_CLI_JS $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Browserslist: b...ld. Please run::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+[32mΓ£ô[39m 1960 modules transformed.
+[31mx[39m Build failed in 24.05s
+[31merror during build:
+[31m[vite:load-fallback] Could not load D:\TRABAJO SIMPLIA\repositorios 
+simplia.social\testings-dashboard\src/hooks/useDashboardData (imported by src/components/dashboard/TabExportMenu.tsx): 
+ENOENT: no such file or directory, open 'D:\TRABAJO SIMPLIA\repositorios 
+simplia.social\testings-dashboard\src\hooks\useDashboardData'[31m
+    at async open (node:internal/fs/promises:638:25)
+    at async Object.readFile (node:internal/fs/promises:1242:14)
+    at async Object.load (file:///D:/TRABAJO%20SIMPLIA/repositorios%20simplia.social/testings-dashboard/node_modules/vi
+te/dist/node/chunks/dep-C6uTJdX2.js:65341:25)
+    at async PluginDriver.hookFirstAndGetPlugin (file:///D:/TRABAJO%20SIMPLIA/repositorios%20simplia.social/testings-da
+shboard/node_modules/rollup/dist/es/shared/node-entry.js:20630:28)
+    at async file:///D:/TRABAJO%20SIMPLIA/repositorios%20simplia.social/testings-dashboard/node_modules/rollup/dist/es/
+shared/node-entry.js:19750:33
+    at async Queue.work (file:///D:/TRABAJO%20SIMPLIA/repositorios%20simplia.social/testings-dashboard/node_modules/rol
+lup/dist/es/shared/node-entry.js:20840:32)[39m

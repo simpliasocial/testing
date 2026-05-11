@@ -1,6 +1,6 @@
 import type { MinifiedConversation } from "../../../services/StorageService";
 import type { UnknownRecord } from "../../../domain/common/types";
-import { getContactCustomAttributes, getConversationCustomAttributes } from "../../../lib/leadAttributes";
+import { getContactCustomAttributes, getConversationCustomAttributes } from "@/domain/lead";
 
 export type LeadWorkflowLead = Partial<MinifiedConversation> & {
     id: number;

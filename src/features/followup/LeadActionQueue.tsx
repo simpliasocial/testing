@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/LeadActionQueue";
+export { default } from "./components/LeadActionQueue";

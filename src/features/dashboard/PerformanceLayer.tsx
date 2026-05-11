@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/PerformanceLayer";
+export { default } from "./components/PerformanceLayer";

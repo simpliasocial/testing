@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/ReportingLayer";
+export { default } from "./components/ReportingLayer";

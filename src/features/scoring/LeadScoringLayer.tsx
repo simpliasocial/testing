@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/LeadScoringLayer";
+export { default } from "./components/LeadScoringLayer";

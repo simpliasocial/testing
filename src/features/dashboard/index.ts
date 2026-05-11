@@ -3,3 +3,4 @@ export { default as FunnelLayer } from "./FunnelLayer";
 export { default as OperationalEfficiency } from "./OperationalEfficiency";
 export { default as PerformanceLayer } from "./PerformanceLayer";
 export { default as TrendLayer } from "./TrendLayer";
+export { default as HistoricalTrendLayer } from "./HistoricalTrendLayer";

@@ -1,7 +1,7 @@
 import { config } from "@/config";
 import type { ConversationMessage, Inbox, LeadLike } from "@/domain/lead";
 import { asRecord } from "@/domain/common/types";
-import { resolveLeadAttributes } from "./leadAttributes";
+import { resolveLeadAttributes } from "@/domain/lead";
 
 type LeadDisplayInput = Partial<LeadLike> & {
     additional_attributes?: unknown;
@@ -393,7 +393,7 @@ export const getLeadExternalUrl = (lead: LeadDisplayInput, channelOverride = "")
     if (profileUrl) return profileUrl;
 
     const sender = asRecord(lead?.meta?.sender);
-    const attrs = getAttrs(lead);
+    const attrs = getAttrs(lead as any);
     const channelName = getLeadChannelName(lead);
     const channelHint = normalize(`${channelOverride} ${lead?.channel_type || ""} ${lead?.channel || ""} ${attrs.canal || ""} ${channelName}`);
 

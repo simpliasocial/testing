@@ -1,1 +1,1 @@
-export { default } from "@/pages/layers/TrendLayer";
+export { default } from "./components/TrendLayer";

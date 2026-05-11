@@ -2,7 +2,7 @@ import {
     DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG,
     DEFAULT_REPORT_COLUMN_FIELDS,
     type CriticalReportProfileConfig,
-} from "@/lib/reportCatalog";
+} from "@/features/reporting/domain/reportCatalog";
 import {
     DEFAULT_SCORE_THRESHOLDS,
     normalizeScoreThresholds,
@@ -86,7 +86,7 @@ const normalizeReportColumnFields = (value?: Record<string, unknown> | null) => 
 
 const normalizeCriticalReportProfiles = (value?: Record<string, Partial<CriticalReportProfileConfig>> | null) => {
     const entries = Object.entries(DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG).map(([key, fallback]) => {
-        const configured = value?.[key];
+        const configured = (value as any)?.[key];
         return [
             key,
             {

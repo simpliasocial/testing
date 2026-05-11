@@ -31,7 +31,7 @@ export const resolveDashboardDateRange = (filters: DashboardDataFilters): Dashbo
 
     if (filters.startDate) {
         const start = new Date(filters.startDate);
-        const end = new Date();
+        const end = filters.endDate ? new Date(filters.endDate) : new Date(filters.startDate);
         start.setHours(0, 0, 0, 0);
         end.setHours(23, 59, 59, 999);
         return { start, end };

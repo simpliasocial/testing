@@ -9,24 +9,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        const fetchRole = async (userId: string) => {
+            try {
+                const { data, error } = await supabase
+                    .from('user_profiles')
+                    .select('role')
+                    .eq('id', userId)
+                    .single();
+                
+                if (error) {
+                    console.error('Error fetching role for user:', userId, error);
+                    setRole('operator'); // Fallback to safe default
+                    return;
+                }
+
+                if (data?.role) {
+                    setRole(data.role as UserRole);
+                } else {
+                    console.warn('No role found for user:', userId);
+                    setRole('operator');
+                }
+            } catch (err) {
+                console.error('Unexpected error in fetchRole:', err);
+                setRole('operator');
+            }
+        };
+
         // Check active sessions and sets the user
         supabase.auth.getSession().then(({ data: { session } }) => {
             setUser(session?.user ?? null);
             if (session?.user) {
-                setRole(session.user.email === 'admin@simplia.com' ? 'admin' : 'user');
+                fetchRole(session.user.id).finally(() => setLoading(false));
+            } else {
+                setLoading(false);
             }
-            setLoading(false);
         });
 
         // Listen for changes on auth state (sign in, sign out, etc.)
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
             setUser(session?.user ?? null);
             if (session?.user) {
-                setRole(session.user.email === 'admin@simplia.com' ? 'admin' : 'user');
+                fetchRole(session.user.id).finally(() => setLoading(false));
             } else {
                 setRole(null);
+                setLoading(false);
             }
-            setLoading(false);
         });
 
         return () => subscription.unsubscribe();
