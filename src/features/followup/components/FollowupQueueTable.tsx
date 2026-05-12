@@ -22,6 +22,7 @@ import {
     getLeadPhone,
     getMessagePreview,
     getMessageTimestamp,
+    getAttrs,
 } from "@/lib/leadDisplay";
 import {
     buildWindowedListState,
@@ -127,6 +128,7 @@ export const FollowupQueueTable = <TLead extends FollowupQueueTableLead>({
                                     <th className="px-6 py-4">Nombre del lead</th>
                                     <th className="px-6 py-4">Canal</th>
                                     <th className="px-6 py-4">{"N\u00famero"}</th>
+                                    <th className="px-6 py-4">Producto</th>
                                     <th className="px-6 py-4">Historial de mensajes</th>
                                     <th className="px-6 py-4">URL</th>
                                     <th className="px-6 py-4">Cambiar estado</th>
@@ -175,6 +177,9 @@ export const FollowupQueueTable = <TLead extends FollowupQueueTableLead>({
                                                         {phoneDisplay || "Sin n\u00famero"}
                                                     </span>
                                                 </div>
+                                            </td>
+                                            <td className="px-6 py-4 text-xs font-medium text-foreground">
+                                                {getAttrs(lead).producto || "-"}
                                             </td>
                                             <td className="px-6 py-4">
                                                 <button

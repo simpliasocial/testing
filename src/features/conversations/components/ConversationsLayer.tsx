@@ -262,6 +262,7 @@ const ConversationsLayer = () => {
                                                 <th className="px-6 py-4">Nombre del lead</th>
                                                 <th className="px-6 py-4">Canal</th>
                                                 <th className="px-6 py-4">Numero</th>
+                                                <th className="px-6 py-4">Producto</th>
                                                 <th className="px-6 py-4">Estado</th>
                                                 <th className="px-6 py-4">Historial de mensajes</th>
                                                 <th className="px-6 py-4">URL</th>
@@ -319,11 +320,14 @@ const ConversationsLayer = () => {
                                                                     {phoneDisplay || 'Sin numero'}
                                                                 </span>
                                                             </td>
+                                                            <td className="px-6 py-4 text-xs font-medium text-foreground">
+                                                                {getAttrs(lead).producto || "-"}
+                                                            </td>
                                                             <td className="px-6 py-4">
                                                                 <div className="flex flex-wrap gap-1 max-w-[260px]">
                                                                     {(lead.labels || []).length > 0 ? (
                                                                         (lead.labels || []).map((label) => (
-                                                                            <Badge key={label} variant="outline" className="text-[9px] font-bold h-5 px-2">
+                                                                            <Badge key={label} variant="outline" className="text-[10px] font-bold px-2 py-0.5 whitespace-nowrap">
                                                                                 {formatBusinessLabel(label)}
                                                                             </Badge>
                                                                         ))
