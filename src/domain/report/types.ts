@@ -2,6 +2,20 @@ import type { DashboardFilters } from "../dashboard/types";
 
 export type ReportFileFormat = "excel" | "pdf" | "csv";
 export type ReportScope = "tab" | "critical_profile";
+export type ReportTabId =
+    | "overview"
+    | "funnel"
+    | "operational"
+    | "followup"
+    | "performance"
+    | "trends"
+    | "scoring"
+    | "chats";
+export type CriticalProfileKey =
+    | "management"
+    | "daily_operations"
+    | "team_performance"
+    | "marketing_quality";
 
 export interface ReportSection {
     title: string;

@@ -13,7 +13,6 @@ import { canAccessCriticalReportProfile } from "@/domain/auth/permissions";
 import { TabExportMenu } from "@/features/dashboard/components/TabExportMenu";
 import {
     CRITICAL_REPORT_PROFILES,
-    REPORT_TAB_LABELS,
     formatFormatsLabel,
     resolveCriticalProfile,
     type CriticalProfileKey,
@@ -87,18 +86,7 @@ export function CriticalReportProfiles({ onScheduled }: CriticalReportProfilesPr
                                     <Badge variant="secondary">{PROFILE_AREAS[profile.key]}</Badge>
                                 </div>
                             </CardHeader>
-                            <CardContent className="space-y-4">
-                                <div className="rounded-xl border bg-muted/30 p-4">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pestañas que debe incluir</p>
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                        {profile.tabIds.map((includedTabId) => (
-                                            <Badge key={includedTabId} variant="outline" className="bg-background">
-                                                {REPORT_TAB_LABELS[includedTabId]}
-                                            </Badge>
-                                        ))}
-                                    </div>
-                                </div>
-
+                            <CardContent>
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                     <div>
                                         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Formato principal</p>

@@ -115,11 +115,12 @@ test("AI errors with nested objects produce readable messages", () => {
 });
 
 test("AI renderers create branded PDF and deterministic Excel/CSV sheets", () => {
+    const longPdfTitle = "Reporte Gerencial Comercial - Implanta | período 2026-05-01_a_2026-05-31 con análisis, campaña, próxima acción, desempeño, año comercial y seguimiento extraordinariamente largo";
     const responseBody = {
         status: "completed",
         output_text: JSON.stringify({
-            title: "Reporte operativo de prueba",
-            executiveSummary: ["La operación tiene oportunidades claras de mejora."],
+            title: longPdfTitle,
+            executiveSummary: ["La operación tiene oportunidades claras de mejora con campaña, próxima acción, desempeño y año comercial."],
             insights: [{
                 title: "Seguimiento concentrado",
                 evidence: "2 leads en seguimiento",
@@ -144,6 +145,7 @@ test("AI renderers create branded PDF and deterministic Excel/CSV sheets", () =>
             labels: ["interesado"],
             status: "open",
             created_at_chatwoot: "2026-05-01T12:00:00Z",
+            first_reply_created_at_chatwoot: "2026-05-01T12:05:00Z",
             conversation_custom_attributes: { responsable: "Ana", campana: "Meta Mayo", score_interes: 72 },
         },
         {
@@ -153,6 +155,12 @@ test("AI renderers create branded PDF and deterministic Excel/CSV sheets", () =>
             status: "open",
             monto_operacion: "900",
             created_at_chatwoot: "2026-05-02T12:00:00Z",
+            waiting_since_chatwoot: "2026-05-02T12:15:00Z",
+            last_non_activity_message: {
+                message_direction: "incoming",
+                created_at: "2026-05-02T12:15:00Z",
+                content: "Hola, sigo esperando información.",
+            },
             conversation_custom_attributes: { responsable: "Luis", canal: "WhatsApp", score_interes: 80 },
         },
     ];
@@ -171,8 +179,22 @@ test("AI renderers create branded PDF and deterministic Excel/CSV sheets", () =>
     const pdfText = Buffer.from(pdf.contentBase64, "base64").toString("latin1");
     assert.equal(pdfText.startsWith("%PDF-1.4"), true);
     assert.doesNotMatch(pdfText, /þÿ|FEFF/);
+    assert.match(pdfText, /Implanta/);
+    assert.match(pdfText, /período/);
+    assert.match(pdfText, /análisis/);
+    assert.match(pdfText, /campaña/);
+    assert.match(pdfText, /próxima/);
+    assert.match(pdfText, /desempeño/);
+    assert.match(pdfText, /año/);
+    assert.doesNotMatch(pdfText, new RegExp(longPdfTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(pdfText, /1\. Resumen ejecutivo/);
-    assert.match(pdfText, /10\. Limitaciones del analisis/);
+    assert.match(pdfText, /10\. Limitaciones del análisis/);
+    assert.match(pdfText, /KPI: Leads contactados/);
+    assert.match(pdfText, /KPI: Leads sin contactar/);
+    assert.match(pdfText, /KPI: Tasa de contactabilidad[\s\S]{0,500}Valor: 50%/);
+    assert.doesNotMatch(pdfText, /KPI: Llamadas totales/);
+    assert.doesNotMatch(pdfText, /No calculable/);
+    assert.doesNotMatch(pdfText, /\.\.\./);
 
     const excel = renderAiReportFileFromOpenAiResponse({
         responseBody,

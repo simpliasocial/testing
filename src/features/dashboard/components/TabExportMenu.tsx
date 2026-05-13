@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-    BrainCircuit,
     CheckCircle2,
     Circle,
     Database,
@@ -37,14 +36,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { config } from "@/config";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/useAuth";
 import { isAdmin } from "@/domain/auth/permissions";
 import { DEFAULT_TAG_CONFIG } from "@/domain/dashboard";
 import { useDashboardContext } from "@/context/useDashboardContext";
 import { useDashboardData } from "@/features/dashboard/hooks/useDashboardData";
-import { downloadDashboardReport } from "@/infrastructure/report/DashboardReportExporter";
+import { useAiReportActions, type AiReportDownloadResponse } from "@/application/report/useAiReportActions";
+import { useDashboardReportActions } from "@/application/report/useDashboardReportActions";
+import { useScheduledReportActions, type ScheduledReportFrequency } from "@/application/report/useScheduledReportActions";
 import { formatFieldLabel, friendlyErrorMessage } from "@/lib/displayCopy";
 import {
     DEFAULT_REPORT_COLUMN_FIELDS,
@@ -78,40 +77,10 @@ const normalizeEmailList = (value: string) => value
     .filter(Boolean)
     .join(", ");
 
-type AiReportDownloadResponse = {
-    ok?: boolean;
-    error?: string;
-    details?: unknown;
-    jobId?: string;
-    status?: "queued" | "in_progress" | "completed" | "failed" | "cancelled" | "incomplete";
-    responseId?: string;
-    rangeLabel?: string;
-    pollAfterMs?: number;
-    filename?: string;
-    mimeType?: string;
-    contentBase64?: string;
-};
-
 const AI_REPORT_DOWNLOAD_TIMEOUT_MS = 60_000;
 const AI_REPORT_MAX_WAIT_MS = 9 * 60_000;
 
-type AiReportAction = "start" | "status" | "download";
-
-type AiReportFunctionPayload = {
-    action: AiReportAction;
-    profileKey: CriticalProfileKey;
-    formatId: ReportFileFormat;
-    responseId?: string;
-    rangeLabel?: string;
-    companyContext?: string;
-    filters?: {
-        startDate?: string;
-        endDate?: string;
-        selectedInboxes?: number[];
-    };
-};
-
-type AiGenerationStep = "prepare" | "submit" | "analyze" | "build" | "done";
+type AiGenerationStep = "prepare" | "process" | "build" | "done";
 type AiGenerationStatus = "idle" | "running" | "completed" | "failed";
 
 type AiGenerationState = {
@@ -128,8 +97,7 @@ type AiGenerationState = {
 
 const AI_GENERATION_STEPS: Array<{ id: AiGenerationStep; label: string; icon: typeof Circle }> = [
     { id: "prepare", label: "Preparando datos", icon: Database },
-    { id: "submit", label: "Enviando al agente IA", icon: BrainCircuit },
-    { id: "analyze", label: "Analizando con el prompt del reporte", icon: Loader2 },
+    { id: "process", label: "Procesando información", icon: Loader2 },
     { id: "build", label: "Construyendo archivo", icon: FileCheck2 },
     { id: "done", label: "Listo para descargar", icon: CheckCircle2 },
 ];
@@ -148,73 +116,6 @@ const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: 
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const stringifyAiDetail = (value: unknown): string => {
-    if (!value) return "";
-    if (typeof value === "string") return value;
-    try {
-        return JSON.stringify(value, null, 2);
-    } catch {
-        return String(value);
-    }
-};
-
-const readableAiReportError = (body: AiReportDownloadResponse | null, fallback: string) => {
-    const detail = stringifyAiDetail(body?.details);
-    if (body?.error && body.error !== "[object Object]") return body.error;
-    if (detail.includes("max_output_tokens")) {
-        return "OpenAI cortó la respuesta por límite de salida; el reporte se reducirá o se debe reintentar con menor rango.";
-    }
-    return detail || fallback;
-};
-
-const invokeAiReportFunction = async (payload: AiReportFunctionPayload): Promise<AiReportDownloadResponse> => {
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token || config.supabase.anonKey;
-    const response = await fetch(`${config.supabase.url}/functions/v1/generate-ai-report`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            apikey: config.supabase.anonKey,
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-    });
-    const text = await response.text();
-    let body: AiReportDownloadResponse | null = null;
-    try {
-        body = text ? JSON.parse(text) as AiReportDownloadResponse : null;
-    } catch {
-        body = null;
-    }
-
-    if (!response.ok) {
-        throw new Error(readableAiReportError(body, `Edge Function ${response.status}: ${text || "sin detalle"}`));
-    }
-    if (body?.ok === false || body?.error) {
-        throw new Error(readableAiReportError(body, "No se pudo generar el reporte IA."));
-    }
-    if (!body) throw new Error("La función de reportes IA no devolvió una respuesta válida.");
-    return body;
-};
-
-const downloadBase64File = (params: { filename: string; mimeType: string; contentBase64: string }) => {
-    const binary = atob(params.contentBase64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-    }
-
-    const blob = new Blob([bytes], { type: params.mimeType });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = params.filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-};
 
 export function TabExportMenu({
     tabId,
@@ -235,6 +136,9 @@ export function TabExportMenu({
     } = useDashboardContext();
     const { data: dashboardData } = useDashboardData({ ...globalFilters, ...tagSettings });
     const { user, role } = useAuth();
+    const { invokeAiReportFunction, downloadBase64File } = useAiReportActions();
+    const { createScheduledReport } = useScheduledReportActions();
+    const { downloadDashboardReport } = useDashboardReportActions();
 
     const profile = profileKey ? resolveCriticalProfile(profileKey, tagSettings.criticalReportProfiles) : null;
     const resolvedTabIds = useMemo<ReportTabId[]>(() => {
@@ -299,14 +203,14 @@ export function TabExportMenu({
                     reportTitle,
                     formatId,
                     formatLabel,
-                    message: "Estamos preparando la data filtrada y el contexto empresarial.",
+                    message: "Estamos preparando la información filtrada.",
                     error: undefined,
                     responseId: undefined,
                 });
 
                 updateGeneration({
-                    step: "submit",
-                    message: "Enviando el reporte al agente IA con la plantilla exacta del perfil.",
+                    step: "process",
+                    message: "Estamos procesando el reporte.",
                 });
 
                 const startData = await withTimeout(
@@ -318,24 +222,24 @@ export function TabExportMenu({
                         filters: aiFilters,
                     }),
                     AI_REPORT_DOWNLOAD_TIMEOUT_MS,
-                    "No se pudo iniciar el reporte IA a tiempo. Intenta nuevamente.",
+                    "No se pudo iniciar la generación a tiempo. Intenta nuevamente.",
                 );
 
                 responseId = startData.responseId || startData.jobId;
                 rangeLabel = startData.rangeLabel;
-                if (!responseId) throw new Error("El agente IA no devolvió un ID de seguimiento para el reporte.");
+                if (!responseId) throw new Error("No se pudo iniciar el seguimiento de la generación.");
 
                 updateGeneration({
-                    step: "analyze",
+                    step: "process",
                     responseId,
-                    message: "El agente IA está analizando la información. Esto puede tardar varios minutos.",
+                    message: "Estamos procesando la información. Esto puede tardar varios minutos.",
                 });
 
                 while (Date.now() - startedAt < AI_REPORT_MAX_WAIT_MS) {
                     const statusData = await withTimeout(
                         invokeAiReportFunction({ action: "status", profileKey, formatId, responseId, rangeLabel, filters: aiFilters }),
                         AI_REPORT_DOWNLOAD_TIMEOUT_MS,
-                        "No se pudo consultar el avance del reporte IA. Intenta nuevamente.",
+                        "No se pudo consultar el avance del reporte. Intenta nuevamente.",
                     );
 
                     responseId = statusData.responseId || statusData.jobId || responseId;
@@ -350,26 +254,26 @@ export function TabExportMenu({
                         data = await withTimeout(
                             invokeAiReportFunction({ action: "download", profileKey, formatId, responseId, rangeLabel, companyContext: tagSettings.companyContext || "", filters: aiFilters }),
                             AI_REPORT_DOWNLOAD_TIMEOUT_MS,
-                            "No se pudo construir el archivo del reporte IA. Intenta nuevamente.",
+                            "No se pudo construir el archivo del reporte. Intenta nuevamente.",
                         );
                         break;
                     }
 
                     if (statusData.status === "queued" || statusData.status === "in_progress") {
                         updateGeneration({
-                            step: "analyze",
+                            step: "process",
                             responseId,
-                            message: "El agente IA sigue trabajando. Mantén esta ventana abierta hasta que termine.",
+                            message: "El reporte sigue en proceso. Mantén esta ventana abierta hasta que termine.",
                         });
                         await sleep(Math.min(Math.max(statusData.pollAfterMs || 3500, 2500), 9000));
                         continue;
                     }
 
-                    throw new Error(statusData.error || `El reporte IA terminó con estado ${statusData.status || "desconocido"}.`);
+                    throw new Error(statusData.error || `La generación terminó con estado ${statusData.status || "desconocido"}.`);
                 }
 
                 if (!data?.contentBase64 || !data.filename || !data.mimeType) {
-                    throw new Error("El reporte IA sigue tardando demasiado. Intenta nuevamente en unos minutos.");
+                    throw new Error("El reporte sigue tardando demasiado. Intenta nuevamente en unos minutos.");
                 }
 
                 downloadBase64File({
@@ -382,7 +286,7 @@ export function TabExportMenu({
                     step: "done",
                     message: "Reporte generado y descargado correctamente.",
                 });
-                toast.success("Reporte IA descargado correctamente");
+                toast.success("Reporte descargado correctamente");
                 return;
             }
 
@@ -446,36 +350,25 @@ export function TabExportMenu({
 
         try {
             setSavingSchedule(true);
-            const { error } = await supabase
-                .schema("cw")
-                .from("automated_reports")
-                .insert({
-                    name: cleanName,
-                    frequency,
-                    schedule_days: frequency === "weekly" ? [weekday] : [],
-                    schedule_month_day: frequency === "monthly" ? dayNumber : null,
-                    schedule_time: scheduleTime,
-                    recipients: cleanRecipients,
-                    is_active: true,
-                    report_scope: profileKey ? "critical_profile" : "tab",
-                    tab_ids: resolvedTabIds,
-                    critical_profile_key: profileKey || null,
-                    file_formats: allowedSelectedFormats,
-                    date_range_mode: "closed_period",
-                    filters: {
-                        selectedInboxes: globalFilters.selectedInboxes || [],
-                        saleTags: tagSettings.saleTags || [],
-                        humanSaleTargetLabel: tagSettings.humanSaleTargetLabel || "venta_exitosa",
-                        scoreThresholds: tagSettings.scoreThresholds,
-                        aiPromptFileName: profile?.promptFileName || null,
-                    },
-                    created_by: user?.id || null,
-                    created_by_email: user?.email || null,
-                    created_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString(),
-                });
-
-            if (error) throw error;
+            await createScheduledReport({
+                name: cleanName,
+                frequency: frequency as ScheduledReportFrequency,
+                weekday,
+                monthDay: dayNumber,
+                scheduleTime,
+                recipients: cleanRecipients,
+                reportScope: profileKey ? "critical_profile" : "tab",
+                tabIds: resolvedTabIds,
+                profileKey,
+                fileFormats: allowedSelectedFormats,
+                selectedInboxes: globalFilters.selectedInboxes || [],
+                tagSettings,
+                promptFileName: profile?.promptFileName || null,
+                createdBy: {
+                    id: user?.id || null,
+                    email: user?.email || null,
+                },
+            });
             toast.success("Reporte automático programado correctamente");
             setScheduleOpen(false);
             onScheduled?.();
@@ -565,7 +458,7 @@ export function TabExportMenu({
             >
                 <DialogContent className="sm:max-w-[560px]">
                     <DialogHeader>
-                        <DialogTitle>Generando reporte IA</DialogTitle>
+                        <DialogTitle>Generando reporte</DialogTitle>
                         <DialogDescription>
                             {generation.reportTitle}{generation.formatLabel ? ` · ${generation.formatLabel}` : ""}
                         </DialogDescription>
@@ -589,7 +482,7 @@ export function TabExportMenu({
                                             ? "La generación necesita atención"
                                             : generation.status === "completed"
                                                 ? "Reporte listo"
-                                                : "Trabajando con el agente IA"}
+                                                : "Generando reporte"}
                                     </p>
                                     <p className="text-sm text-muted-foreground">
                                         {generation.message || "Este reporte puede tardar varios minutos. Puedes dejar esta ventana abierta mientras se completa."}
@@ -615,7 +508,7 @@ export function TabExportMenu({
                                             {isDone ? (
                                                 <CheckCircle2 className="h-4 w-4" />
                                             ) : (
-                                                <StepIcon className={`h-4 w-4 ${isActive && step.id === "analyze" ? "animate-spin" : ""}`} />
+                                                <StepIcon className={`h-4 w-4 ${isActive && step.id === "process" ? "animate-spin" : ""}`} />
                                             )}
                                         </span>
                                         <span className={isActive ? "font-medium text-foreground" : "text-muted-foreground"}>{step.label}</span>
@@ -627,7 +520,7 @@ export function TabExportMenu({
                         {generation.status === "failed" && (
                             <Alert variant="destructive">
                                 <XCircle className="h-4 w-4" />
-                                <AlertDescription>{generation.error || "No se pudo completar el reporte IA."}</AlertDescription>
+                                <AlertDescription>{generation.error || "No se pudo completar el reporte."}</AlertDescription>
                             </Alert>
                         )}
                     </div>

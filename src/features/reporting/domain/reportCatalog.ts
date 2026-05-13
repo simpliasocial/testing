@@ -1,20 +1,5 @@
-export type ReportFileFormat = "excel" | "pdf" | "csv";
-
-export type ReportTabId =
-    | "overview"
-    | "funnel"
-    | "operational"
-    | "followup"
-    | "performance"
-    | "trends"
-    | "scoring"
-    | "chats";
-
-export type CriticalProfileKey =
-    | "management"
-    | "daily_operations"
-    | "team_performance"
-    | "marketing_quality";
+import type { CriticalProfileKey, ReportFileFormat, ReportTabId } from "@/domain/report";
+export type { CriticalProfileKey, ReportFileFormat, ReportTabId };
 
 export type ReportFrequency = "daily" | "weekly" | "monthly";
 

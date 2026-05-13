@@ -13,6 +13,7 @@ import {
     type CriticalProfileKey,
     type ReportFormat,
 } from "../_shared/ai-reporting.ts";
+import { canAccessCriticalReportProfile } from "../_shared/report-permissions.ts";
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -158,11 +159,6 @@ const fetchUserRole = async (
     return cleanText((data as { role?: unknown } | null)?.role) || null;
 };
 
-const canAccessProfile = (role: string | null, profileKey: CriticalProfileKey) => {
-    if (role === "platform_admin" || role === "company_admin") return true;
-    return role === "operator" && profileKey === "daily_operations";
-};
-
 const jsonResponse = (payload: Record<string, unknown>, init?: ResponseInit) =>
     new Response(JSON.stringify(payload), {
         ...init,
@@ -210,7 +206,7 @@ serve(async (req) => {
 
         const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
         const role = await fetchUserRole(supabase, req.headers.get("Authorization"));
-        if (!canAccessProfile(role, profileKey)) {
+        if (!canAccessCriticalReportProfile(role, profileKey)) {
             return jsonResponse(failedPayload("No tienes acceso a este reporte.", { code: "forbidden" }));
         }
 

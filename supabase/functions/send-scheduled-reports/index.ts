@@ -22,6 +22,18 @@ const RESEND_API_URL = "https://api.resend.com/emails";
 
 type ReportFormat = "excel" | "pdf" | "csv";
 type ReportScope = "tab" | "critical_profile";
+type SupabaseEdgeClient = ReturnType<typeof createClient>;
+type UnknownRecord = Record<string, unknown>;
+type AiScheduledJob = { format: ReportFormat; responseId: string; status: string };
+type AiScheduledRun = {
+    id: string | number;
+    automated_report_id: string | number;
+    recipients: string;
+    file_formats?: ReportFormat[];
+    report_scope?: ReportScope;
+    critical_profile_key?: string | null;
+    metadata?: UnknownRecord | null;
+};
 
 type ReportSection = {
     title: string;
@@ -1434,7 +1446,7 @@ const parseRecipients = (value: unknown) => cleanText(value)
     .map((email) => email.trim())
     .filter(Boolean);
 
-const normalizeAiJobs = (metadata: Record<string, unknown>) =>
+const normalizeAiJobs = (metadata: Record<string, unknown>): AiScheduledJob[] =>
     Array.isArray(metadata.ai_jobs)
         ? metadata.ai_jobs.map((job) => {
             const record = asObject(job);
@@ -1447,8 +1459,8 @@ const normalizeAiJobs = (metadata: Record<string, unknown>) =>
         : [];
 
 const finalizeAiScheduledRun = async (
-    supabase: any,
-    run: any,
+    supabase: SupabaseEdgeClient,
+    run: AiScheduledRun,
     env: { resendKey: string; fromEmail: string },
 ) => {
     const metadata = asObject(run.metadata);

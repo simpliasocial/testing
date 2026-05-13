@@ -1,15 +1,7 @@
 import { getAiReportPromptTemplate } from "./ai-report-prompts.ts";
-
-export type ReportFormat = "excel" | "pdf" | "csv";
-export type CriticalProfileKey = "management" | "daily_operations" | "team_performance" | "marketing_quality";
-
-export type AiReportProfile = {
-    key: CriticalProfileKey;
-    label: string;
-    tabIds: string[];
-    formats: ReportFormat[];
-    promptFileName: string;
-};
+import { AI_REPORT_PROFILES, type AiReportProfile, type CriticalProfileKey, type ReportFormat } from "./ai-report-profiles.ts";
+export { AI_REPORT_PROFILES } from "./ai-report-profiles.ts";
+export type { AiReportProfile, CriticalProfileKey, ReportFormat } from "./ai-report-profiles.ts";
 
 export type AiReportBuildParams = {
     profileKey: CriticalProfileKey;
@@ -91,6 +83,8 @@ type DetailRow = {
     motivo_perdida: string;
     producto_interes: string;
     origen_dato: string;
+    sin_respuesta: boolean;
+    primer_contacto_segundos: number | null;
 };
 
 export type AiReportFilters = {
@@ -127,6 +121,11 @@ export type AiReportDataset = {
         leads_con_puntaje: number;
         puntaje_promedio: number | null;
         cambios_comerciales_relevantes: number;
+        leads_sin_contactar: number;
+        leads_contactados: number;
+        tasa_contactabilidad: number;
+        tiempo_promedio_primer_contacto_segundos: number | null;
+        muestras_primer_contacto: number;
     };
     distribucion_por_etapa: Array<{ label: string; value: number }>;
     distribucion_por_canal: Array<{ label: string; value: number }>;
@@ -160,37 +159,6 @@ const TIMEZONE = "America/Guayaquil";
 const PDF_WIDTH = 595;
 const PDF_HEIGHT = 842;
 const PDF_MARGIN = 42;
-
-export const AI_REPORT_PROFILES: Record<CriticalProfileKey, AiReportProfile> = {
-    management: {
-        key: "management",
-        label: "Reporte Gerencial PDF",
-        tabIds: ["overview", "funnel", "performance", "trends"],
-        formats: ["pdf"],
-        promptFileName: "archive/promt gerencial.txt",
-    },
-    daily_operations: {
-        key: "daily_operations",
-        label: "Reporte operación comercial",
-        tabIds: ["operational", "followup", "scoring", "chats"],
-        formats: ["excel", "csv"],
-        promptFileName: "archive/promt operacion comercial.txt",
-    },
-    team_performance: {
-        key: "team_performance",
-        label: "Reporte rendimiento equipo",
-        tabIds: ["operational", "performance", "followup", "funnel"],
-        formats: ["pdf"],
-        promptFileName: "archive/promt rendimiento Equipo.txt",
-    },
-    marketing_quality: {
-        key: "marketing_quality",
-        label: "Reporte calidad leads",
-        tabIds: ["trends", "funnel", "scoring", "overview"],
-        formats: ["excel", "csv"],
-        promptFileName: "archive/promt calidad leads.txt",
-    },
-};
 
 const TAB_LABELS: Record<string, string> = {
     overview: "Estrategia",
@@ -432,7 +400,7 @@ const buildDataAvailability = (rows: Record<string, unknown>[]): AiReportAvailab
             fields: [...item.fields],
             reason: available
                 ? "Disponible en al menos un registro filtrado."
-                : `No calculable: falta ${item.label.toLowerCase()} en la data filtrada. Campos esperados: ${item.fields.slice(0, 4).join(", ")}.`,
+                : `Esta lectura todavía no se mide porque la data filtrada no incluye ${item.label.toLowerCase()}. Para activarla se debe registrar alguno de estos campos: ${item.fields.slice(0, 4).join(", ")}.`,
         };
     });
 
@@ -443,11 +411,95 @@ const valueOrReason = (
     value: unknown,
     dataset: AiReportDataset,
     key: string,
-    fallback = "No calculable: faltan datos suficientes en la data filtrada.",
+    fallback = "Pendiente de medir con la data filtrada actual.",
 ) => {
     const text = cleanText(value);
     if (text && text !== "N/A" && text !== "No disponible") return value;
     return availabilityReason(dataset, key, fallback);
+};
+
+const parseTimestampSeconds = (value: unknown) => {
+    if (value === null || value === undefined || value === "") return null;
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value > 10_000_000_000 ? Math.round(value / 1000) : Math.round(value);
+    }
+    const text = cleanText(value);
+    if (!text) return null;
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) return numeric > 10_000_000_000 ? Math.round(numeric / 1000) : Math.round(numeric);
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? Math.round(parsed / 1000) : null;
+};
+
+const messageTimestampSeconds = (message: Record<string, unknown>) =>
+    parseTimestampSeconds(message.created_at_chatwoot || message.created_at || message.timestamp);
+
+const isIncomingMessage = (message: Record<string, unknown>) =>
+    message.message_direction === "incoming" ||
+    Number(message.message_type) === 0 ||
+    cleanText(message.message_type).toLowerCase() === "incoming" ||
+    cleanText(message.sender_type).toLowerCase() === "contact";
+
+const hasMessageSenderSignal = (message: Record<string, unknown>) =>
+    message.message_direction !== undefined ||
+    message.message_type !== undefined ||
+    message.sender_type !== undefined;
+
+const rowMessages = (row: Record<string, unknown>) => {
+    const raw = asRecord(row.raw_payload);
+    const candidates = [
+        row.messages,
+        raw.messages,
+        asRecord(raw.conversation).messages,
+    ];
+    const source = candidates.find(Array.isArray);
+    return Array.isArray(source)
+        ? source
+            .map(asRecord)
+            .filter((message) => !message.private && !message.is_private && Number(messageTimestampSeconds(message) || 0) > 0)
+            .sort((a, b) => Number(messageTimestampSeconds(a) || 0) - Number(messageTimestampSeconds(b) || 0))
+        : [];
+};
+
+const firstResponseSeconds = (row: Record<string, unknown>) => {
+    const raw = asRecord(row.raw_payload);
+    const firstReply = parseTimestampSeconds(
+        row.first_reply_created_at ||
+        row.first_reply_created_at_chatwoot ||
+        raw.first_reply_created_at ||
+        raw.first_reply_created_at_chatwoot,
+    );
+    const created = parseTimestampSeconds(row.created_at_chatwoot || row.created_at || raw.created_at_chatwoot || raw.created_at);
+    if (firstReply !== null && created !== null) {
+        const diff = firstReply - created;
+        if (diff >= 0 && diff <= 86_400) return diff;
+    }
+    return null;
+};
+
+const hasUnansweredCustomerMessage = (row: Record<string, unknown>) => {
+    const raw = asRecord(row.raw_payload);
+    if (row.waiting_since || row.waiting_since_chatwoot || raw.waiting_since || raw.waiting_since_chatwoot) return true;
+
+    const lastNonActivityMessage = asRecord(row.last_non_activity_message || raw.last_non_activity_message);
+    if (Object.keys(lastNonActivityMessage).length > 0 && hasMessageSenderSignal(lastNonActivityMessage)) {
+        return isIncomingMessage(lastNonActivityMessage);
+    }
+
+    const messages = rowMessages(row);
+    if (messages.length > 0) return isIncomingMessage(messages[messages.length - 1]);
+
+    const hasFirstReply = cleanText(
+        row.first_reply_created_at ||
+        row.first_reply_created_at_chatwoot ||
+        raw.first_reply_created_at ||
+        raw.first_reply_created_at_chatwoot,
+    );
+    if (cleanText(lastNonActivityMessage.content) && !hasFirstReply) {
+        return true;
+    }
+
+    return firstResponseSeconds(row) === null;
 };
 
 const detailRow = (row: Record<string, unknown>): DetailRow => {
@@ -456,6 +508,8 @@ const detailRow = (row: Record<string, unknown>): DetailRow => {
     const amount = parseAmount(row.monto_operacion ?? attrs.monto_operacion);
     const meta = asRecord(row.meta);
     const assignee = asRecord(meta.assignee);
+    const sinRespuesta = hasUnansweredCustomerMessage(row);
+    const primerContactoSegundos = firstResponseSeconds(row);
 
     return {
         id: cleanText(row.chatwoot_conversation_id || row.id),
@@ -484,6 +538,8 @@ const detailRow = (row: Record<string, unknown>): DetailRow => {
         motivo_perdida: cleanText(firstFieldValue(row, attrs, [...FIELD_GROUPS.lossReason])),
         producto_interes: cleanText(firstFieldValue(row, attrs, [...FIELD_GROUPS.product])),
         origen_dato: cleanText(row.source || "supabase"),
+        sin_respuesta: sinRespuesta,
+        primer_contacto_segundos: primerContactoSegundos,
     };
 };
 
@@ -528,6 +584,14 @@ export const buildAiReportDataset = (params: {
     const sqls = details.filter((row) => row.etapa === "SQL");
     const unqualified = details.filter((row) => row.etapa === "No calificado");
     const scored = details.filter((row) => row.puntaje !== "");
+    const unanswered = details.filter((row) => row.sin_respuesta).length;
+    const contacted = Math.max(0, details.length - unanswered);
+    const firstResponseSamples = details
+        .map((row) => row.primer_contacto_segundos)
+        .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const averageFirstResponse = firstResponseSamples.length > 0
+        ? Math.round(firstResponseSamples.reduce((sum, value) => sum + value, 0) / firstResponseSamples.length)
+        : null;
     const averageScore = scored.length > 0
         ? Number((scored.reduce((sum, row) => sum + Number(row.puntaje || 0), 0) / scored.length).toFixed(2))
         : null;
@@ -563,6 +627,11 @@ export const buildAiReportDataset = (params: {
             leads_con_puntaje: scored.length,
             puntaje_promedio: averageScore,
             cambios_comerciales_relevantes: params.auditEvents.length,
+            leads_sin_contactar: unanswered,
+            leads_contactados: contacted,
+            tasa_contactabilidad: details.length > 0 ? Number(((contacted / details.length) * 100).toFixed(1)) : 0,
+            tiempo_promedio_primer_contacto_segundos: averageFirstResponse,
+            muestras_primer_contacto: firstResponseSamples.length,
         },
         distribucion_por_etapa: groupCount(details, "etapa"),
         distribucion_por_canal: groupCount(details, "canal"),
@@ -574,8 +643,8 @@ export const buildAiReportDataset = (params: {
         detalle: details,
         detalle_muestra: details.slice(0, 40),
         nota_recorte: details.length > 40
-            ? `Se entrega una muestra de 40 filas al agente IA. Los archivos finales usan las ${details.length} filas filtradas.`
-            : "La muestra enviada al agente IA incluye todo el universo filtrado.",
+            ? `Se entrega una muestra de 40 filas para el análisis narrativo. Los archivos finales usan las ${details.length} filas filtradas.`
+            : "La muestra de análisis incluye todo el universo filtrado.",
     };
 };
 
@@ -905,6 +974,15 @@ const numberText = (value: unknown) => {
 
 const pct = (value: number, total: number) => total > 0 ? `${((value / total) * 100).toFixed(1)}%` : "0%";
 
+const durationText = (seconds: number | null) => {
+    if (seconds === null || !Number.isFinite(seconds)) return "";
+    if (seconds < 60) return `${Math.round(seconds)} seg`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Number((minutes / 60).toFixed(1));
+    return `${hours} h`;
+};
+
 const filterRows = (dataset: AiReportDataset) => [
     { Campo: "Reporte", Valor: dataset.reporte },
     { Campo: "Formato", Valor: dataset.formato_solicitado.toUpperCase() },
@@ -968,6 +1046,26 @@ const limitRows = (dataset: AiReportDataset) => {
     }];
 };
 
+const topDistribution = (items: Array<{ label: string; value: number }>, fallback = "sin dato dominante") =>
+    items.length > 0 ? `${items[0].label} (${items[0].value})` : fallback;
+
+const deterministicExecutiveSummary = (dataset: AiReportDataset) => {
+    const base = dataset.resumen_base;
+    const lowQuality = dataset.distribucion_por_calidad.find((item) => item.label === "Baja calidad")?.value || 0;
+    return [
+        `Durante el periodo ${dataset.periodo} se analizaron ${base.leads} leads, con ${base.sql_detectados} SQL, ${base.citas_detectadas} citas y ${base.ventas_detectadas} ventas detectadas.`,
+        `La contactabilidad observada es ${base.tasa_contactabilidad}%: ${base.leads_contactados} leads aparecen atendidos y ${base.leads_sin_contactar} requieren respuesta o revisión de seguimiento.`,
+        `El canal con mayor volumen es ${topDistribution(dataset.distribucion_por_canal)} y la campaña principal es ${topDistribution(dataset.distribucion_por_campana)}.`,
+        `La calidad baja concentra ${lowQuality} leads; esto sugiere revisar origen, mensaje, formulario y criterios de calificación antes de escalar inversión.`,
+        "La prioridad del siguiente periodo es ordenar trazabilidad de contacto, reforzar seguimiento y mejorar calidad de entrada para aumentar conversión.",
+    ];
+};
+
+const deterministicConclusion = (dataset: AiReportDataset) => {
+    const base = dataset.resumen_base;
+    return `El periodo muestra ${base.leads} leads con ${base.tasa_contactabilidad}% de contactabilidad observada, ${base.sql_detectados} SQL, ${base.citas_detectadas} citas y ${base.ventas_detectadas} ventas detectadas. La prioridad gerencial es mejorar la calidad de entrada y asegurar seguimiento oportuno de los ${base.leads_sin_contactar} leads que aún requieren respuesta o revisión. El siguiente paso recomendado es ordenar responsables, campañas y señales de contacto para que la operación pueda priorizar leads con mayor intención y reducir pérdida de oportunidades.`;
+};
+
 const summaryRows = (dataset: AiReportDataset, narrative: AiReportNarrative) => {
     const base = dataset.resumen_base;
     return [
@@ -993,8 +1091,8 @@ const summaryRows = (dataset: AiReportDataset, narrative: AiReportNarrative) => 
             "Recomendación ejecutiva": "Revisar origen, campaña, formulario y criterio de calificación.",
         },
         {
-            "Métrica": "Resumen IA",
-            Resultado: narrative.executiveSummary[0] || "Sin resumen narrativo del agente IA.",
+            "Métrica": "Lectura ejecutiva",
+            Resultado: narrative.executiveSummary[0] || deterministicExecutiveSummary(dataset)[0],
             "Interpretación": "Lectura ejecutiva derivada del contexto empresarial y datos filtrados.",
             "Nivel de alerta": "Media",
             "Recomendación ejecutiva": narrative.recommendations[0]?.action || "Priorizar las acciones con evidencia más fuerte.",
@@ -1004,27 +1102,44 @@ const summaryRows = (dataset: AiReportDataset, narrative: AiReportNarrative) => 
 
 const kpiRows = (dataset: AiReportDataset) => {
     const base = dataset.resumen_base;
-    const callReason = availabilityReason(dataset, "calls", "No calculable: faltan datos de llamadas e intentos.");
-    const contactReason = availabilityReason(dataset, "call_result", "No calculable: faltan resultados de contacto.");
-    const firstContactReason = availabilityReason(dataset, "first_contact", "No calculable: falta fecha de primera llamada o primer contacto.");
-    const followupReason = availabilityReason(dataset, "next_action", "No calculable: falta próxima acción o fecha de seguimiento.");
+    const callsAvailable = Boolean(dataset.data_availability.find((item) => item.key === "calls")?.available);
+    const callResultAvailable = Boolean(dataset.data_availability.find((item) => item.key === "call_result")?.available);
+    const callAttempts = dataset.detalle
+        .map((row) => parseAmount(row.intentos_llamada))
+        .filter((value) => value > 0);
+    const totalCallAttempts = callAttempts.reduce((sum, value) => sum + value, 0);
+    const effectiveCallResults = dataset.detalle.filter((row) => cleanText(row.resultado_llamada)).length;
+    const firstContactStatus = base.muestras_primer_contacto > 0
+        ? `Calculado con ${base.muestras_primer_contacto} conversaciones con primera respuesta registrada.`
+        : "Todavía no se mide velocidad de primer contacto porque falta registrar la primera respuesta comercial.";
     const assignees = dataset.distribucion_por_responsable.filter((item) => !item.label.startsWith("Sin responsable")).length;
-
-    return [
+    const rows: Array<Record<string, unknown>> = [
         { KPI: "Leads totales", Valor: base.leads, "Fórmula usada": "Conteo de leads filtrados", "Benchmark sugerido": "Depende del plan comercial", Estado: "Observado", Comentario: "Dato disponible en conversaciones filtradas." },
-        { KPI: "Leads contactados", Valor: contactReason, "Fórmula usada": "Leads con resultado de contacto / llamada", "Benchmark sugerido": "> 60% referencial", Estado: "No calculable", Comentario: contactReason },
-        { KPI: "Tasa de contactabilidad", Valor: contactReason, "Fórmula usada": "Leads contactados / Leads totales", "Benchmark sugerido": "Depende del canal", Estado: "No calculable", Comentario: contactReason },
-        { KPI: "Leads sin contactar", Valor: contactReason, "Fórmula usada": "Leads totales - Leads contactados", "Benchmark sugerido": "Menor posible", Estado: "No calculable", Comentario: contactReason },
-        { KPI: "Tiempo promedio a primer contacto", Valor: firstContactReason, "Fórmula usada": "Promedio de fecha primera llamada - fecha ingreso", "Benchmark sugerido": "< 5 min ideal", Estado: "No calculable", Comentario: firstContactReason },
-        { KPI: "Intentos promedio por lead", Valor: callReason, "Fórmula usada": "Intentos totales / Leads", "Benchmark sugerido": "2 a 4 intentos", Estado: "No calculable", Comentario: callReason },
-        { KPI: "Llamadas totales", Valor: callReason, "Fórmula usada": "Conteo/suma de llamadas", "Benchmark sugerido": "Depende de dotación", Estado: "No calculable", Comentario: callReason },
-        { KPI: "Llamadas efectivas", Valor: contactReason, "Fórmula usada": "Llamadas con resultado efectivo", "Benchmark sugerido": "Depende del canal", Estado: "No calculable", Comentario: contactReason },
+        { KPI: "Leads contactados", Valor: base.leads_contactados, "Fórmula usada": "Leads totales - leads sin contactar", "Benchmark sugerido": "> 60% referencial", Estado: "Derivado del dashboard", Comentario: "Se considera contactado cuando la conversación no queda pendiente de respuesta del equipo comercial." },
+        { KPI: "Tasa de contactabilidad", Valor: `${base.tasa_contactabilidad}%`, "Fórmula usada": "Leads contactados / leads totales", "Benchmark sugerido": "Depende del canal", Estado: "Derivado del dashboard", Comentario: "Calculado con la misma señal de conversación usada para detectar leads pendientes de respuesta." },
+        { KPI: "Leads sin contactar", Valor: base.leads_sin_contactar, "Fórmula usada": "Conversaciones pendientes de primera respuesta o revisión", "Benchmark sugerido": "Menor posible", Estado: "Derivado del dashboard", Comentario: "Representa conversaciones que requieren gestión o revisión de respuesta." },
+        { KPI: "Tiempo promedio a primer contacto", Valor: base.tiempo_promedio_primer_contacto_segundos !== null ? durationText(base.tiempo_promedio_primer_contacto_segundos) : "Pendiente de medición", "Fórmula usada": "Diferencia entre ingreso del lead y primera respuesta registrada", "Benchmark sugerido": "< 5 min ideal", Estado: base.muestras_primer_contacto > 0 ? "Observado" : "Por integrar", Comentario: firstContactStatus },
+    ];
+
+    if (callsAvailable) {
+        rows.push(
+            { KPI: "Intentos promedio por lead", Valor: totalCallAttempts > 0 ? Number((totalCallAttempts / Math.max(1, base.leads)).toFixed(2)) : "Pendiente de normalización", "Fórmula usada": "Intentos totales / leads", "Benchmark sugerido": "2 a 4 intentos", Estado: totalCallAttempts > 0 ? "Observado" : "Por completar", Comentario: totalCallAttempts > 0 ? "Calculado desde campos de intentos registrados." : "Existen campos de intentos, pero no tienen valores numéricos consolidados." },
+            { KPI: "Llamadas totales", Valor: totalCallAttempts > 0 ? totalCallAttempts : "Pendiente de normalización", "Fórmula usada": "Suma de intentos o llamadas registradas", "Benchmark sugerido": "Depende de dotación", Estado: totalCallAttempts > 0 ? "Observado" : "Por completar", Comentario: totalCallAttempts > 0 ? "Calculado desde la data de intentos disponible." : "Existen campos de llamadas, pero falta registrar valores numéricos." },
+        );
+    }
+    if (callResultAvailable) {
+        rows.push({ KPI: "Llamadas efectivas", Valor: effectiveCallResults, "Fórmula usada": "Leads con resultado de llamada/contacto registrado", "Benchmark sugerido": "Depende del canal", Estado: "Observado", Comentario: "Calculado desde resultados de llamada/contacto disponibles en la data." });
+    }
+
+    rows.push(
         { KPI: "Tasa de conversión a cita", Valor: pct(base.citas_detectadas, base.leads), "Fórmula usada": "Citas / Leads totales", "Benchmark sugerido": "Depende del canal", Estado: "Observado", Comentario: "Calculado por etapa/etiqueta detectada." },
         { KPI: "Tasa de conversión a SQL", Valor: pct(base.sql_detectados, base.leads), "Fórmula usada": "SQL / Leads totales", "Benchmark sugerido": "Depende del canal", Estado: "Observado", Comentario: "Calculado por etapa/etiqueta detectada." },
         { KPI: "Tasa de conversión a venta", Valor: pct(base.ventas_detectadas, base.leads), "Fórmula usada": "Ventas / Leads totales", "Benchmark sugerido": "Depende del ticket", Estado: "Observado", Comentario: "Calculado por etapa/etiqueta detectada." },
-        { KPI: "Leads vencidos o sin seguimiento", Valor: followupReason, "Fórmula usada": "Requiere próxima acción / fecha de vencimiento", "Benchmark sugerido": "0 vencidos", Estado: "No calculable", Comentario: followupReason },
-        { KPI: "Carga promedio por asesor", Valor: assignees > 0 ? Number((base.leads / assignees).toFixed(2)) : availabilityReason(dataset, "assignee", "No calculable: faltan responsables asignados."), "Fórmula usada": "Leads / responsables con data", "Benchmark sugerido": "Equilibrio entre asesores", Estado: assignees > 0 ? "Observado" : "No calculable", Comentario: assignees > 0 ? "Calculado con responsables detectados." : availabilityReason(dataset, "assignee", "No calculable: faltan responsables asignados.") },
-    ];
+        { KPI: "Leads en seguimiento", Valor: base.seguimiento_detectado, "Fórmula usada": "Leads en etapa/etiqueta de seguimiento", "Benchmark sugerido": "Revisar capacidad diaria", Estado: "Observado", Comentario: "Calculado por etapa comercial y etiquetas disponibles." },
+        { KPI: "Carga promedio por asesor", Valor: assignees > 0 ? Number((base.leads / assignees).toFixed(2)) : "Pendiente de asignación", "Fórmula usada": "Leads / responsables con data", "Benchmark sugerido": "Equilibrio entre asesores", Estado: assignees > 0 ? "Observado" : "Por completar", Comentario: assignees > 0 ? "Calculado con responsables detectados." : "Para activar este KPI se debe asignar responsable o asesor a los leads." },
+    );
+
+    return rows;
 };
 
 const groupRows = (items: Array<{ label: string; value: number }>, labelName = "Categoría") =>
@@ -1044,13 +1159,15 @@ const advisorRows = (dataset: AiReportDataset) =>
         const citas = rows.filter((row) => row.etapa === "Cita").length;
         const sqls = rows.filter((row) => row.etapa === "SQL").length;
         const ventas = rows.filter((row) => row.etapa === "Venta").length;
+        const sinRespuesta = rows.filter((row) => row.sin_respuesta).length;
+        const contactados = Math.max(0, rows.length - sinRespuesta);
         return {
             Asesor: advisor,
             "Leads asignados": rows.length,
-            "Leads contactados": valueOrReason("", dataset, "call_result"),
-            "Llamadas realizadas": valueOrReason("", dataset, "calls"),
-            "Intentos promedio": valueOrReason("", dataset, "calls"),
-            Contactabilidad: valueOrReason("", dataset, "call_result"),
+            "Leads contactados": contactados,
+            "Llamadas realizadas": availabilityReason(dataset, "calls", "Requiere integración o registro de llamadas."),
+            "Intentos promedio": availabilityReason(dataset, "calls", "Requiere integración o registro de intentos."),
+            Contactabilidad: pct(contactados, rows.length),
             "Citas agendadas": citas,
             "SQLs generados": sqls,
             "Ventas cerradas": ventas,
@@ -1065,11 +1182,12 @@ const channelCampaignRows = (dataset: AiReportDataset) =>
         const alta = rows.filter((row) => row.nivel === "Alta calidad").length;
         const baja = rows.filter((row) => row.nivel === "Baja calidad").length;
         const ventas = rows.filter((row) => row.etapa === "Venta").length;
+        const contactados = rows.filter((row) => !row.sin_respuesta).length;
         return {
             "Canal / Campaña": label,
             "Leads recibidos": rows.length,
             "% del total": pct(rows.length, dataset.resumen_base.leads),
-            Contactabilidad: valueOrReason("", dataset, "call_result"),
+            Contactabilidad: pct(contactados, rows.length),
             "Conversión a cita": pct(rows.filter((row) => row.etapa === "Cita").length, rows.length),
             "Conversión a SQL": pct(rows.filter((row) => row.etapa === "SQL").length, rows.length),
             "Conversión a venta": pct(ventas, rows.length),
@@ -1090,7 +1208,7 @@ const insightsRows = (narrative: AiReportNarrative) =>
             Prioridad: insight.priority,
             "Responsable sugerido": "Gerencia comercial / supervisor",
         }))
-        : [{ Insight: "Sin insights IA", "Evidencia numérica": "El agente no devolvió insights estructurados.", "Impacto comercial": "Revisar respuesta del modelo.", "Causa probable": "Respuesta incompleta", "Acción recomendada": "Reintentar o reducir rango.", Prioridad: "Media", "Responsable sugerido": "Administrador" }];
+        : [{ Insight: "Lectura ejecutiva pendiente de enriquecer", "Evidencia numérica": "Se generaron KPIs determinísticos con la data filtrada.", "Impacto comercial": "El reporte conserva la lectura operativa aunque falte narrativa adicional.", "Causa probable": "Narrativa externa incompleta", "Acción recomendada": "Revisar KPIs observados y completar datos operativos críticos.", Prioridad: "Media", "Responsable sugerido": "Administrador" }];
 
 const recommendationRows = (narrative: AiReportNarrative) =>
     narrative.recommendations.length > 0
@@ -1100,12 +1218,12 @@ const recommendationRows = (narrative: AiReportNarrative) =>
             Prioridad: item.priority,
             Justificacion: item.rationale,
         }))
-        : [{ Accion: "Revisar datos y generar nuevamente el reporte", Responsable: "Administrador", Prioridad: "Media", Justificacion: "El agente IA no devolvió recomendaciones estructuradas." }];
+        : [{ Accion: "Priorizar revisión de contactabilidad, calidad y seguimiento", Responsable: "Gerencia comercial", Prioridad: "Alta", Justificacion: "Las recomendaciones deben partir de los KPIs observados y de las brechas de datos operativos." }];
 
 const risksRows = (narrative: AiReportNarrative) =>
     narrative.risks.length > 0
         ? narrative.risks.map((risk, index) => ({ Riesgo: index + 1, Detalle: risk }))
-        : [{ Riesgo: "Riesgo de lectura incompleta", Detalle: "El agente IA no devolvió riesgos estructurados; revisar limitaciones y datos faltantes." }];
+        : [{ Riesgo: "Riesgo operativo", Detalle: "Si no se corrige la trazabilidad de contacto y seguimiento, la gerencia tendrá menos visibilidad para priorizar leads, asesores y campañas." }];
 
 const callRecommendationRows = (dataset: AiReportDataset) => [
     {
@@ -1159,7 +1277,7 @@ const marketingCampaignRows = (dataset: AiReportDataset) =>
         return {
             Campaña: campaign,
             Leads: rows.length,
-            "Score promedio": avgScore || availabilityReason(dataset, "score", "No calculable: falta score por campaña."),
+            "Score promedio": avgScore || availabilityReason(dataset, "score", "Para medir score por campaña se debe registrar una calificación por lead."),
             "% Alta calidad": pct(high, rows.length),
             "% Baja calidad": pct(low, rows.length),
             Diagnóstico: low > high ? "Genera volumen con baja calidad relativa." : "Tiene señales de calidad aprovechables.",
@@ -1199,14 +1317,14 @@ const detailRowsForExport = (dataset: AiReportDataset) => dataset.detalle.map((r
     Monto: row.monto,
     "Fecha ingreso": row.fecha_ingreso,
     "Ultima interaccion": row.ultima_interaccion,
-    "Intentos llamada": row.intentos_llamada || availabilityReason(dataset, "calls", "No calculable: faltan intentos de llamada."),
-    "Fecha primera llamada": row.fecha_primera_llamada || availabilityReason(dataset, "first_contact", "No calculable: falta fecha de primera llamada."),
-    "Tiempo primer contacto": row.tiempo_primer_contacto || availabilityReason(dataset, "first_contact", "No calculable: falta tiempo de primer contacto."),
-    "Resultado llamada": row.resultado_llamada || availabilityReason(dataset, "call_result", "No calculable: falta resultado de llamada/contacto."),
-    "Duracion llamada": row.duracion_llamada || availabilityReason(dataset, "calls", "No calculable: falta duración de llamada."),
-    "Proxima accion": row.proxima_accion || availabilityReason(dataset, "next_action", "No calculable: falta próxima acción."),
-    Observaciones: row.observaciones || availabilityReason(dataset, "observations", "No calculable: faltan observaciones comerciales."),
-    "Motivo perdida": row.motivo_perdida || availabilityReason(dataset, "loss_reason", "No calculable: falta motivo de pérdida o descalificación."),
+    "Intentos llamada": row.intentos_llamada || availabilityReason(dataset, "calls", "Para ver intentos por lead se debe registrar la gestión telefónica o de contacto."),
+    "Fecha primera llamada": row.fecha_primera_llamada || availabilityReason(dataset, "first_contact", "Para ver primera llamada se debe registrar la primera gestión de contacto."),
+    "Tiempo primer contacto": row.tiempo_primer_contacto || availabilityReason(dataset, "first_contact", "Para medir velocidad de contacto se debe registrar ingreso del lead y primera respuesta."),
+    "Resultado llamada": row.resultado_llamada || availabilityReason(dataset, "call_result", "Para medir resultado de contacto se debe registrar si la llamada fue efectiva, no contestada u otro resultado."),
+    "Duracion llamada": row.duracion_llamada || availabilityReason(dataset, "calls", "Para medir duración se requiere integración o registro de llamadas."),
+    "Proxima accion": row.proxima_accion || availabilityReason(dataset, "next_action", "Para controlar seguimiento se debe registrar próxima acción o fecha de gestión."),
+    Observaciones: row.observaciones || availabilityReason(dataset, "observations", "Para enriquecer la lectura comercial se deben registrar notas u observaciones del asesor."),
+    "Motivo perdida": row.motivo_perdida || availabilityReason(dataset, "loss_reason", "Para explicar pérdidas se debe registrar motivo de pérdida o descalificación."),
     "Producto interes": row.producto_interes || "No aplica: no se registró producto de interés en este lead.",
     "Origen dato": row.origen_dato,
 }));
@@ -1272,7 +1390,7 @@ export const buildAiReportSheets = (params: {
             objectSheet("03 Canales", marketingChannelRows(dataset)),
             objectSheet("04 Causas Score", risksRows(narrative).map((row) => ({
                 "Hallazgo en la data": row.Detalle,
-                "Posible causa": "Inferencia del agente IA conectada a la data disponible.",
+                "Posible causa": "Inferencia analítica conectada a la data disponible.",
                 "Impacto comercial": "Puede afectar calidad, costo y conversión.",
                 "Recomendación concreta": narrative.recommendations[0]?.action || "Revisar segmentación, mensaje, formulario y feedback comercial.",
             }))),
@@ -1591,24 +1709,23 @@ const toPdfLineText = (value: unknown) => removePdfControlChars(cellText(value))
     .replace(/\s+/g, " ")
     .trim();
 
+const toWinAnsiText = (value: unknown) => toPdfLineText(value)
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/…/g, "...")
+    .replace(/•/g, "-")
+    .replace(/[^\x20-\x7E\xA0-\xFF]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const pdfText = (value: unknown) => {
-    const text = toPdfLineText(value)
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[“”]/g, "\"")
-        .replace(/[‘’]/g, "'")
-        .replace(/[–—]/g, "-")
-        .replace(/•/g, "-")
-        .replace(/…/g, "...")
-        .replace(/[^\x20-\x7E]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 1200);
+    const text = toWinAnsiText(value).slice(0, 1200);
     return `(${text.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)")})`;
 };
 
 const wrapText = (value: unknown, maxChars: number) => {
-    const text = toPdfLineText(value);
+    const text = toWinAnsiText(value);
     if (text.length <= maxChars) return [text];
     const chunks: string[] = [];
     let remaining = text;
@@ -1623,7 +1740,7 @@ const wrapText = (value: unknown, maxChars: number) => {
 };
 
 const truncateText = (value: unknown, maxChars: number) => {
-    const text = toPdfLineText(value);
+    const text = toWinAnsiText(value);
     return text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text;
 };
 
@@ -1655,11 +1772,11 @@ const funnelRows = (dataset: AiReportDataset) =>
             : stage === "Calificación"
                 ? dataset.resumen_base.sql_detectados + dataset.resumen_base.no_calificados
                 : stage === "Contactabilidad"
-                    ? availabilityReason(dataset, "call_result", "No calculable: falta resultado de contacto.")
+                    ? `${dataset.resumen_base.tasa_contactabilidad}% (${dataset.resumen_base.leads_contactados} contactados / ${dataset.resumen_base.leads_sin_contactar} pendientes)`
                     : stage === "Agendamiento"
                         ? dataset.resumen_base.citas_detectadas
                         : stage === "Asistencia a citas"
-                            ? availabilityReason(dataset, "call_result", "No calculable: falta asistencia/resultado de cita.")
+                            ? "Pendiente de medir asistencia si no existe resultado de cita integrado."
                             : stage === "Cierre comercial"
                                 ? dataset.resumen_base.ventas_detectadas
                                 : dataset.resumen_base.seguimiento_detectado;
@@ -1667,7 +1784,7 @@ const funnelRows = (dataset: AiReportDataset) =>
             stage,
             cellText(value),
             stage === "Entrada de leads" ? "Volumen observado." : "Revisar avance y trazabilidad de la etapa.",
-            stage === "Contactabilidad" ? availabilityReason(dataset, "call_result", "Medir contacto efectivo por lead.") : "Optimizar criterios, cadencia y responsables.",
+            stage === "Contactabilidad" ? "Priorizar leads pendientes y mantener registro consistente de primera respuesta." : "Optimizar criterios, cadencia y responsables.",
         ];
     });
 
@@ -1678,9 +1795,10 @@ const buildPdfBlocks = (params: {
     narrative: AiReportNarrative;
 }): PdfBlock[] => {
     const { profileKey, profile, dataset, narrative } = params;
-    const summary = narrative.executiveSummary.length > 0
-        ? narrative.executiveSummary
-        : [`Se analizaron ${dataset.resumen_base.leads} leads en el periodo ${dataset.periodo}.`];
+    const summary = Array.from(new Set([
+        ...narrative.executiveSummary,
+        ...deterministicExecutiveSummary(dataset),
+    ])).filter(Boolean);
     const kpiTable = {
         title: "KPIs principales",
         columns: ["KPI", "Valor", "Estado", "Comentario"],
@@ -1716,7 +1834,7 @@ const buildPdfBlocks = (params: {
             { title: "8. Plan de acción sugerido", table: { title: "Plan de acción", columns: ["Acción", "Responsable", "Plazo", "KPI", "Prioridad"], rows: planRows(narrative).map((row) => [cellText(row.Acción), cellText(row["Responsable sugerido"]), cellText(row["Plazo sugerido"]), cellText(row["KPI afectado"]), cellText(row.Prioridad)]), limit: 10 } },
             { title: "9. Riesgos comerciales", paragraphs: risksRows(narrative).map((row) => cellText(row.Detalle)).slice(0, 6) },
             { title: "10. Limitaciones del análisis", table: { title: "Limitaciones", columns: ["Limitación", "Impacto", "Mejora sugerida"], rows: tableRowsFromObjects(limitRows(dataset), ["Limitación detectada", "Impacto en el análisis", "Recomendación para mejorar la captura de datos"]), limit: 10 } },
-            { title: "11. Conclusión gerencial", paragraphs: [narrative.recommendations[0]?.rationale || "La prioridad es mejorar trazabilidad, calidad y seguimiento con la data filtrada disponible."] },
+            { title: "11. Conclusión gerencial", paragraphs: [deterministicConclusion(dataset)] },
         ];
     }
 
@@ -1729,11 +1847,11 @@ const buildPdfBlocks = (params: {
             { title: "5. Análisis de desempeño por agente", table: { title: "Ranking de agentes", columns: ["Asesor", "Leads", "Citas", "SQLs", "Ventas", "Diagnóstico"], rows: tableRowsFromObjects(advisorRows(dataset), ["Asesor", "Leads asignados", "Citas agendadas", "SQLs generados", "Ventas cerradas", "Diagnóstico"]), limit: 10 } },
             { title: "6. Análisis por campaña", table: { title: "Canal / campaña", columns: ["Canal/Campaña", "Leads", "% total", "Conv. venta", "Calidad", "Recomendación"], rows: tableRowsFromObjects(channelCampaignRows(dataset), ["Canal / Campaña", "Leads recibidos", "% del total", "Conversión a venta", "Calidad estimada", "Recomendación"]), limit: 10 } },
             { title: "7. Análisis de horarios y días", table: { title: "Evolución diaria", columns: ["Día", "Leads"], rows: dataset.distribucion_por_dia.map((item) => [item.label, cellText(item.value)]), limit: 12 } },
-            { title: "8. Análisis de seguimiento y reactivación", paragraphs: [availabilityReason(dataset, "next_action", "No calculable: falta próxima acción o fecha de seguimiento."), `Leads en seguimiento detectados por etapa/etiqueta: ${dataset.resumen_base.seguimiento_detectado}.`] },
-            { title: "9. Insights sobre scripts y objeciones", paragraphs: [availabilityReason(dataset, "observations", "No calculable: faltan observaciones, notas o transcripciones para evaluar scripts."), ...risksRows(narrative).map((row) => cellText(row.Detalle)).slice(0, 3)] },
+            { title: "8. Análisis de seguimiento y reactivación", paragraphs: [availabilityReason(dataset, "next_action", "El seguimiento se mide por etapa y etiquetas disponibles; para medir vencimientos se debe registrar próxima acción o fecha de seguimiento."), `Leads en seguimiento detectados por etapa/etiqueta: ${dataset.resumen_base.seguimiento_detectado}. Leads pendientes de respuesta o revisión: ${dataset.resumen_base.leads_sin_contactar}.`] },
+            { title: "9. Insights sobre scripts y objeciones", paragraphs: [availabilityReason(dataset, "observations", "Para analizar scripts y objeciones se deben registrar observaciones, notas o transcripciones de conversaciones."), ...risksRows(narrative).map((row) => cellText(row.Detalle)).slice(0, 3)] },
             { title: "10. Recomendaciones gerenciales", paragraphs: recommendationParagraphs },
             { title: "11. Plan de acción operativo", table: { title: "Plan operativo", columns: ["Acción", "Responsable", "Prioridad", "Impacto", "Plazo", "KPI"], rows: tableRowsFromObjects(planRows(narrative), ["Acción", "Responsable sugerido", "Prioridad", "Impacto esperado", "Plazo sugerido", "KPI afectado"]), limit: 10 } },
-            { title: "12. Conclusión ejecutiva", paragraphs: [narrative.recommendations[0]?.rationale || "El foco operativo es equilibrar carga, mejorar seguimiento y capturar datos de contacto con mayor consistencia."] },
+            { title: "12. Conclusión ejecutiva", paragraphs: [deterministicConclusion(dataset)] },
             { title: "Anexo técnico", table: { title: "Campos y limitaciones", columns: ["Limitación", "Impacto", "Mejora sugerida"], rows: tableRowsFromObjects(limitRows(dataset), ["Limitación detectada", "Impacto en el análisis", "Recomendación para mejorar la captura de datos"]), limit: 20 } },
         ];
     }
@@ -1765,6 +1883,16 @@ const toPdf = (params: {
     const textLine = (text: unknown, x: number, baseline: number, size = 9, font = "F1", color = rgb.text) => {
         addOp(`${color} rg BT /${font} ${size} Tf ${x} ${baseline} Td ${pdfText(text)} Tj ET`);
     };
+    const charsForWidth = (width: number, size: number) => Math.max(12, Math.floor(width / (size * 0.52)));
+    const textBlock = (text: unknown, x: number, size = 9, font = "F1", color = rgb.text, maxWidth = PDF_WIDTH - PDF_MARGIN * 2, lineHeight = Math.ceil(size * 1.35)) => {
+        const lines = wrapText(text, charsForWidth(maxWidth, size));
+        lines.forEach((line) => {
+            ensure(lineHeight + 4);
+            textLine(line, x, y, size, font, color);
+            y -= lineHeight;
+        });
+        y -= 2;
+    };
     const footer = () => {
         textLine(`Página ${pageNumber}`, PDF_WIDTH - PDF_MARGIN - 52, 22, 8, "F1", rgb.muted);
         textLine("SIMPLIA Control Comercial", PDF_MARGIN, 22, 8, "F1", rgb.muted);
@@ -1776,7 +1904,7 @@ const toPdf = (params: {
         rect(0, 792, PDF_WIDTH, 50, rgb.blue);
         textLine("SIMPLIA", PDF_MARGIN, 813, 22, "F2", rgb.white);
         textLine("CONTROL COMERCIAL", PDF_MARGIN, 801, 7, "F1", rgb.white);
-        textLine(params.dataset.periodo, PDF_WIDTH - PDF_MARGIN - 150, 812, 9, "F1", rgb.white);
+        textLine(truncateText(params.dataset.periodo, 32), PDF_WIDTH - PDF_MARGIN - 150, 812, 9, "F1", rgb.white);
         footer();
     };
     const finishPage = () => {
@@ -1791,8 +1919,8 @@ const toPdf = (params: {
     };
     const paragraph = (text: unknown, x = PDF_MARGIN, size = 9, maxChars = 92, lineHeight = 13, color = rgb.text) => {
         const lines = wrapText(text, maxChars);
-        ensure(lines.length * lineHeight + 4);
         lines.forEach((line) => {
+            ensure(lineHeight + 4);
             textLine(line, x, y, size, "F1", color);
             y -= lineHeight;
         });
@@ -1800,38 +1928,86 @@ const toPdf = (params: {
     };
     const heading = (value: unknown) => {
         ensure(30);
-        textLine(value, PDF_MARGIN, y, 13, "F2", rgb.blue);
-        y -= 18;
+        textBlock(value, PDF_MARGIN, 13, "F2", rgb.blue, PDF_WIDTH - PDF_MARGIN * 2, 16);
         rect(PDF_MARGIN, y + 8, PDF_WIDTH - PDF_MARGIN * 2, 0.5, rgb.border);
         y -= 8;
     };
-    const table = (title: string, columns: string[], rows: string[][], limit = 10) => {
+    const tableAsCards = (title: string, columns: string[], rows: string[][], limit = 10) => {
         const displayRows = rows.slice(0, limit);
         const width = PDF_WIDTH - PDF_MARGIN * 2;
-        const colWidth = width / Math.max(1, columns.length);
-        const rowHeight = 20;
-        ensure(34 + (displayRows.length + 1) * rowHeight);
         textLine(title, PDF_MARGIN, y, 11, "F2", rgb.text);
         y -= 16;
-        rect(PDF_MARGIN, y - rowHeight + 5, width, rowHeight, rgb.blue2);
-        columns.forEach((column, index) => textLine(truncateText(column, Math.floor(colWidth / 4.8)), PDF_MARGIN + index * colWidth + 5, y - 8, 7, "F2", rgb.white));
-        y -= rowHeight;
         displayRows.forEach((row, rowIndex) => {
+            const titleLine = `${columns[0] || "Elemento"}: ${row[0] || "Sin dato"}`;
+            const fields = columns.slice(1).map((column, index) => `${column}: ${row[index + 1] || "Sin dato"}`);
+            const fieldLines = fields.flatMap((field) => wrapText(field, charsForWidth(width - 24, 8)));
+            const titleLines = wrapText(titleLine, charsForWidth(width - 24, 9));
+            const cardHeight = 20 + titleLines.length * 12 + fieldLines.length * 10;
+            if (cardHeight > 620) {
+                textBlock(titleLine, PDF_MARGIN + 4, 9, "F2", rgb.blue, width - 8, 12);
+                fields.forEach((field) => textBlock(field, PDF_MARGIN + 10, 8, "F1", rgb.text, width - 18, 10));
+                y -= 4;
+                return;
+            }
+            ensure(cardHeight + 8);
+            rect(PDF_MARGIN, y - cardHeight + 8, width, cardHeight, rowIndex % 2 === 0 ? rgb.row : "0.99 0.995 1", rgb.border);
+            y -= 10;
+            titleLines.forEach((line) => {
+                textLine(line, PDF_MARGIN + 10, y, 9, "F2", rgb.blue);
+                y -= 12;
+            });
+            fieldLines.forEach((line) => {
+                textLine(line, PDF_MARGIN + 10, y, 8, "F1", rgb.text);
+                y -= 10;
+            });
+            y -= 8;
+        });
+        if (rows.length > limit) {
+            textLine(`Filas adicionales disponibles en Excel/CSV: ${rows.length - limit}`, PDF_MARGIN, y - 4, 8, "F1", rgb.muted);
+            y -= 14;
+        }
+        y -= 6;
+    };
+    const table = (title: string, columns: string[], rows: string[][], limit = 10) => {
+        const displayRows = rows.slice(0, limit);
+        const shouldUseCards = columns.length >= 4 || displayRows.some((row) => row.some((cell) => toWinAnsiText(cell).length > 42));
+        if (shouldUseCards) {
+            tableAsCards(title, columns, rows, limit);
+            return;
+        }
+
+        const width = PDF_WIDTH - PDF_MARGIN * 2;
+        const colWidth = width / Math.max(1, columns.length);
+        textLine(title, PDF_MARGIN, y, 11, "F2", rgb.text);
+        y -= 16;
+        const headerLines = columns.map((column) => wrapText(column, charsForWidth(colWidth - 10, 7)));
+        const headerHeight = Math.max(18, Math.max(...headerLines.map((lines) => lines.length)) * 9 + 9);
+        ensure(headerHeight + 8);
+        rect(PDF_MARGIN, y - headerHeight + 5, width, headerHeight, rgb.blue2);
+        headerLines.forEach((lines, index) => {
+            lines.forEach((line, lineIndex) => textLine(line, PDF_MARGIN + index * colWidth + 5, y - 8 - lineIndex * 9, 7, "F2", rgb.white));
+        });
+        y -= headerHeight;
+        displayRows.forEach((row, rowIndex) => {
+            const cellLines = columns.map((_, index) => wrapText(row[index] || "", charsForWidth(colWidth - 10, 7)));
+            const rowHeight = Math.max(18, Math.max(...cellLines.map((lines) => lines.length)) * 9 + 9);
+            ensure(rowHeight + 4);
             if (rowIndex % 2 === 0) rect(PDF_MARGIN, y - rowHeight + 5, width, rowHeight, rgb.row);
             rect(PDF_MARGIN, y - rowHeight + 5, width, rowHeight, undefined, rgb.border);
-            columns.forEach((_, index) => textLine(truncateText(row[index] || "", Math.floor(colWidth / 4.8)), PDF_MARGIN + index * colWidth + 5, y - 8, 7, "F1", rgb.text));
+            cellLines.forEach((lines, index) => {
+                lines.forEach((line, lineIndex) => textLine(line, PDF_MARGIN + index * colWidth + 5, y - 8 - lineIndex * 9, 7, "F1", rgb.text));
+            });
             y -= rowHeight;
         });
         if (rows.length > limit) {
-            textLine(`Más filas disponibles en Excel/CSV: ${rows.length - limit}`, PDF_MARGIN, y - 4, 8, "F1", rgb.muted);
+            textLine(`Filas adicionales disponibles en Excel/CSV: ${rows.length - limit}`, PDF_MARGIN, y - 4, 8, "F1", rgb.muted);
             y -= 14;
         }
         y -= 6;
     };
 
     header();
-    textLine(params.narrative.title || params.profile.label, PDF_MARGIN, y, 18, "F2", rgb.blue);
-    y -= 18;
+    textBlock(params.narrative.title || params.profile.label, PDF_MARGIN, 18, "F2", rgb.blue, PDF_WIDTH - PDF_MARGIN * 2, 22);
     textLine(`Generado: ${new Date().toLocaleString("es-EC", { timeZone: TIMEZONE })}`, PDF_MARGIN, y, 8, "F1", rgb.muted);
     y -= 18;
 
@@ -1914,6 +2090,14 @@ const bytesToBase64 = (bytes: Uint8Array) => {
 
 const stringToBase64 = (value: string) => bytesToBase64(new TextEncoder().encode(value));
 
+const winAnsiStringToBase64 = (value: string) => {
+    const bytes = new Uint8Array(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+        bytes[index] = value.charCodeAt(index) & 0xff;
+    }
+    return bytesToBase64(bytes);
+};
+
 const renderFile = (params: {
     profile: AiReportProfile;
     profileKey: CriticalProfileKey;
@@ -1927,7 +2111,7 @@ const renderFile = (params: {
         return {
             filename: `${baseName}.pdf`,
             mimeType: "application/pdf",
-            contentBase64: stringToBase64(toPdf({
+            contentBase64: winAnsiStringToBase64(toPdf({
                 profile: params.profile,
                 dataset: params.dataset,
                 narrative: params.narrative,

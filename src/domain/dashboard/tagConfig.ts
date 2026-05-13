@@ -88,7 +88,7 @@ const normalizeReportColumnFields = (value?: Record<string, unknown> | null) => 
 
 const normalizeCriticalReportProfiles = (value?: Record<string, Partial<CriticalReportProfileConfig>> | null) => {
     const entries = Object.entries(DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG).map(([key, fallback]) => {
-        const configured = (value as any)?.[key];
+        const configured = value?.[key];
         return [
             key,
             {
