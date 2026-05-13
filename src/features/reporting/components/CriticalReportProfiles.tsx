@@ -4,14 +4,12 @@ import {
     BriefcaseBusiness,
     CalendarClock,
     CheckCircle2,
-    Settings,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboardContext } from "@/context/useDashboardContext";
 import { useAuth } from "@/context/useAuth";
-import { isAdmin } from "@/domain/auth/permissions";
+import { canAccessCriticalReportProfile } from "@/domain/auth/permissions";
 import { TabExportMenu } from "@/features/dashboard/components/TabExportMenu";
 import {
     CRITICAL_REPORT_PROFILES,
@@ -38,11 +36,10 @@ const PROFILE_AREAS: Record<CriticalProfileKey, string> = {
 const profileKeys = Object.keys(CRITICAL_REPORT_PROFILES) as CriticalProfileKey[];
 
 interface CriticalReportProfilesProps {
-    onEditProfile: (key: CriticalProfileKey) => void;
     onScheduled: () => void;
 }
 
-export function CriticalReportProfiles({ onEditProfile, onScheduled }: CriticalReportProfilesProps) {
+export function CriticalReportProfiles({ onScheduled }: CriticalReportProfilesProps) {
     const { tagSettings } = useDashboardContext();
     const { role } = useAuth();
 
@@ -51,7 +48,7 @@ export function CriticalReportProfiles({ onEditProfile, onScheduled }: CriticalR
     )), [tagSettings.criticalReportProfiles]);
 
     const visibleProfiles = useMemo(
-        () => resolvedProfiles.filter((profile) => profile.isActive || isAdmin(role)),
+        () => resolvedProfiles.filter((profile) => canAccessCriticalReportProfile(role, profile.key)),
         [resolvedProfiles, role],
     );
 
@@ -116,12 +113,6 @@ export function CriticalReportProfiles({ onEditProfile, onScheduled }: CriticalR
                                             compact
                                             onScheduled={onScheduled}
                                         />
-                                        {isAdmin(role) && (
-                                            <Button variant="outline" size="sm" className="gap-2" onClick={() => onEditProfile(profile.key)}>
-                                                <Settings className="h-4 w-4" />
-                                                Editar
-                                            </Button>
-                                        )}
                                     </div>
                                 </div>
                             </CardContent>

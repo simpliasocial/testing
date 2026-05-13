@@ -2,12 +2,15 @@ import type { MinifiedConversation } from "../conversation/types";
 import { type UnknownRecord, isRecord, asRecord } from "../common/types";
 
 export type AttributeRecord = UnknownRecord;
+type LeadAttributeInput = Partial<Omit<MinifiedConversation, "meta">> & {
+    meta?: Partial<MinifiedConversation["meta"]>;
+};
 
-const hasSeparatedAttributes = (lead: Partial<MinifiedConversation>): boolean =>
+const hasSeparatedAttributes = (lead: LeadAttributeInput): boolean =>
     isRecord(lead?.conversation_custom_attributes) ||
     isRecord(lead?.contact_custom_attributes);
 
-export const getContactCustomAttributes = (lead: Partial<MinifiedConversation>): AttributeRecord => {
+export const getContactCustomAttributes = (lead: LeadAttributeInput): AttributeRecord => {
     if (isRecord(lead?.contact_custom_attributes)) {
         return lead.contact_custom_attributes;
     }
@@ -15,7 +18,7 @@ export const getContactCustomAttributes = (lead: Partial<MinifiedConversation>):
     return asRecord(lead?.meta?.sender?.custom_attributes);
 };
 
-export const getConversationCustomAttributes = (lead: Partial<MinifiedConversation>): AttributeRecord => {
+export const getConversationCustomAttributes = (lead: LeadAttributeInput): AttributeRecord => {
     if (isRecord(lead?.conversation_custom_attributes)) {
         return lead.conversation_custom_attributes;
     }
@@ -30,10 +33,10 @@ export const getConversationCustomAttributes = (lead: Partial<MinifiedConversati
     return asRecord(lead?.custom_attributes);
 };
 
-export const getSnapshotCustomAttributes = (lead: Partial<MinifiedConversation>): AttributeRecord =>
+export const getSnapshotCustomAttributes = (lead: LeadAttributeInput): AttributeRecord =>
     asRecord(lead?.resolved_custom_attributes || lead?.custom_attributes);
 
-export const resolveLeadAttributes = (lead: Partial<MinifiedConversation>): AttributeRecord => {
+export const resolveLeadAttributes = (lead: LeadAttributeInput): AttributeRecord => {
     const snapshotAttrs = getSnapshotCustomAttributes(lead);
     const contactAttrs = getContactCustomAttributes(lead);
     const conversationAttrs = getConversationCustomAttributes(lead);

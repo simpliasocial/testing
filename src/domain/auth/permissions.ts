@@ -9,7 +9,7 @@ const ALL_TABS: TabId[] = [
   'performance', 'trends', 'scoring', 'chats', 'reporting',
 ];
 
-const OPERATOR_TABS: TabId[] = ['followup', 'performance'];
+const OPERATOR_TABS: TabId[] = ['followup', 'performance', 'reporting'];
 
 /** Returns the tabs visible for a given role */
 export function getVisibleTabs(role: UserRole | null): TabId[] {
@@ -25,6 +25,18 @@ export function getDefaultTab(role: UserRole | null): TabId {
 }
 
 /** Whether the role can access admin-level features (tag config, etc.) */
-export function isAdmin(role: UserRole | null): boolean {
+export function isAdmin(role: string | null): boolean {
   return role === 'platform_admin';
+}
+
+export function canConfigureReportContext(role: string | null): boolean {
+  return role === 'platform_admin' || role === 'company_admin';
+}
+
+export function canAccessCriticalReportProfile(
+  role: string | null,
+  profileKey: string,
+): boolean {
+  if (role === 'platform_admin' || role === 'company_admin') return true;
+  return role === 'operator' && profileKey === 'daily_operations';
 }

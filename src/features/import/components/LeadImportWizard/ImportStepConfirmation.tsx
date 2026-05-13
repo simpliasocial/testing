@@ -29,6 +29,9 @@ export function ImportStepConfirmation({
     onPreviewCheckedChange,
     onSaveCheckedChange,
 }: ImportStepConfirmationProps) {
+    const commitPayments = commit?.rows.filter((row) => row.amountNumber > 0).length || 0;
+    const commitAmount = commit?.rows.reduce((sum, row) => sum + row.amountNumber, 0) || 0;
+
     if (result) {
         return (
             <div className="space-y-6 py-4 text-center">
@@ -44,15 +47,15 @@ export function ImportStepConfirmation({
                 <div className="grid gap-4 sm:grid-cols-3">
                     <div className="rounded-xl border bg-muted/20 p-4">
                         <p className="text-xs font-semibold uppercase text-muted-foreground">Nuevos Leads</p>
-                        <p className="mt-2 text-3xl font-bold text-green-600">{formatNumber(result.stats.createdCount)}</p>
+                        <p className="mt-2 text-3xl font-bold text-green-600">{formatNumber(result.created)}</p>
                     </div>
                     <div className="rounded-xl border bg-muted/20 p-4">
                         <p className="text-xs font-semibold uppercase text-muted-foreground">Actualizados</p>
-                        <p className="mt-2 text-3xl font-bold text-blue-600">{formatNumber(result.stats.updatedCount)}</p>
+                        <p className="mt-2 text-3xl font-bold text-blue-600">{formatNumber(result.updated)}</p>
                     </div>
                     <div className="rounded-xl border bg-muted/20 p-4">
-                        <p className="text-xs font-semibold uppercase text-muted-foreground">Ventas/Pagos</p>
-                        <p className="mt-2 text-3xl font-bold text-amber-600">{formatNumber(result.stats.paymentsCount)}</p>
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Omitidos/Avisos</p>
+                        <p className="mt-2 text-3xl font-bold text-amber-600">{formatNumber(result.skipped + result.warnings)}</p>
                     </div>
                 </div>
                 <div className="rounded-lg bg-green-50 p-4 text-sm text-green-800">
@@ -85,7 +88,7 @@ export function ImportStepConfirmation({
                                 </div>
                                 <span className="text-sm">Leads nuevos a crear</span>
                             </div>
-                            <Badge variant="outline" className="text-base">{formatNumber(commit.stats.toCreate)}</Badge>
+                            <Badge variant="outline" className="text-base">{formatNumber(commit.createCount)}</Badge>
                         </div>
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -94,11 +97,11 @@ export function ImportStepConfirmation({
                                 </div>
                                 <span className="text-sm">Leads existentes a actualizar</span>
                             </div>
-                            <Badge variant="outline" className="text-base">{formatNumber(commit.stats.toUpdate)}</Badge>
+                            <Badge variant="outline" className="text-base">{formatNumber(commit.updateCount)}</Badge>
                         </div>
                         <div className="flex items-center justify-between border-t pt-4">
                             <span className="text-sm font-semibold">Total de cambios</span>
-                            <span className="text-xl font-bold">{formatNumber(commit.stats.toCreate + commit.stats.toUpdate)}</span>
+                            <span className="text-xl font-bold">{formatNumber(commit.createCount + commit.updateCount)}</span>
                         </div>
                     </div>
                 </div>
@@ -109,12 +112,12 @@ export function ImportStepConfirmation({
                         <div className="flex items-center justify-between">
                             <span className="text-sm">Nuevos pagos/ventas detectados</span>
                             <Badge variant="secondary" className="text-base bg-amber-100 text-amber-800 border-amber-200">
-                                {formatNumber(commit.stats.newPayments)}
+                                {formatNumber(commitPayments)}
                             </Badge>
                         </div>
                         <div className="flex items-center justify-between">
                             <span className="text-sm">Volumen total de estas ventas</span>
-                            <span className="text-lg font-bold text-amber-700">{formatMoney(commit.stats.totalAmount)}</span>
+                            <span className="text-lg font-bold text-amber-700">{formatMoney(commitAmount)}</span>
                         </div>
                         <p className="mt-4 text-[11px] text-muted-foreground leading-relaxed">
                             Los leads que ya tienen una venta registrada en el sistema no duplicarán el monto, solo se actualizarán sus otros datos si es necesario.

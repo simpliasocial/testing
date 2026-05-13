@@ -110,11 +110,11 @@ export const getLeadEmail = (lead: LeadDisplayInput) => {
 
 export const getLeadOperationDate = (lead: LeadDisplayInput) => {
     const attrs = getAttrs(lead);
-    const raw = attrs.fecha_monto_operacion;
+    const raw = cleanText(attrs.fecha_monto_operacion);
     if (!raw) return "";
     const date = new Date(raw);
     if (!Number.isNaN(date.getTime())) return date.toISOString().split("T")[0];
-    return String(raw).split("T")[0];
+    return raw.split("T")[0];
 };
 
 export const operationDateToIso = (date: string) =>

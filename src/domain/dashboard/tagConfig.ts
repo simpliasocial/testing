@@ -29,6 +29,7 @@ export interface TagConfig {
     excelExportFields?: string[];
     reportColumnFields?: Record<string, string[]>;
     criticalReportProfiles?: Record<string, CriticalReportProfileConfig>;
+    companyContext?: string;
 }
 
 export const DEFAULT_TAG_CONFIG: TagConfig = {
@@ -63,6 +64,7 @@ export const DEFAULT_TAG_CONFIG: TagConfig = {
     ],
     reportColumnFields: DEFAULT_REPORT_COLUMN_FIELDS,
     criticalReportProfiles: DEFAULT_CRITICAL_REPORT_PROFILE_CONFIG,
+    companyContext: "",
 };
 
 const normalizeTagArray = (value: unknown, fallback: string[]) => {
@@ -120,4 +122,5 @@ export const normalizeTagConfig = (value?: Partial<TagConfig> | null): TagConfig
     excelExportFields: normalizeTagArray(value?.excelExportFields, DEFAULT_TAG_CONFIG.excelExportFields || []),
     reportColumnFields: normalizeReportColumnFields(value?.reportColumnFields),
     criticalReportProfiles: normalizeCriticalReportProfiles(value?.criticalReportProfiles),
+    companyContext: String(value?.companyContext || DEFAULT_TAG_CONFIG.companyContext || "").trim(),
 });

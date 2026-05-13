@@ -321,7 +321,7 @@ const ConversationsLayer = () => {
                                                                 </span>
                                                             </td>
                                                             <td className="px-6 py-4 text-xs font-medium text-foreground">
-                                                                {getAttrs(lead).producto || "-"}
+                                                                {String(getAttrs(lead).producto || "-")}
                                                             </td>
                                                             <td className="px-6 py-4">
                                                                 <div className="flex flex-wrap gap-1 max-w-[260px]">

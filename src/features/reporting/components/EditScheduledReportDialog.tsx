@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+    CRITICAL_REPORT_PROFILES,
     REPORT_FORMATS,
     WEEKDAY_OPTIONS,
     type ScheduledReport,
@@ -47,16 +48,26 @@ export function EditScheduledReportDialog({
     const [recipients, setRecipients] = useState("");
     const [selectedFormats, setSelectedFormats] = useState<ReportFileFormat[]>([]);
     const [isSaving, setIsSaving] = useState(false);
+    const availableFormats = report?.critical_profile_key
+        ? REPORT_FORMATS.filter((formatOption) => CRITICAL_REPORT_PROFILES[report.critical_profile_key!]?.fileFormats.includes(formatOption.id))
+        : REPORT_FORMATS;
 
     useEffect(() => {
         if (report) {
+            const profileFormats = report.critical_profile_key
+                ? CRITICAL_REPORT_PROFILES[report.critical_profile_key]?.fileFormats || []
+                : [];
+            const storedFormats = report.file_formats || [];
+            const storedAllowedFormats = profileFormats.length > 0
+                ? storedFormats.filter((formatId) => profileFormats.includes(formatId))
+                : storedFormats;
             setScheduleName(report.name || "");
             setFrequency(report.frequency || "weekly");
             setWeekday(report.schedule_days?.[0] || "1");
             setMonthDay(report.schedule_month_day?.toString() || "1");
             setScheduleTime(report.schedule_time?.slice(0, 5) || "08:00");
             setRecipients(report.recipients || "");
-            setSelectedFormats(report.file_formats || ["excel"]);
+            setSelectedFormats(storedAllowedFormats.length > 0 ? storedAllowedFormats : profileFormats.length > 0 ? profileFormats : ["excel"]);
         }
     }, [report]);
 
@@ -85,7 +96,11 @@ export function EditScheduledReportDialog({
             toast.error("Agrega al menos un correo destino");
             return;
         }
-        if (selectedFormats.length === 0) {
+        const allowedSelectedFormats = report.critical_profile_key
+            ? selectedFormats.filter((formatId) => CRITICAL_REPORT_PROFILES[report.critical_profile_key!]?.fileFormats.includes(formatId))
+            : selectedFormats;
+
+        if (allowedSelectedFormats.length === 0) {
             toast.error("Selecciona al menos un formato");
             return;
         }
@@ -98,7 +113,7 @@ export function EditScheduledReportDialog({
             schedule_month_day: frequency === "monthly" ? dayNumber : null,
             schedule_time: scheduleTime,
             recipients: cleanRecipients,
-            file_formats: selectedFormats,
+            file_formats: allowedSelectedFormats,
         });
         
         setIsSaving(false);
@@ -168,7 +183,7 @@ export function EditScheduledReportDialog({
                         <div className="space-y-2">
                             <Label>Formatos</Label>
                             <div className="flex flex-wrap gap-3 rounded-lg border p-3">
-                                {REPORT_FORMATS.map((formatOption) => (
+                                {availableFormats.map((formatOption) => (
                                     <label key={formatOption.id} className="flex items-center gap-2 text-sm">
                                         <Checkbox
                                             checked={selectedFormats.includes(formatOption.id)}

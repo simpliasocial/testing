@@ -1,6 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+    AI_REPORT_PROFILES,
+    createAiReportOpenAiResponse,
+    isOpenAiReportFailed,
+    isOpenAiReportPending,
+    openAiReportErrorMessage,
+    openAiReportStatus,
+    renderAiReportFileFromOpenAiResponse,
+    retrieveOpenAiReportResponse,
+} from "../_shared/ai-reporting.ts";
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -44,14 +54,14 @@ const CRITICAL_PROFILES: Record<string, { label: string; tabIds: string[]; forma
         formats: ["excel", "csv"],
     },
     team_performance: {
-        label: "Reporte de Rendimiento del Equipo",
+        label: "Reporte rendimiento equipo",
         tabIds: ["operational", "performance", "followup", "funnel"],
-        formats: ["pdf", "excel"],
+        formats: ["pdf"],
     },
     marketing_quality: {
-        label: "Reporte de Marketing y Calidad de Leads",
+        label: "Reporte calidad leads",
         tabIds: ["trends", "funnel", "scoring", "overview"],
-        formats: ["excel"],
+        formats: ["excel", "csv"],
     },
 };
 
@@ -346,6 +356,27 @@ const fetchCommercialAuditEvents = async (supabase: any, range: { sinceIso: stri
     }
 
     return data || [];
+};
+
+const fetchDashboardSettings = async (supabase: any) => {
+    try {
+        const { data, error } = await supabase
+            .schema("cw")
+            .from("dashboard_tag_settings")
+            .select("settings")
+            .eq("account_id", 0)
+            .maybeSingle();
+
+        if (error) throw error;
+        return asObject(data?.settings);
+    } catch {
+        const { data } = await supabase
+            .from("dashboard_tag_settings")
+            .select("settings")
+            .eq("account_id", 0)
+            .maybeSingle();
+        return asObject(data?.settings);
+    }
 };
 
 const resolvedAttrs = (row: any) => ({
@@ -1398,17 +1429,187 @@ const sendEmail = async (params: {
     return body;
 };
 
+const parseRecipients = (value: unknown) => cleanText(value)
+    .split(/[;,\n]/)
+    .map((email) => email.trim())
+    .filter(Boolean);
+
+const normalizeAiJobs = (metadata: Record<string, unknown>) =>
+    Array.isArray(metadata.ai_jobs)
+        ? metadata.ai_jobs.map((job) => {
+            const record = asObject(job);
+            return {
+                format: cleanText(record.format) as ReportFormat,
+                responseId: cleanText(record.responseId),
+                status: cleanText(record.status) || "queued",
+            };
+        }).filter((job) => job.format && job.responseId)
+        : [];
+
+const finalizeAiScheduledRun = async (
+    supabase: any,
+    run: any,
+    env: { resendKey: string; fromEmail: string },
+) => {
+    const metadata = asObject(run.metadata);
+    const jobs = normalizeAiJobs(metadata);
+    const profileKey = cleanText(run.critical_profile_key) as keyof typeof AI_REPORT_PROFILES;
+    const range = asObject(metadata.range);
+    const rangeLabel = cleanText(range.label || metadata.rangeLabel);
+    const rangeForFetch = {
+        sinceIso: cleanText(range.sinceIso),
+        untilIso: cleanText(range.untilIso),
+    };
+    const reportForFetch = { filters: asObject(metadata.filters) };
+    const recipients = parseRecipients(run.recipients);
+    const reportName = cleanText(metadata.report_name) || AI_REPORT_PROFILES[profileKey]?.label || "Reporte IA";
+
+    if (!AI_REPORT_PROFILES[profileKey]) throw new Error("Perfil IA no soportado en reporte programado.");
+    if (jobs.length === 0) throw new Error("No hay trabajos IA pendientes para este reporte programado.");
+    if (!rangeLabel) throw new Error("No hay periodo guardado para este reporte programado.");
+    if (!rangeForFetch.sinceIso || !rangeForFetch.untilIso) throw new Error("No hay rango de datos guardado para este reporte programado.");
+    if (recipients.length === 0) throw new Error("El reporte no tiene destinatarios configurados.");
+
+    const nextJobs: Array<{ format: ReportFormat; responseId: string; status: string }> = [];
+    const attachments: Array<{ filename: string; content: string }> = [];
+    let hasPending = false;
+    let rows: any[] | null = null;
+    let auditEvents: any[] | null = null;
+
+    for (const job of jobs) {
+        const responseBody = await retrieveOpenAiReportResponse({
+            apiKey: Deno.env.get("OPENAI_API_KEY") || "",
+            responseId: job.responseId,
+        });
+        const status = openAiReportStatus(responseBody) || job.status;
+        nextJobs.push({ ...job, status });
+
+        if (isOpenAiReportPending(responseBody)) {
+            hasPending = true;
+            continue;
+        }
+        if (isOpenAiReportFailed(responseBody)) {
+            throw new Error(openAiReportErrorMessage(responseBody) || `OpenAI terminó con estado ${status}.`);
+        }
+
+        if (!rows || !auditEvents) {
+            [rows, auditEvents] = await Promise.all([
+                fetchConversationRows(supabase, reportForFetch, rangeForFetch),
+                fetchCommercialAuditEvents(supabase, rangeForFetch),
+            ]);
+        }
+
+        const file = renderAiReportFileFromOpenAiResponse({
+            responseBody,
+            profileKey,
+            format: job.format,
+            rangeLabel,
+            rows,
+            auditEvents,
+            companyContext: cleanText(metadata.company_context),
+            filters: asObject(metadata.filters),
+        });
+        attachments.push({ filename: file.filename, content: file.contentBase64 });
+    }
+
+    if (hasPending) {
+        await supabase
+            .schema("cw")
+            .from("automated_report_runs")
+            .update({
+                metadata: { ...metadata, ai_jobs: nextJobs, last_checked_at: new Date().toISOString() },
+            })
+            .eq("id", run.id);
+        return { id: run.automated_report_id, run_id: run.id, status: "running" };
+    }
+
+    const response = await sendEmail({
+        apiKey: env.resendKey,
+        from: env.fromEmail,
+        to: recipients,
+        subject: `${reportName} - ${rangeLabel}`,
+        html: `<p>Adjuntamos el reporte IA <strong>${reportName}</strong> para el periodo <strong>${rangeLabel}</strong>.</p><p>El análisis fue generado con el contexto empresarial configurado y la plantilla del perfil.</p>`,
+        attachments,
+    });
+
+    await supabase
+        .schema("cw")
+        .from("automated_report_runs")
+        .update({
+            status: "success",
+            finished_at: new Date().toISOString(),
+            metadata: { ...metadata, ai_jobs: nextJobs, resend: response, finished_ai_report: true },
+        })
+        .eq("id", run.id);
+
+    if (run.automated_report_id) {
+        await supabase
+            .schema("cw")
+            .from("automated_reports")
+            .update({
+                last_status: "success",
+                last_error: null,
+                updated_at: new Date().toISOString(),
+            })
+            .eq("id", run.automated_report_id);
+    }
+
+    return { id: run.automated_report_id, run_id: run.id, status: "success" };
+};
+
+const processPendingAiRuns = async (
+    supabase: any,
+    env: { resendKey: string; fromEmail: string },
+) => {
+    const { data } = await supabase
+        .schema("cw")
+        .from("automated_report_runs")
+        .select("*")
+        .eq("status", "running")
+        .eq("report_scope", "critical_profile")
+        .limit(10);
+
+    const runs = (data || []).filter((run: any) => normalizeAiJobs(asObject(run.metadata)).length > 0);
+    const results = [];
+    for (const run of runs) {
+        try {
+            results.push(await finalizeAiScheduledRun(supabase, run, env));
+        } catch (error) {
+            const message = errorMessage(error);
+            await supabase
+                .schema("cw")
+                .from("automated_report_runs")
+                .update({ status: "error", finished_at: new Date().toISOString(), error_message: message })
+                .eq("id", run.id);
+            if (run.automated_report_id) {
+                await supabase
+                    .schema("cw")
+                    .from("automated_reports")
+                    .update({ last_status: "error", last_error: message, updated_at: new Date().toISOString() })
+                    .eq("id", run.automated_report_id);
+            }
+            results.push({ id: run.automated_report_id, run_id: run.id, status: "error", error: message });
+        }
+    }
+    return results;
+};
+
 const processReport = async (supabase: any, report: any, env: { resendKey: string; fromEmail: string }, now: Date, force = false) => {
     if (!force && !isScheduleDue(report, now)) return { id: report.id, status: "skipped" };
 
     const range = closedPeriodRange(report.frequency, now);
     let runId: string | null = null;
-    const recipients = cleanText(report.recipients)
-        .split(/[;,\n]/)
-        .map((email) => email.trim())
-        .filter(Boolean);
+    const recipients = parseRecipients(report.recipients);
 
-    const formats = Array.isArray(report.file_formats) && report.file_formats.length > 0 ? report.file_formats : ["excel"];
+    const profile = report.critical_profile_key
+        ? AI_REPORT_PROFILES[report.critical_profile_key as keyof typeof AI_REPORT_PROFILES]
+        : null;
+    const requestedFormats: ReportFormat[] = Array.isArray(report.file_formats) && report.file_formats.length > 0
+        ? report.file_formats
+        : profile?.formats || ["excel"];
+    const formats: ReportFormat[] = profile
+        ? requestedFormats.filter((format) => profile.formats.includes(format))
+        : requestedFormats;
 
     try {
         const { data: run, error: runError } = await supabase
@@ -1423,7 +1624,7 @@ const processReport = async (supabase: any, report: any, env: { resendKey: strin
                 tab_ids: report.tab_ids || [],
                 critical_profile_key: report.critical_profile_key || null,
                 scheduled_for: now.toISOString(),
-                metadata: { range },
+                metadata: { range, filters: report.filters || {} },
             })
             .select("id")
             .single();
@@ -1432,9 +1633,75 @@ const processReport = async (supabase: any, report: any, env: { resendKey: strin
         runId = run?.id || null;
 
         if (recipients.length === 0) throw new Error("El reporte no tiene destinatarios configurados.");
+        if (formats.length === 0) throw new Error("El reporte no tiene formatos permitidos configurados.");
 
         const rows = await fetchConversationRows(supabase, report, range);
         const auditEvents = await fetchCommercialAuditEvents(supabase, range);
+        const dashboardSettings = await fetchDashboardSettings(supabase);
+        const isAiCriticalProfile = report.report_scope === "critical_profile"
+            && report.critical_profile_key
+            && AI_REPORT_PROFILES[report.critical_profile_key as keyof typeof AI_REPORT_PROFILES];
+        if (isAiCriticalProfile) {
+            const narrativeFormat = formats.includes("pdf") ? "pdf" : "excel";
+            const responseBody = await createAiReportOpenAiResponse({
+                profileKey: report.critical_profile_key,
+                format: narrativeFormat,
+                rows,
+                auditEvents,
+                rangeLabel: range.label,
+                companyContext: cleanText(dashboardSettings.companyContext),
+                filters: report.filters || {},
+                openAiApiKey: Deno.env.get("OPENAI_API_KEY") || "",
+                background: true,
+            });
+            const responseId = cleanText(responseBody.id);
+            if (!responseId) throw new Error("OpenAI no devolvió ID para el reporte automático IA.");
+            const aiJobs = formats.map((format) => ({
+                format,
+                responseId,
+                status: openAiReportStatus(responseBody) || "queued",
+            }));
+
+            const aiMetadata = {
+                range,
+                ai_report: true,
+                report_name: report.name,
+                filters: report.filters || {},
+                company_context: cleanText(dashboardSettings.companyContext),
+                conversations: rows.length,
+                commercial_audit_events: auditEvents.length,
+                ai_jobs: aiJobs,
+                started_ai_report_at: new Date().toISOString(),
+            };
+
+            await supabase
+                .schema("cw")
+                .from("automated_report_runs")
+                .update({ metadata: aiMetadata })
+                .eq("id", runId);
+
+            await supabase
+                .schema("cw")
+                .from("automated_reports")
+                .update({
+                    last_run_at: new Date().toISOString(),
+                    last_status: "running",
+                    last_error: null,
+                    updated_at: new Date().toISOString(),
+                })
+                .eq("id", report.id);
+
+            return await finalizeAiScheduledRun(supabase, {
+                id: runId,
+                automated_report_id: report.id,
+                recipients: recipients.join(", "),
+                file_formats: formats,
+                report_scope: report.report_scope,
+                critical_profile_key: report.critical_profile_key,
+                metadata: aiMetadata,
+            }, env);
+        }
+
         const attachments = buildAttachments(report, rows, range.label, auditEvents);
         const subject = `${report.name} - ${range.label}`;
         const response = await sendEmail({
@@ -1452,7 +1719,7 @@ const processReport = async (supabase: any, report: any, env: { resendKey: strin
             .update({
                 status: "success",
                 finished_at: new Date().toISOString(),
-                metadata: { range, resend: response, conversations: rows.length, commercial_audit_events: auditEvents.length },
+                metadata: { range, resend: response, conversations: rows.length, commercial_audit_events: auditEvents.length, ai_report: Boolean(isAiCriticalProfile) },
             })
             .eq("id", runId);
 
@@ -1515,7 +1782,7 @@ serve(async (req) => {
         if (error) throw error;
 
         const now = new Date();
-        const results = [];
+        const results = await processPendingAiRuns(supabase, { resendKey, fromEmail });
         for (const report of reports || []) {
             results.push(await processReport(supabase, report, { resendKey, fromEmail }, now, force));
         }

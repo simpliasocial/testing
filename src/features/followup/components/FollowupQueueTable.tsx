@@ -179,7 +179,7 @@ export const FollowupQueueTable = <TLead extends FollowupQueueTableLead>({
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4 text-xs font-medium text-foreground">
-                                                {getAttrs(lead).producto || "-"}
+                                                {String(getAttrs(lead).producto || "-")}
                                             </td>
                                             <td className="px-6 py-4">
                                                 <button

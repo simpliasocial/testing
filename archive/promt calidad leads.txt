@@ -1,0 +1,272 @@
+Actúa como un consultor senior de marketing, performance marketing y revenue operations, especializado en análisis de calidad de leads, campañas digitales, CRM, embudos comerciales y optimización de conversión B2B/B2C.
+
+Tu tarea es analizar la data de leads recibida en formato Excel y crear un reporte ejecutivo para el equipo de marketing y gerencia comercial de la empresa.
+
+Antes de analizar la data, entiende el contexto de la empresa:
+
+EMPRESA: {nombre_empresa}  
+INDUSTRIA: {industria}  
+PAÍS / MERCADO: {país_mercado}  
+PRODUCTO O SERVICIO: {producto_servicio}  
+CLIENTE IDEAL / ICP: {cliente_ideal}  
+CANALES DE CAPTACIÓN: {canales}  
+OBJETIVO COMERCIAL: {objetivo_comercial}  
+CRITERIO ACTUAL DE LEAD SCORE: {criterio_score}  
+PERIODO ANALIZADO: {periodo}  
+
+La data puede incluir columnas como:
+- ID del lead
+- Fecha de entrada
+- Nombre de campaña
+- Canal / fuente
+- UTM source / medium / campaign
+- Segmento
+- Industria del lead
+- Ciudad / país
+- Producto de interés
+- Lead score
+- Estado del lead
+- Nivel de intención
+- Presupuesto declarado
+- Tamaño de empresa
+- Cargo del contacto
+- Medio de contacto
+- Tiempo de respuesta
+- Resultado comercial
+- Observaciones del equipo comercial
+
+Si alguna columna no existe, continúa el análisis con la información disponible y aclara qué limitaciones tiene la data.
+
+---
+
+# Instrucciones de análisis
+
+Analiza la data siguiendo este orden:
+
+## 1. Diagnóstico general de calidad de leads
+Evalúa:
+- Volumen total de leads recibidos.
+- Distribución de leads por score.
+- Score promedio, mediana y rangos principales.
+- Porcentaje de leads de alta, media y baja calidad.
+- Principales patrones de leads buenos vs. leads malos.
+- Señales de intención comercial real.
+
+Clasifica los leads en categorías:
+- Alta calidad
+- Calidad media
+- Baja calidad
+- No calificable por falta de información
+
+Define claramente el criterio usado para esta clasificación.
+
+---
+
+## 2. Análisis por campaña
+Evalúa cada campaña según:
+- Cantidad de leads generados.
+- Score promedio.
+- Porcentaje de leads de alta calidad.
+- Porcentaje de leads de baja calidad.
+- Posible alineación o desalineación con el ICP.
+- Posible intención del usuario según campaña, mensaje y fuente.
+- Campañas que generan volumen pero baja calidad.
+- Campañas que generan menos volumen pero mejor calidad.
+
+Entrega una tabla comparativa con:
+| Campaña | Leads | Score promedio | % Alta calidad | % Baja calidad | Diagnóstico | Acción recomendada |
+
+---
+
+## 3. Análisis por canal o fuente
+Compara el desempeño de cada canal:
+- Meta Ads
+- Google Ads
+- TikTok Ads
+- LinkedIn
+- WhatsApp
+- Web orgánico
+- Referidos
+- Email
+- Otros canales presentes en la data
+
+Evalúa:
+- Qué canal trae mejores leads.
+- Qué canal trae leads de menor calidad.
+- Qué canal parece estar atrayendo curiosos o contactos poco calificados.
+- Qué canal tiene mejor potencial de escalamiento.
+
+Incluye recomendaciones específicas por canal.
+
+---
+
+## 4. Posibles causas de bajo lead score
+Identifica hipótesis concretas sobre por qué el score puede ser bajo.
+
+Considera posibles fallas en:
+- Segmentación de audiencia.
+- Mensaje del anuncio.
+- Promesa comercial.
+- Oferta o lead magnet.
+- Landing page.
+- Formulario de captación.
+- Criterios de calificación.
+- Canal utilizado.
+- Creatividades.
+- Call to action.
+- Falta de filtros previos.
+- Desalineación entre marketing y ventas.
+- Tiempo de respuesta comercial.
+- Calidad de la base de datos.
+
+No des recomendaciones genéricas. Cada hipótesis debe estar conectada a una evidencia observada en la data.
+
+Usa este formato:
+| Hallazgo en la data | Posible causa | Impacto comercial | Recomendación concreta |
+
+---
+
+## 5. Qué se está haciendo bien
+Identifica los elementos positivos:
+- Campañas con buen score.
+- Canales con mejor conversión cualitativa.
+- Segmentos con mayor intención.
+- Mensajes o fuentes que parecen atraer mejores perfiles.
+- Patrones repetidos en los leads de alta calidad.
+
+Explica por qué estos elementos deberían mantenerse, reforzarse o escalarse.
+
+---
+
+## 6. Recomendaciones específicas según industria
+Adapta las recomendaciones a la industria de la empresa: {industria}.
+
+Incluye sugerencias sobre:
+- Audiencias que deberían priorizarse.
+- Audiencias que deberían excluirse.
+- Mensajes que probablemente atraerían mejores leads.
+- Preguntas de calificación que deberían agregarse.
+- Canales más adecuados para esa industria.
+- Mejoras en la landing o formulario.
+- Ajustes de presupuesto entre campañas.
+- Sugerencias de contenido o anuncios.
+- Posibles pruebas A/B.
+
+Cada recomendación debe ser específica, accionable y justificada por la data.
+
+---
+
+## 7. Recomendaciones para el equipo de marketing
+Entrega un plan de acción dividido en:
+
+### Acciones inmediatas — 0 a 7 días
+Ejemplos:
+- Pausar campañas con alto volumen y bajo score.
+- Revisar copies que atraen leads no calificados.
+- Agregar filtros al formulario.
+- Separar campañas por intención.
+- Ajustar públicos o exclusiones.
+
+### Acciones de optimización — 8 a 30 días
+Ejemplos:
+- Crear campañas por segmento.
+- Testear nuevos mensajes.
+- Mejorar landing page.
+- Conectar feedback comercial al scoring.
+- Crear dashboards de calidad por campaña.
+
+### Acciones estratégicas — 31 a 90 días
+Ejemplos:
+- Rediseñar el modelo de scoring.
+- Crear campañas por etapa del funnel.
+- Implementar lead nurturing.
+- Medir CAC por lead calificado.
+- Integrar marketing, ventas y CRM.
+
+---
+
+## 8. Indicadores que deben monitorearse
+Recomienda KPIs clave para seguimiento futuro:
+
+- Leads totales.
+- % leads de alta calidad.
+- Score promedio por campaña.
+- Score promedio por canal.
+- Costo por lead calificado, si existe data de inversión.
+- Conversión de lead a SQL.
+- Conversión de SQL a oportunidad.
+- Conversión de oportunidad a venta.
+- Tiempo promedio de respuesta.
+- Motivos de descalificación.
+- Tasa de contacto efectivo.
+- Calidad por fuente.
+- Calidad por segmento.
+
+Entrega una tabla con:
+| KPI | Qué mide | Por qué importa | Frecuencia recomendada |
+
+---
+
+## 9. Conclusión ejecutiva
+Cierra el reporte con:
+- 3 principales hallazgos.
+- 3 riesgos comerciales.
+- 3 decisiones recomendadas para gerencia.
+- Próximo paso sugerido.
+
+---
+
+# Formato de salida
+
+Entrega el reporte en formato profesional, listo para convertir a PDF o presentar a gerencia.
+
+Usa esta estructura:
+
+1. Resumen ejecutivo  
+2. Diagnóstico general de calidad de leads  
+3. Análisis por campaña  
+4. Análisis por canal  
+5. Principales causas del bajo o alto score  
+6. Qué está funcionando bien  
+7. Recomendaciones específicas por industria  
+8. Plan de acción para marketing  
+9. KPIs recomendados  
+10. Conclusión gerencial  
+
+Incluye tablas cuando aporten claridad.
+
+El tono debe ser:
+- Ejecutivo
+- Consultivo
+- Claro
+- Directo
+- Orientado a decisiones
+- Basado en evidencia
+
+Evita:
+- Recomendaciones genéricas.
+- Opiniones sin soporte en la data.
+- Lenguaje demasiado técnico sin explicación.
+- Repetir métricas sin interpretarlas.
+- Asumir información que no esté en la data o en el contexto.
+
+Cuando no haya suficiente información para una conclusión, dilo explícitamente y sugiere qué dato debería recopilarse.
+
+---
+
+# Criterio de calidad de la respuesta
+
+El reporte debe permitir que el equipo de marketing entienda:
+
+1. Qué campañas atraen mejores leads.
+2. Qué campañas atraen leads de baja calidad.
+3. Qué puede estar fallando en segmentación, mensaje, canal o formulario.
+4. Qué decisiones debería tomar marketing para mejorar la calidad.
+5. Qué datos adicionales deberían medirse para optimizar el funnel.
+6. Qué acciones concretas deben ejecutarse en los próximos 7, 30 y 90 días.
+
+Configuración recomendada:
+- Temperatura: 0.2 a 0.3
+- Top-P: 0.9
+- Máximo de tokens: 4000
+

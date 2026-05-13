@@ -2,25 +2,23 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { LeadImportWizard } from "@/features/import";
 import { useReportingState } from "../hooks/useReportingState";
+import { CompanyContextPanel } from "./CompanyContextPanel";
 import { CriticalReportProfiles } from "./CriticalReportProfiles";
 import { ScheduledReportsTable } from "./ScheduledReportsTable";
 import { EditScheduledReportDialog } from "./EditScheduledReportDialog";
-import { EditProfileDialog } from "./EditProfileDialog";
-import { type CriticalProfileKey, type ScheduledReport } from "../domain/reportCatalog";
+import { type ScheduledReport } from "../domain/reportCatalog";
 
 const ReportingLayer = () => {
     const {
         reports,
         isLoading,
         fetchReports,
-        saveProfileConfig,
         toggleScheduledStatus,
         deleteScheduledReport,
         updateScheduledReport,
         refetch,
     } = useReportingState();
 
-    const [editingProfileKey, setEditingProfileKey] = useState<CriticalProfileKey | null>(null);
     const [editingReport, setEditingReport] = useState<ScheduledReport | null>(null);
 
     if (isLoading) {
@@ -35,8 +33,9 @@ const ReportingLayer = () => {
         <div className="space-y-8">
             <LeadImportWizard onImported={refetch} />
 
+            <CompanyContextPanel />
+
             <CriticalReportProfiles
-                onEditProfile={setEditingProfileKey}
                 onScheduled={fetchReports}
             />
 
@@ -53,11 +52,6 @@ const ReportingLayer = () => {
                 onSave={updateScheduledReport}
             />
 
-            <EditProfileDialog
-                profileKey={editingProfileKey}
-                onClose={() => setEditingProfileKey(null)}
-                onSave={saveProfileConfig}
-            />
         </div>
     );
 };

@@ -68,6 +68,13 @@ const DashboardLayout = () => {
         }
     }, [globalFilters.startDate, setGlobalFilters]);
 
+    useEffect(() => {
+        const visibleTabs = getVisibleTabs(role);
+        if (role && !visibleTabs.includes(activeTab)) {
+            setActiveTab(getDefaultTab(role));
+        }
+    }, [activeTab, role]);
+
     const handleDateRangeChange = (range: DateRange | undefined) => {
         setGlobalFilters(prev => ({ ...prev, startDate: range?.from, endDate: range?.to }));
     };
@@ -160,7 +167,12 @@ const DashboardLayout = () => {
             </header>
 
             <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                <Tabs defaultValue="overview" value={activeTab} onValueChange={setActiveTab} className="space-y-8">
+                <Tabs
+                    defaultValue="overview"
+                    value={activeTab}
+                    onValueChange={(value) => setActiveTab(value as TabId)}
+                    className="space-y-8"
+                >
                     <div className="overflow-x-auto pb-2 -mx-1 px-1">
                         <TabsList className="inline-flex h-auto p-1 bg-background border shadow-sm rounded-xl overflow-x-auto whitespace-nowrap">
                             {[

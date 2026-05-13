@@ -51,6 +51,7 @@ export interface CriticalReportProfileDefinition {
     tabIds: ReportTabId[];
     fileFormats: ReportFileFormat[];
     formatLabel: string;
+    promptFileName: string;
     isActive: boolean;
 }
 
@@ -85,38 +86,42 @@ export const REPORT_FORMATS: Array<{ id: ReportFileFormat; label: string; extens
 export const CRITICAL_REPORT_PROFILES: Record<CriticalProfileKey, CriticalReportProfileDefinition> = {
     management: {
         key: "management",
-        label: "Reporte Gerencial",
+        label: "Reporte Gerencial PDF",
         description: "Vista ejecutiva para gerencia con KPIs, embudo y tendencia comercial.",
         tabIds: ["overview", "funnel", "performance", "trends"],
         fileFormats: ["pdf"],
         formatLabel: "PDF",
+        promptFileName: "archive/promt gerencial.txt",
         isActive: true,
     },
     daily_operations: {
         key: "daily_operations",
-        label: "Reporte de Operación Diaria Comercial",
+        label: "Reporte operación comercial",
         description: "Control diario de equipos, seguimiento, calidad y conversaciones.",
         tabIds: ["operational", "followup", "scoring", "chats"],
         fileFormats: ["excel", "csv"],
-        formatLabel: "Excel / CSV",
+        formatLabel: "Excel + CSV",
+        promptFileName: "archive/promt operacion comercial.txt",
         isActive: true,
     },
     team_performance: {
         key: "team_performance",
-        label: "Reporte de Rendimiento del Equipo",
+        label: "Reporte rendimiento equipo",
         description: "Rendimiento humano conectado con operación, seguimiento y embudo.",
         tabIds: ["operational", "performance", "followup", "funnel"],
-        fileFormats: ["pdf", "excel"],
-        formatLabel: "PDF + Excel",
+        fileFormats: ["pdf"],
+        formatLabel: "PDF",
+        promptFileName: "archive/promt rendimiento Equipo.txt",
         isActive: true,
     },
     marketing_quality: {
         key: "marketing_quality",
-        label: "Reporte de Marketing y Calidad de Leads",
+        label: "Reporte calidad leads",
         description: "Calidad de leads, tendencias, puntajes y estrategia por origen.",
         tabIds: ["trends", "funnel", "scoring", "overview"],
-        fileFormats: ["excel"],
-        formatLabel: "Excel",
+        fileFormats: ["excel", "csv"],
+        formatLabel: "Excel + CSV",
+        promptFileName: "archive/promt calidad leads.txt",
         isActive: true,
     },
 };
@@ -211,9 +216,9 @@ export const resolveCriticalProfile = (
 
     return {
         ...base,
-        tabIds: override?.tabIds?.length ? override.tabIds : base.tabIds,
-        fileFormats: override?.fileFormats?.length ? override.fileFormats : base.fileFormats,
-        isActive: typeof override?.isActive === "boolean" ? override.isActive : base.isActive,
+        tabIds: base.tabIds,
+        fileFormats: base.fileFormats,
+        isActive: base.isActive,
     };
 };
 
