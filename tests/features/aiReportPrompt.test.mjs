@@ -6,6 +6,7 @@ const jiti = createJiti(import.meta.url);
 const {
     AI_REPORT_PROFILES,
     composeAiReportPrompt,
+    isOpenAiReportFailed,
     openAiReportErrorMessage,
     renderAiReportFileFromOpenAiResponse,
     resolveOpenAiReportModel,
@@ -105,9 +106,11 @@ test("AI model resolver supports cheap default and scoped overrides", () => {
 });
 
 test("AI errors with nested objects produce readable messages", () => {
+    assert.equal(isOpenAiReportFailed({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }), false);
+    assert.equal(isOpenAiReportFailed({ status: "incomplete", incomplete_details: { reason: "content_filter" } }), true);
     assert.equal(
         openAiReportErrorMessage({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }),
-        "OpenAI cortó la respuesta por límite de salida; el reporte se reducirá o se debe reintentar con menor rango.",
+        "La lectura narrativa llegó al límite de salida, pero el archivo se construirá completo con la data disponible.",
     );
     const message = openAiReportErrorMessage({ error: { code: "invalid_model", message: "Modelo no disponible" } });
     assert.equal(message, "Modelo no disponible");
@@ -228,6 +231,10 @@ test("AI renderers create branded PDF and deterministic Excel/CSV sheets", () =>
     assert.match(filtersXml, /width="96"/);
     assert.match(filtersXml, /s="2"/);
     assert.match(stylesXml, /wrapText="1"/);
+    assert.match(stylesXml, /<b\/><color rgb="FF000000"/);
+    assert.doesNotMatch(stylesXml, /patternType="solid"/);
+    assert.doesNotMatch(stylesXml, /applyFill="1"/);
+    assert.doesNotMatch(stylesXml, /FF173B8F/);
     assert.match(summaryXml, /<autoFilter/);
 
     const csv = renderAiReportFileFromOpenAiResponse({

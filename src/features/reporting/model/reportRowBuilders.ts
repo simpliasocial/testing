@@ -198,7 +198,7 @@ export const buildSummaryRows = (
         { Campo: "Total encontrado", Valor: conversations.length },
         { Campo: "Datos incluidos", Valor: "Resumen ejecutivo, KPIs, análisis por dimensión, cambios relevantes cuando existan y detalle de leads." },
         { Campo: "Lectura recomendada", Valor: getTabInterpretation(tabId) },
-        { Campo: "Nota de uso", Valor: "Excel y CSV contienen el detalle completo; PDF prioriza lectura ejecutiva y puede recortar tablas largas." },
+        { Campo: "Nota de uso", Valor: "Excel, CSV y PDF se generan con las secciones de la pestaña y organizan el detalle para lectura y revisión." },
     ];
 };
 
@@ -426,9 +426,7 @@ export const buildTabReportSections = (
     const isSingleTab = input.tabIds.length === 1;
     const auditEvents = input.commercialAuditEvents || [];
     const auditRows = buildCommercialAuditRows(filteredConversations, auditEvents, input.tagSettings);
-    const detailRows = tabId === "scoring"
-        ? buildScoringRows(filteredConversations, inboxMap, input.tagSettings)
-        : buildConversationRows(tabId, filteredConversations, inboxMap, input.tagSettings);
+    const detailRows = buildConversationRows(tabId, filteredConversations, inboxMap, input.tagSettings);
 
     const sections: ReportSection[] = [
         {

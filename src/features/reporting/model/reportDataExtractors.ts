@@ -136,8 +136,16 @@ export const getConversationSummary = (conversations: ResolvedConversation[], ta
 
 export const getFieldsForTab = (tabId: ReportTabId, tagSettings: TagConfig) => {
     const custom = tagSettings.reportColumnFields?.[tabId];
-    return custom && custom.length > 0 ? custom : DEFAULT_REPORT_COLUMN_FIELDS[tabId];
+    return Array.from(new Set([...(DEFAULT_REPORT_COLUMN_FIELDS[tabId] || []), ...(custom || [])]));
 };
+
+const normalizeReportFieldKey = (value: unknown) =>
+    String(value ?? "")
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_");
 
 export const getSelectedInboxSummary = (input: DashboardReportInput) => {
     const selectedIds = input.globalFilters.selectedInboxes || [];
@@ -186,40 +194,61 @@ export const getFieldValue = (
     const inbox = conversation.inbox_id ? inboxMap.get(Number(conversation.inbox_id)) : undefined;
     const canal = getLeadChannelName(conversation, inbox as ReportInbox);
     const displayField = formatFieldLabel(field);
+    const fieldKey = normalizeReportFieldKey(field);
+    const displayFieldKey = normalizeReportFieldKey(displayField);
 
-    if (displayField === "Enlace de conversación") {
+    if (fieldKey === "enlace_de_conversacion" || displayFieldKey === "enlace_de_conversacion") {
         return getChatwootUrl(conversation.id) || "Importado";
     }
 
-    switch (field) {
-        case "ID": return conversation.id;
-        case "Nombre": return getLeadName(conversation);
-        case "Telefono": return getLeadPhone(conversation, canal);
-        case "Canal": return canal;
-        case "Estados":
-        case "Etiquetas": return formatBusinessList(conversation.resolvedLabels?.length ? conversation.resolvedLabels : conversation.labels || []);
-        case "Etapa": return formatLeadStage(conversation.resolvedStage);
-        case "Estado": return formatConversationStatus(conversation.status);
-        case "Correo": return getLeadEmail(conversation);
-        case "Monto": return parseAmount(attrs.monto_operacion) || attrs.monto_operacion || "";
-        case "Fecha Monto": return attrs.fecha_monto_operacion || "";
-        case "Agencia": return attrs.agencia || "";
-        case "Check-in": return attrs.checkincat || attrs.check_in || "";
-        case "Check-out": return attrs.checkoutcat || attrs.check_out || "";
-        case "Campana": return attrs.campana || attrs.utm_campaign || attrs.origen || "";
-        case "Ciudad": return attrs.ciudad || attrs.city || "";
-        case "Responsable": return attrs.responsable || conversation.meta?.assignee?.name || "";
-        case "Nivel": return getScoreBucketLabel(conversation, tagSettings);
-        case "Puntaje":
-        case "Score": return getScoreValue(conversation, tagSettings);
-        case "Ultimo Mensaje": return getMessagePreview(conversation);
-        case "URL Red Social": return getLeadExternalUrl(conversation, canal);
-        case "Fecha Ingreso": return formatDateTime(conversation.created_at || conversation.timestamp);
-        case "Ultima Interaccion": return formatDateTime(conversation.timestamp || conversation.created_at);
-        case "ID Contacto": return conversation.meta?.sender?.id || "";
-        case "ID Inbox": return conversation.inbox_id || "";
-        case "ID Cuenta": return (conversation as ResolvedConversation & { account_id?: unknown }).account_id || "";
-        case "Origen Dato": return formatDataOrigin(conversation.source);
-        default: return attrs[field] ?? attrs[field.toLowerCase()] ?? "";
+    switch (fieldKey) {
+        case "id":
+        case "id_conversacion":
+        case "id_de_conversacion": return conversation.id;
+        case "nombre":
+        case "nombre_del_lead": return getLeadName(conversation);
+        case "telefono": return getLeadPhone(conversation, canal);
+        case "canal": return canal;
+        case "estados":
+        case "etiquetas": return formatBusinessList(conversation.resolvedLabels?.length ? conversation.resolvedLabels : conversation.labels || []);
+        case "etapa": return formatLeadStage(conversation.resolvedStage);
+        case "estado": return formatConversationStatus(conversation.status);
+        case "correo": return getLeadEmail(conversation);
+        case "monto":
+        case "monto_de_la_operacion": return parseAmount(attrs.monto_operacion) || attrs.monto_operacion || "";
+        case "fecha_monto":
+        case "fecha_monto_operacion":
+        case "fecha_en_que_se_registro_el_monto": return attrs.fecha_monto_operacion || "";
+        case "agencia": return attrs.agencia || "";
+        case "check_in": return attrs.checkincat || attrs.check_in || "";
+        case "check_out": return attrs.checkoutcat || attrs.check_out || "";
+        case "campana": return attrs.campana || attrs.utm_campaign || attrs.origen || "";
+        case "ciudad": return attrs.ciudad || attrs.city || "";
+        case "responsable": return attrs.responsable || conversation.meta?.assignee?.name || "";
+        case "agente_asignado": return conversation.meta?.assignee?.name || "";
+        case "nombre_completo": return attrs.nombre_completo || "";
+        case "edad": return attrs.edad || "";
+        case "fecha_de_visita":
+        case "fecha_visita": return attrs.fecha_visita || "";
+        case "hora_de_visita":
+        case "hora_visita": return attrs.hora_visita || "";
+        case "nivel": return getScoreBucketLabel(conversation, tagSettings);
+        case "puntaje":
+        case "score": return getScoreValue(conversation, tagSettings);
+        case "ultimo_mensaje": return getMessagePreview(conversation);
+        case "url_red_social":
+        case "url_comercial": return getLeadExternalUrl(conversation, canal);
+        case "fecha_ingreso":
+        case "fecha_de_ingreso": return formatDateTime(conversation.created_at || conversation.timestamp);
+        case "ultima_interaccion": return formatDateTime(conversation.timestamp || conversation.created_at);
+        case "id_contacto":
+        case "id_del_contacto": return conversation.meta?.sender?.id || "";
+        case "id_inbox":
+        case "id_de_bandeja": return conversation.inbox_id || "";
+        case "id_cuenta":
+        case "id_de_cuenta": return (conversation as ResolvedConversation & { account_id?: unknown }).account_id || "";
+        case "origen_dato":
+        case "origen_del_dato": return formatDataOrigin(conversation.source);
+        default: return attrs[field] ?? attrs[field.toLowerCase()] ?? attrs[fieldKey] ?? "";
     }
 };

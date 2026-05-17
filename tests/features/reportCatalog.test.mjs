@@ -21,7 +21,7 @@ const test = (name, fn) => {
 test("critical report catalog has requested names, formats and prompt files", () => {
     assert.deepEqual(CRITICAL_REPORT_PROFILES.management, {
         key: "management",
-        label: "Reporte Gerencial PDF",
+        label: "Reporte Gerencial",
         description: "Vista ejecutiva para gerencia con KPIs, embudo y tendencia comercial.",
         tabIds: ["overview", "funnel", "performance", "trends"],
         fileFormats: ["pdf"],

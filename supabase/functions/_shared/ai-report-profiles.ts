@@ -12,7 +12,7 @@ export type AiReportProfile = {
 export const AI_REPORT_PROFILES: Record<CriticalProfileKey, AiReportProfile> = {
     management: {
         key: "management",
-        label: "Reporte Gerencial PDF",
+        label: "Reporte Gerencial",
         tabIds: ["overview", "funnel", "performance", "trends"],
         formats: ["pdf"],
         promptFileName: "archive/promt gerencial.txt",

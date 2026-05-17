@@ -22,6 +22,7 @@ import {
     getScoreValue,
     getRangeLabel,
 } from "./reportDataExtractors";
+import { applyPlainHeaderStyle } from "@/infrastructure/report/excelSheetStyles";
 
 const formatExcelTimestamp = (value: unknown) => {
     const time = parseTimestampMs(value);
@@ -69,6 +70,7 @@ export const appendAoaSheet = (workbook: xlsx.WorkBook, rows: ReportAoa, sheetNa
     const worksheet = xlsx.utils.aoa_to_sheet(rows);
     if (worksheet["!ref"]) worksheet["!autofilter"] = { ref: worksheet["!ref"] };
     worksheet["!cols"] = (rows[0] || []).map(() => ({ wch: 22 }));
+    applyPlainHeaderStyle(worksheet);
     xlsx.utils.book_append_sheet(workbook, worksheet, safeSheetName(sheetName));
 };
 
@@ -76,6 +78,7 @@ export const appendJsonSheet = (workbook: xlsx.WorkBook, rows: Array<Record<stri
     const worksheet = xlsx.utils.json_to_sheet(rows);
     if (worksheet["!ref"]) worksheet["!autofilter"] = { ref: worksheet["!ref"] };
     worksheet["!cols"] = Object.keys(rows[0] || {}).map(() => ({ wch: 22 }));
+    applyPlainHeaderStyle(worksheet);
     xlsx.utils.book_append_sheet(workbook, worksheet, safeSheetName(sheetName));
 };
 

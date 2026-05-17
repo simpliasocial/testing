@@ -154,7 +154,7 @@ const DEFAULT_MODEL = "gpt-5.4-mini";
 const DEFAULT_REASONING_EFFORT = "low";
 const DEFAULT_OPENAI_TIMEOUT_MS = 140_000;
 const DEFAULT_OPENAI_START_TIMEOUT_MS = 45_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 3500;
+const DEFAULT_MAX_OUTPUT_TOKENS = 8000;
 const TIMEZONE = "America/Guayaquil";
 const PDF_WIDTH = 595;
 const PDF_HEIGHT = 842;
@@ -726,9 +726,15 @@ export const isOpenAiReportPending = (body: Record<string, unknown>) => {
     return status === "queued" || status === "in_progress";
 };
 
+export const isOpenAiReportTruncatedButUsable = (body: Record<string, unknown>) => {
+    const status = openAiReportStatus(body);
+    const incompleteReason = cleanText(asRecord(body.incomplete_details).reason);
+    return status === "incomplete" && incompleteReason === "max_output_tokens";
+};
+
 export const isOpenAiReportFailed = (body: Record<string, unknown>) => {
     const status = openAiReportStatus(body);
-    return status === "failed" || status === "cancelled" || status === "incomplete";
+    return status === "failed" || status === "cancelled" || (status === "incomplete" && !isOpenAiReportTruncatedButUsable(body));
 };
 
 const stringifyForMessage = (value: unknown) => {
@@ -745,7 +751,7 @@ export const openAiReportErrorMessage = (body: Record<string, unknown>) => {
     const incomplete = asRecord(body.incomplete_details);
     const incompleteReason = cleanText(incomplete.reason);
     if (incompleteReason === "max_output_tokens") {
-        return "OpenAI cortó la respuesta por límite de salida; el reporte se reducirá o se debe reintentar con menor rango.";
+        return "La lectura narrativa llegó al límite de salida, pero el archivo se construirá completo con la data disponible.";
     }
 
     const error = asRecord(body.error);
@@ -1681,11 +1687,11 @@ ${resolvedSheets.map((sheet) => `<Override PartName="/xl/worksheets/sheet${sheet
 
     const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="2"><font><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Aptos"/></font></fonts>
-<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF173B8F"/><bgColor indexed="64"/></patternFill></fill></fills>
+<fonts count="2"><font><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FF000000"/><sz val="11"/><name val="Aptos"/></font></fonts>
+<fills count="1"><fill><patternFill patternType="none"/></fill></fills>
 <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="1" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs>
+<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment wrapText="1" vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs>
 </styleSheet>`;
 
     return zipStore([

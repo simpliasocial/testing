@@ -7,6 +7,7 @@ import { config } from "@/config";
 import { toast } from "sonner";
 import { getAttrs, getLeadChannelName, getLeadExternalUrl } from "@/lib/leadDisplay";
 import { formatBusinessList, formatFieldLabel } from "@/lib/displayCopy";
+import { applyPlainHeaderStyle } from "@/infrastructure/report/excelSheetStyles";
 
 type ExportCell = string | number | boolean;
 type ExportRow = Record<string, ExportCell>;
@@ -86,6 +87,7 @@ export function ExportToExcel() {
             });
 
             const worksheet = xlsx.utils.json_to_sheet(dataToExport);
+            applyPlainHeaderStyle(worksheet);
             const workbook = xlsx.utils.book_new();
             xlsx.utils.book_append_sheet(workbook, worksheet, "Conversaciones");
 

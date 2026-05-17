@@ -18,6 +18,7 @@ import {
     resolveSalesExportFields,
     type SalesReportLead,
 } from "../model/salesReportExportModel";
+import { applyPlainHeaderStyle } from "@/infrastructure/report/excelSheetStyles";
 
 type DisplayLead = Parameters<typeof getLeadName>[0];
 
@@ -77,10 +78,14 @@ export const useSalesReportExport = <TLead extends SalesReportLead>({
         });
 
         const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summaryRows), "Resumen");
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(byChannelRows), "Por Canal");
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(byMonthRows), "Por Mes");
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detailRows), "Detalle Ventas");
+        const summarySheet = applyPlainHeaderStyle(XLSX.utils.aoa_to_sheet(summaryRows));
+        const byChannelSheet = applyPlainHeaderStyle(XLSX.utils.json_to_sheet(byChannelRows));
+        const byMonthSheet = applyPlainHeaderStyle(XLSX.utils.json_to_sheet(byMonthRows));
+        const detailSheet = applyPlainHeaderStyle(XLSX.utils.json_to_sheet(detailRows));
+        XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumen");
+        XLSX.utils.book_append_sheet(workbook, byChannelSheet, "Por Canal");
+        XLSX.utils.book_append_sheet(workbook, byMonthSheet, "Por Mes");
+        XLSX.utils.book_append_sheet(workbook, detailSheet, "Detalle Ventas");
         XLSX.writeFile(workbook, `reporte_ventas_exitosas_${getGuayaquilDateString()}.xlsx`);
         toast.success("Reporte de ventas exitosas generado");
     }, [
